@@ -5,6 +5,7 @@ Require Import String.
 Require Import List.
 
 Require Export Coq.Logic.FunctionalExtensionality.
+Require Export Coq.Logic.Eqdep.
 
 Add LoadPath "." as Specware.
 Require Import Util.
@@ -334,8 +335,6 @@ Fixpoint spec_map (g : string -> string) {flds sig}
   end.
 
 
-FIXME HERE
-
 (* sig_map id is the identity *)
 Lemma sig_map_id {flds} (sig : Sig flds) :
   existT Sig (map id flds) (sig_map id sig) = existT Sig flds sig.
@@ -343,7 +342,24 @@ Lemma sig_map_id {flds} (sig : Sig flds) :
   reflexivity.
   unfold map; fold (map id flds).
   unfold sig_map; fold (sig_map id (flds:=flds)).
-  rewrite (functional_extensionality_dep _ _ H).
+  assert
+    (existT (fun fs => A -> Sig fs) (map id flds) (fun a => sig_map id (s a))
+     = existT _ flds s).
+  Focus 2.
+  replace
+    (existT Sig (id f :: map id flds)
+      (Sig_Cons (id f) A (map id flds) (fun a : A => sig_map id (s a))))
+  with
+    ((fun tuple =>
+        existT Sig (f :: projT1 tuple) (Sig_Cons f A (projT1 tuple) (projT2 tuple)))
+       (existT (fun fs => A -> Sig fs) (map id flds) (fun a => sig_map id (s a))));
+    [ rewrite H0; reflexivity | ].
+  reflexivity.
+  
+
+  Check inj_pair2.
+
+FIXME HERE
 
 (* IsModel commutes with mapping *)
 Lemma IsModel_hom_map_commutes {flds sig} (g : string -> string)
