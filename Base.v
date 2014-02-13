@@ -314,7 +314,7 @@ Delimit Scope spec_scope with spec_scope.
 (* Bind Scope spec_scope with Spec. *)
 
 Global Notation "end-spec" := Spec_Nil (at level 80).
-Global Notation "{# spec #}" := (spec%spec_scope : Spec) (at level 80).
+Global Notation "{# spec #}" := (spec%spec_scope : Spec) (at level 100).
 
 Global Notation "f  :::  A  :=  a ;  spec" := (Spec_ConsSome f A a spec) (at level 80, spec at level 80) : spec_scope.
 Global Notation "f  :::  A  ;  x  =>  spec" := (Spec_ConsNone f A (fun x => spec)) (at level 80, x ident, spec at level 80) : spec_scope.
