@@ -18,7 +18,7 @@ Require Import Util.
 (* A Model is an element of the record type denoted by a Sig *)
 Inductive Model : forall {flds : list string}, Type :=
 | Model_Nil : Model (flds:=nil)
-| Model_Cons f A (a : A) flds :
+| Model_Cons f A (a : A) {flds} :
     Model (flds:=flds) ->
     Model (flds:= f :: flds)
 .
@@ -26,9 +26,9 @@ Inductive Model : forall {flds : list string}, Type :=
 (* A Spec is a partial Model of a Sig *)
 Inductive Spec : forall {flds : list string}, Type :=
 | Spec_Nil : Spec (flds:=nil)
-| Spec_ConsNone f A flds :
+| Spec_ConsNone f A {flds} :
     (forall (a:A), Spec (flds:=flds)) -> Spec (flds:= f :: flds)
-| Spec_ConsSome f A (a : A) flds :
+| Spec_ConsSome f A (a : A) {flds} :
     Spec (flds:=flds) ->
     Spec (flds:= f :: flds)
 .
@@ -40,11 +40,11 @@ Inductive Spec : forall {flds : list string}, Type :=
 
 (* Proof that field f is associated with element a of type A in model *)
 Inductive ModelElem (f : string) A (a:A) : forall {flds}, Model (flds:=flds) -> Prop :=
-| ModelElem_Base flds model :
-    ModelElem f A a (Model_Cons f A a flds model)
-| ModelElem_Cons f' A' a' flds model :
+| ModelElem_Base flds (model : Model (flds:=flds)) :
+    ModelElem f A a (Model_Cons f A a model)
+| ModelElem_Cons f' A' a' flds (model : Model (flds:=flds)) :
     ModelElem f A a model ->
-    ModelElem f A a (Model_Cons f' A' a' flds model)
+    ModelElem f A a (Model_Cons f' A' a' model)
 .
 
 (* Projecting an element out of a Model *)
@@ -87,14 +87,14 @@ Qed.
    definitionally equal, and so is homogeneous *)
 Inductive IsModel : forall {flds}, Spec (flds:=flds) -> Model (flds:=flds) -> Prop :=
 | IsModel_Nil : IsModel Spec_Nil Model_Nil
-| IsModel_ConsNone f A a flds spec model :
+| IsModel_ConsNone f A a flds spec (model : Model (flds:=flds)) :
     IsModel (spec a) model ->
-    IsModel (Spec_ConsNone f A flds spec)
-            (Model_Cons f A a flds model)
-| IsModel_ConsSome f A a flds spec model :
+    IsModel (Spec_ConsNone f A spec)
+            (Model_Cons f A a model)
+| IsModel_ConsSome f A a flds spec (model : Model (flds:=flds)) :
     IsModel spec model ->
-    IsModel (Spec_ConsSome f A a flds spec)
-            (Model_Cons f A a flds model)
+    IsModel (Spec_ConsSome f A a spec)
+            (Model_Cons f A a model)
 .
 
 (* FIXME: write prove_ismodel tactic *)
@@ -111,9 +111,10 @@ Fixpoint SuperModel {flds1} (model1 : Model (flds:=flds1))
       ModelElem f A a model1 /\ SuperModel model1 model2'
   end.
 
-Lemma SuperModel_cons_l f A a {flds1} model1 {flds2} model2 :
-  SuperModel model1 (flds2:=flds2) model2 ->
-  SuperModel (Model_Cons f A a flds1 model1) model2.
+Lemma SuperModel_cons_l f A a {flds1} (model1 : Model (flds:=flds1))
+      {flds2} (model2 : Model (flds:=flds2)) :
+  SuperModel model1 model2 ->
+  SuperModel (Model_Cons f A a model1) model2.
   induction model2.
   intro; apply I.
   intro H; apply conj.
@@ -121,8 +122,8 @@ Lemma SuperModel_cons_l f A a {flds1} model1 {flds2} model2 :
   apply IHmodel2; destruct H; assumption.
 Qed.
 
-Lemma SuperModel_id {flds} model :
-  SuperModel (flds1:=flds) model model.
+Lemma SuperModel_id {flds} (model : Model (flds:=flds)) :
+  SuperModel model model.
   induction model.
   apply I.
   apply conj;
@@ -163,7 +164,7 @@ Fixpoint model_map (g : string -> string) {flds} (model : Model (flds:=flds)) :
   match model in Model (flds:=flds) return Model (flds:=map g flds) with
     | Model_Nil => Model_Nil
     | Model_Cons f A a flds model =>
-      Model_Cons (g f) A a (map g flds) (model_map g model)
+      Model_Cons (g f) A a (model_map g model)
   end.
 
 Fixpoint spec_map (g : string -> string) {flds} (spec : Spec (flds:=flds)) :
@@ -171,9 +172,9 @@ Fixpoint spec_map (g : string -> string) {flds} (spec : Spec (flds:=flds)) :
   match spec in Spec (flds:=flds) return Spec (flds:=map g flds) with
     | Spec_Nil => Spec_Nil
     | Spec_ConsNone f A flds spec =>
-      Spec_ConsNone (g f) A (map g flds) (fun a => spec_map g (spec a))
+      Spec_ConsNone (g f) A (fun a => spec_map g (spec a))
     | Spec_ConsSome f A a flds spec =>
-      Spec_ConsSome (g f) A a (map g flds) (spec_map g spec)
+      Spec_ConsSome (g f) A a (spec_map g spec)
   end.
 
 (* ModelElem commutes with mapping *)
