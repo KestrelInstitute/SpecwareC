@@ -184,8 +184,8 @@ Lemma SuperModel_id {flds sig} model :
 Qed.
 
 Lemma SuperModel_elem {flds2 sig2} (model2 : Model (flds:=flds2) sig2)
-      f A a (elem : ModelElem f A a model2)
-      {flds1 sig1} (model1 : Model (flds:=flds1) sig1) :
+      {flds1 sig1} (model1 : Model (flds:=flds1) sig1)
+      f A a (elem : ModelElem f A a model2) :
   SuperModel model1 model2 ->
   ModelElem f A a model1.
   revert flds1 sig1 model1; induction elem; intros.
@@ -336,6 +336,8 @@ Fixpoint spec_map (g : string -> string) {flds sig}
 
 
 (* sig_map id is the identity *)
+(* FIXME: prove this or remove it *)
+(*
 Lemma sig_map_id {flds} (sig : Sig flds) :
   existT Sig (map id flds) (sig_map id sig) = existT Sig flds sig.
   induction sig.
@@ -355,11 +357,36 @@ Lemma sig_map_id {flds} (sig : Sig flds) :
        (existT (fun fs => A -> Sig fs) (map id flds) (fun a => sig_map id (s a))));
     [ rewrite H0; reflexivity | ].
   reflexivity.
-  
+
+  assert (s = eq_rect _ (fun fs => A -> Sig fs) (fun a => sig_map id (s a)) _ (map_id _)).
+  apply functional_extensionality.
+  intro x.
+  symmetry.
+
+  apply eq_sigT_snd.
+  apply (eq_sigT_snd (H x)).
+
+  Print eq_sigT_snd.
+  rewrite <- (eq_sigT_snd )
 
   Check inj_pair2.
+*)
 
-FIXME HERE
+
+(* FIXME: prove this or remove it *)
+(*
+Lemma sig_map_trans {flds} f1 f2 (sig : Sig flds) :
+  existT Sig _ (sig_map (fun x => f2 (f1 x)) sig)
+  = existT Sig _ (sig_map f2 (sig_map f1 sig)).
+*)
+
+(* ModelElem commutes with mapping *)
+Lemma ModelElem_map {flds sig} (model : Model (flds:=flds) sig) m f A a :
+  ModelElem f A a model -> ModelElem (m f) A a (model_map m model).
+  intro melem; induction melem.
+  apply ModelElem_Base.
+  apply ModelElem_Cons; apply IHmelem.
+Qed.
 
 (* IsModel commutes with mapping *)
 Lemma IsModel_hom_map_commutes {flds sig} (g : string -> string)
@@ -382,6 +409,32 @@ Lemma IsModel_het_map_commutes {flds sig_s} (g : string -> string)
   apply IsModel_het_Nil.
   apply IsModel_het_ConsNone; apply IHism.
   apply IsModel_het_ConsSome; apply IHism.
+Qed.
+
+Lemma SuperModel_map_id {flds sig} model :
+  SuperModel (flds1:=flds) (sig1:=sig) model (model_map id model).
+  induction model.
+  apply I.
+  split; [ apply ModelElem_Base | apply SuperModel_cons_l; assumption ].
+Qed.
+
+Lemma SuperModel_map_trans {flds1 sig1} (model1 : Model (flds:=flds1) sig1)
+      {flds2 sig2} (model2 : Model (flds:=flds2) sig2)
+      {flds3 sig3} (model3 : Model (flds:=flds3) sig3)
+      m1 m2 :
+  SuperModel model3 (model_map m2 model2) ->
+  SuperModel model2 (model_map m1 model1) ->
+  SuperModel model3 (model_map (fun x : string => m2 (m1 x)) model1).
+  induction model1.
+  intros; apply I.
+  unfold SuperModel; unfold model_map; fold model_map;
+  fold (SuperModel model3 (model_map (fun x => m2 (m1 x)) model1));
+  fold (SuperModel model3 (model_map m2 model2));
+  fold (SuperModel model2 (model_map m1 model1));
+  intros super32 super21; destruct super21 as [ melem2 super21 ].
+  split.
+  apply (SuperModel_elem (model_map m2 model2)); [ apply ModelElem_map | ]; assumption.
+  apply IHmodel1; assumption.
 Qed.
 
 (* FIXME: old approach of translating models... *)
@@ -445,8 +498,57 @@ Definition mkMorphism {flds1 sig1} (spec1 : Spec (flds:=flds1) sig1)
 Lemma IsMorphism_id {flds sig} (spec : Spec (flds:=flds) sig) :
   IsMorphism spec spec id.
   intros model ism;
-  apply (existT2 _ _ model); [ assumption | apply SuperModel_id ].
+  apply (existT2 _ _ model); [ assumption | apply SuperModel_map_id ].
+Qed.
 
-Definition mid {flds1 sig1} spec1 {flds2 sig2} spec2 :
-  Morphism (flds1:=flds1) (sig1:=sig1) spec1 (flds2:=flds2) (sig2:=sig2) spec2 :=
-  mkMorphism spec1 spec2 id .
+Definition mid {flds sig} spec :
+  Morphism (flds1:=flds) (sig1:=sig) spec (flds2:=flds) (sig2:=sig) spec :=
+  mkMorphism spec spec id (IsMorphism_id _).
+
+Lemma IsMorphism_trans {flds1 sig1} (spec1 : Spec (flds:=flds1) sig1)
+      {flds2 sig2} (spec2 : Spec (flds:=flds2) sig2)
+      {flds3 sig3} (spec3 : Spec (flds:=flds3) sig3)
+      m1 m2 :
+  IsMorphism spec1 spec2 m1 ->
+  IsMorphism spec2 spec3 m2 ->
+  IsMorphism spec1 spec3 (fun x => m2 (m1 x)).
+  intros ism1 ism2 model3 ismodel3.
+  destruct (ism2 model3 ismodel3) as [ model2 ismodel2 super2 ].
+  destruct (ism1 model2 ismodel2) as [ model1 ismodel1 super1 ].
+  apply (existT2 _ _ model1).
+  assumption.
+  apply (SuperModel_map_trans _ model2); assumption.
+Qed.
+
+Definition mcompose {flds1 sig1} {spec1 : Spec (flds:=flds1) sig1}
+      {flds2 sig2} {spec2 : Spec (flds:=flds2) sig2}
+      {flds3 sig3} {spec3 : Spec (flds:=flds3) sig3}
+      (morph1 : Morphism spec1 spec2)
+      (morph2 : Morphism spec2 spec3) : Morphism spec1 spec3 :=
+  mkMorphism spec1 spec3 (fun x => (projT1 morph2) (projT1 morph1 x))
+             (IsMorphism_trans _ _ _ _ _ (projT2 morph1) (projT2 morph2)).
+
+
+(**
+ ** Syntax for specs and morphism
+ **)
+
+FIXME HERE: figure out notations
+
+Bind Scope spec_scope with Spec.
+
+Notation "{| |}" := Spec_Nil (at level 80).
+(* Notation "{| spec |}" := spec : spec_scope. *)
+
+Notation "{|  f  :  A  :=  a ;  spec  |}" := (Spec_ConsSome f A a _ (fun _ => _) spec) (at level 80, f at level 99).
+Notation "{|  f  :  A  ;  x  ->  spec  |}" := (Spec_ConsNone f A _ _ (fun x => spec)) (at level 80, f at level 99, x at level 99).
+
+Eval compute in (Spec_ConsNone "f1" nat _ _ (fun f1 => Spec_ConsSome "f2" nat 0 _ (fun _ => Sig_Nil) Spec_Nil)).
+
+Eval compute in ({| "f2" : nat := 0; {| |} |}).
+
+Eval compute in ({| "f1" : nat ; f1 -> "f2" : nat := 0; {| |} |}).
+
+
+
+Eval compute in (Spec_ConsNone "f1" nat _ _ (fun f1 => Spec_ConsSome "f2" nat 0 _ (fun _ => Sig_Nil) Spec_Nil)).
