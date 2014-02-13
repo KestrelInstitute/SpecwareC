@@ -2,4 +2,5 @@
 -R . Specware
 ./Util.v
 ./Base.v
+./Tactics.v
 ./Examples.v

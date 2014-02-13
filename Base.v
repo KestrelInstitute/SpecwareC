@@ -284,11 +284,6 @@ Definition mcompose {flds1} {spec1 : Spec (flds:=flds1)}
              (IsMorphism_trans _ _ _ _ _ (projT2 morph1) (projT2 morph2)).
 
 
-(* a Refinement of a spec is another spec and a morphism to it *)
-Definition Refinement {flds} (spec : Spec (flds:=flds)) :=
-  { flds' : _ & { spec' : Spec (flds:=flds') & Morphism spec spec' }}.
-
-
 (**
  ** Syntax for specs and morphism
  **)
