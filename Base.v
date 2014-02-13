@@ -8,7 +8,7 @@ Require Import List.
 (* Require Export Coq.Logic.Eqdep. *)
 
 Add LoadPath "." as Specware.
-Require Import Util.
+Require Import Specware.Util.
 
 
 (**
@@ -311,25 +311,25 @@ Notation "{|  f  :  A  ;  x  =>  spec  |}" := (Spec_ConsNone f A (fun x => spec)
 
 
 Delimit Scope spec_scope with spec_scope.
-Bind Scope spec_scope with Spec.
+(* Bind Scope spec_scope with Spec. *)
 
-Print Scopes.
+Global Notation "end-spec" := Spec_Nil (at level 80).
+Global Notation "{# spec #}" := (spec%spec_scope : Spec) (at level 80).
 
-Notation "end-spec" := Spec_Nil (at level 80).
-Notation "{| spec |}" := (spec%spec_scope : Spec) (at level 80).
-
-Notation "f  :  A  :=  a ;  spec" := (Spec_ConsSome f A a spec) (at level 80, spec at level 80) : spec_scope.
-Notation "f  :  A  ;  x  =>  spec" := (Spec_ConsNone f A (fun x => spec)) (at level 80, x ident, spec at level 80) : spec_scope.
+Global Notation "f  :::  A  :=  a ;  spec" := (Spec_ConsSome f A a spec) (at level 80, spec at level 80) : spec_scope.
+Global Notation "f  :::  A  ;  x  =>  spec" := (Spec_ConsNone f A (fun x => spec)) (at level 80, x ident, spec at level 80) : spec_scope.
 
 (*
-Notation "{|  f  :  A  :=  a ;  spec  |}" := (Spec_ConsSome f A a (spec%spec_scope)) (at level 80, f at level 99, spec at level 80).
-Notation "{|  f  :  A  ;  x  =>  spec  |}" := (Spec_ConsNone f A (fun x => (spec%spec_scope))) (at level 80, x ident, f at level 99, spec at level 80).
+Notation "{{  f  :  A  :=  a ;  spec  }}" := (Spec_ConsSome f A a (spec%spec_scope)) (at level 80, f at level 99, spec at level 80).
+Notation "{{  f  :  A  ;  x  =>  spec  }}" := (Spec_ConsNone f A (fun x => (spec%spec_scope))) (at level 80, x ident, f at level 99, spec at level 80).
 *)
 
 Global Arguments Spec_ConsSome (f%string) _ _ _ (spec%spec_scope).
 Global Arguments Spec_ConsNone (f%string) _ _ (spec%spec_scope).
 
+(*
 Eval compute in (Spec_ConsNone "f1" nat (fun f1 => Spec_ConsSome "f2" nat 0 Spec_Nil)).
 
-Eval compute in ({| "f2" : nat := 0; end-spec |}).
-Eval compute in ({| "f1" : nat ; f1 => "f2" : nat := 0; end-spec |}).
+Eval compute in ({# "f2" ::: nat := 0; end-spec #}).
+Eval compute in ({# "f1" ::: nat ; f1 => "f2" ::: nat := 0; end-spec #}).
+*)
