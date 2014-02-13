@@ -1,11 +1,11 @@
 
 (*** An approach to representing Models with inductive types ***)
 
-Require Import String.
+Require Export String.
 Require Import List.
 
-Require Export Coq.Logic.FunctionalExtensionality.
-Require Export Coq.Logic.Eqdep.
+(* Require Export Coq.Logic.FunctionalExtensionality. *)
+(* Require Export Coq.Logic.Eqdep. *)
 
 Add LoadPath "." as Specware.
 Require Import Util.
@@ -281,6 +281,11 @@ Definition mcompose {flds1} {spec1 : Spec (flds:=flds1)}
       (morph2 : Morphism spec2 spec3) : Morphism spec1 spec3 :=
   mkMorphism spec1 spec3 (fun x => (projT1 morph2) (projT1 morph1 x))
              (IsMorphism_trans _ _ _ _ _ (projT2 morph1) (projT2 morph2)).
+
+
+(* a Refinement of a spec is another spec and a morphism to it *)
+Definition Refinement {flds} (spec : Spec (flds:=flds)) :=
+  { flds' : _ & { spec' : Spec (flds:=flds') & Morphism spec spec' }}.
 
 
 (**
