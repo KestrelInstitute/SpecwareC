@@ -4,6 +4,7 @@
 Require Export String.
 Require Import List.
 
+(* Require Export Coq.Logic.FunctionalExtensionality. *)
 (* Require Export Coq.Logic.Eqdep. *)
 
 Add LoadPath "." as Specware.
@@ -36,25 +37,6 @@ Inductive Spec : forall {flds : list string}, Type :=
 (**
  ** Notions of elements of structures
  **)
-
-(* Proof that field f is associated with type A in spec *)
-(* FIXME: the types (and elements!) depend on earlier elements! *)
-(*
-Inductive SpecElem (f : string) :
-  forall A, option A -> forall {flds}, Spec (flds:=flds) -> Prop :=
-| SpecElem_BaseNone flds (spec : A -> Spec (flds:=flds)) :
-    SpecElem f A None (Spec_ConsNone f A spec)
-| SpecElem_BaseSome a flds (spec : Spec (flds:=flds)) :
-    SpecElem f A (Some a) (Spec_ConsSome f A a spec)
-| SpecElem_ConsNone A a f' A' flds (spec : A' -> Spec (flds:=flds)) :
-    (forall a', SpecElem f A a (spec a')) ->
-    SpecElem f A a (Spec_ConsNone f' A' spec)
-| SpecElem_ConsSome a f' A' a' flds (spec : Spec (flds:=flds)) :
-    SpecElem f A a spec ->
-    SpecElem f A a (Spec_ConsSome f' A' a' spec)
-.
-*)
-
 
 (* Proof that field f is associated with element a of type A in model *)
 Inductive ModelElem (f : string) A (a:A) : forall {flds}, Model (flds:=flds) -> Prop :=
@@ -100,49 +82,63 @@ Qed.
  ** Defining the notion of models of specs
  **)
 
-(* A model of a Spec contains an element for each field in the spec *)
-Inductive IsModel {flds_m} (model : Model (flds:=flds_m)) :
-  forall {flds_s}, Spec (flds:=flds_s) -> Prop :=
-| IsModel_Nil : IsModel model Spec_Nil
-| IsModel_ConsNone f A a flds (spec : A -> Spec (flds:=flds)) :
-    ModelElem f A a model ->
-    IsModel model (spec a) ->
-    IsModel model (Spec_ConsNone f A spec)
-| IsModel_ConsSome f A a flds (spec : Spec (flds:=flds)) :
-    ModelElem f A a model ->
-    IsModel model spec ->
-    IsModel model (Spec_ConsSome f A a spec)
+(* A model of a Spec supplies missing fields but is otherwise equal;
+   this definition requires the signatures of spec and model to be
+   definitionally equal, and so is homogeneous *)
+Inductive IsModel : forall {flds}, Spec (flds:=flds) -> Model (flds:=flds) -> Prop :=
+| IsModel_Nil : IsModel Spec_Nil Model_Nil
+| IsModel_ConsNone f A a flds spec (model : Model (flds:=flds)) :
+    IsModel (spec a) model ->
+    IsModel (Spec_ConsNone f A spec)
+            (Model_Cons f A a model)
+| IsModel_ConsSome f A a flds spec (model : Model (flds:=flds)) :
+    IsModel spec model ->
+    IsModel (Spec_ConsSome f A a spec)
+            (Model_Cons f A a model)
 .
 
 (* FIXME: write prove_ismodel tactic *)
-
-(*
-Lemma ModelElem_to_SpecElem {flds_m} (model : Model (flds:=flds_m))
-      {flds_s} (spec : Spec (flds:=flds_s)) f A a :
-  ModelElem f A a
-*)
-
 
 (**
  ** Oooh, supermodels!
  **)
 
-Definition SuperModel {flds1} (model1 : Model (flds:=flds1))
+Fixpoint SuperModel {flds1} (model1 : Model (flds:=flds1))
          {flds2} (model2 : Model (flds:=flds2)) : Prop :=
-  forall f A a,
-    ModelElem f A a model2 -> ModelElem f A a model1.
+  match model2 with
+    | Model_Nil => True
+    | Model_Cons f A a flds2' model2' =>
+      ModelElem f A a model1 /\ SuperModel model1 model2'
+  end.
 
 Lemma SuperModel_cons_l f A a {flds1} (model1 : Model (flds:=flds1))
       {flds2} (model2 : Model (flds:=flds2)) :
   SuperModel model1 model2 ->
   SuperModel (Model_Cons f A a model1) model2.
-  intros super12 f' A' a' melem2;
-  apply ModelElem_Cons; apply (super12 f' A' a' melem2); assumption.
+  induction model2.
+  intro; apply I.
+  intro H; apply conj.
+  destruct H; apply ModelElem_Cons; assumption.
+  apply IHmodel2; destruct H; assumption.
 Qed.
 
 Lemma SuperModel_id {flds} (model : Model (flds:=flds)) :
   SuperModel model model.
-  intros f A a ism; assumption.
+  induction model.
+  apply I.
+  apply conj;
+    [ apply ModelElem_Base
+    | apply SuperModel_cons_l; assumption ].
+Qed.
+
+Lemma SuperModel_elem {flds2} (model2 : Model (flds:=flds2))
+      {flds1} (model1 : Model (flds:=flds1))
+      f A a (elem : ModelElem f A a model2) :
+  SuperModel model1 model2 ->
+  ModelElem f A a model1.
+  revert flds1 model1; induction elem; intros.
+  destruct H; assumption.
+  apply IHelem; destruct H; assumption.
 Qed.
 
 Lemma SuperModel_trans {flds1} (model1 : Model (flds:=flds1))
@@ -150,8 +146,12 @@ Lemma SuperModel_trans {flds1} (model1 : Model (flds:=flds1))
       {flds3} (model3 : Model (flds:=flds3)) :
   SuperModel model1 model2 -> SuperModel model2 model3 ->
   SuperModel model1 model3.
-  intros super12 super23 f A a melem3;
-  apply (super12 f A a (super23 f A a melem3)).
+  intros super12 super23;
+  revert flds1 model1 super12; induction model3; intros.
+  apply I.
+  apply conj.
+  destruct super23; apply (SuperModel_elem model2); assumption.
+  apply IHmodel3; [ destruct super23 | ]; assumption.
 Qed.
 
 
@@ -177,55 +177,6 @@ Fixpoint spec_map (g : string -> string) {flds} (spec : Spec (flds:=flds)) :
       Spec_ConsSome (g f) A a (spec_map g spec)
   end.
 
-(* mapping id over a model is the identity itself *)
-Lemma model_map_id {flds} (model : Model (flds:=flds)) :
-  eq_dep _ (@Model) (map id flds) (model_map id model) flds model.
-  induction model.
-  apply eq_dep_intro.
-  apply (eq_dep_ctx _ (@Model)
-                    _ _ _ _ _ (fun fs => f :: fs) _ (fun _ => Model_Cons f A a)
-                    IHmodel).
-Qed.
-
-
-(* mapping id over a spec is the identity itself *)
-Lemma spec_map_id {flds} (spec : Spec (flds:=flds)) :
-  eq_dep _ (@Spec) _ (spec_map id spec) _ spec.
-  induction spec.
-  apply eq_dep_intro.
-  apply (eq_dep_ctx _ (fun fs => A -> @Spec fs)
-                    (map id flds) flds (fun a => spec_map id (s a)) s
-                    _ (fun fs => f :: fs)
-                    _ (fun _ spec => Spec_ConsNone f A spec)).
-  apply eq_dep_flds_fun; [ apply map_id | assumption ].
-  apply (eq_dep_ctx _ (@Spec)
-                    _ _ _ _ _ (fun fs => f :: fs) _ (fun _ => Spec_ConsSome f A a)
-                    IHspec).
-Qed.
-
-(* composing two spec_maps together *)
-Lemma spec_map_comp {flds} (spec : Spec (flds:=flds)) m1 m2 :
-  eq_dep _ (@Spec) _ (spec_map m2 (spec_map m1 spec)) _
-         (spec_map (fun x => m2 (m1 x)) spec).
-  induction spec.
-  apply eq_dep_intro.
-  apply (eq_dep_ctx _ (fun fs => A -> @Spec fs)
-                    (map m2 (map m1 flds)) (map (fun x => m2 (m1 x)) flds)
-                    (fun a => spec_map m2 (spec_map m1 (s a)))
-                    (fun a => spec_map (fun x => m2 (m1 x)) (s a))
-                    _ (fun fs => m2 (m1 f) :: fs)
-                    _ (fun _ spec => Spec_ConsNone (m2 (m1 f)) A spec)
-        ).
-  apply eq_dep_flds_fun; [ apply map_map | assumption ].
-  apply (eq_dep_ctx _ (@Spec)
-                    _ _ _ _ _
-                    (fun fs => _ :: fs) _ (fun _ => Spec_ConsSome _ A a)
-                    IHspec).
-Qed.
-
-(* FIXME: generalize spec_map_id and spec_map_comp into a Lemma and/or
-   tactic for proving things about specs *)
-
 (* ModelElem commutes with mapping *)
 Lemma ModelElem_map {flds} (model : Model (flds:=flds)) m f A a :
   ModelElem f A a model -> ModelElem (m f) A a (model_map m model).
@@ -234,37 +185,24 @@ Lemma ModelElem_map {flds} (model : Model (flds:=flds)) m f A a :
   apply ModelElem_Cons; apply IHmelem.
 Qed.
 
-
-(* SpecElem commutes with mapping *)
-(*
-Lemma SpecElem_map {flds} (spec : Spec (flds:=flds)) m f A a :
-  SpecElem f A a spec ->
-  SpecElem (m f) A a (spec_map m spec).
-  intro selem; induction selem.
-  apply SpecElem_BaseNone.
-  apply SpecElem_BaseSome.
-  unfold spec_map; fold spec_map; apply SpecElem_ConsNone; assumption.
-  unfold spec_map; fold spec_map; apply SpecElem_ConsSome; assumption.
-Qed.
-*)
-
 (* IsModel commutes with mapping *)
-(* FIXME: prove or remove *)
-(*
-Lemma IsModel_map_commutes (g : string -> string)
-      {flds_s} (spec : Spec (flds:=flds_s))
-      {flds_m} (model : Model (flds:=flds_m)) :
-  IsModel model spec ->
-  IsModel (model_map g model) (spec_map g spec).
+Lemma IsModel_map_commutes {flds} (g : string -> string)
+      (spec : Spec (flds:=flds)) (model : Model) :
+  IsModel spec model ->
+  IsModel (spec_map g spec) (model_map g model).
   intro ism; induction ism.
   apply IsModel_Nil.
   apply IsModel_ConsNone; apply IHism.
   apply IsModel_ConsSome; apply IHism.
 Qed.
-*)
-  
 
-(* FIXME: this no longer holds!
+Lemma SuperModel_map_id {flds} model :
+  SuperModel (flds1:=flds) model (model_map id model).
+  induction model.
+  apply I.
+  split; [ apply ModelElem_Base | apply SuperModel_cons_l; assumption ].
+Qed.
+
 Lemma SuperModel_map_trans {flds1} (model1 : Model (flds:=flds1))
       {flds2} (model2 : Model (flds:=flds2))
       {flds3} (model3 : Model (flds:=flds3))
@@ -273,54 +211,33 @@ Lemma SuperModel_map_trans {flds1} (model1 : Model (flds:=flds1))
   SuperModel model2 (model_map m1 model1) ->
   SuperModel model3 (model_map (fun x : string => m2 (m1 x)) model1).
   induction model1.
-  intros super32 super21 f A a melem; inversion melem.
-  unfold model_map; fold model_map;
-  intros super32 super21 f' A' a' melem1.
-  apply (super32 f' A' a'). apply ModelElem_map.
-  apply (super21 f' A' a').
-
-destruct super21 as [ melem2 super21 ].
+  intros; apply I.
+  unfold SuperModel; unfold model_map; fold model_map;
+  fold (SuperModel model3 (model_map (fun x => m2 (m1 x)) model1));
+  fold (SuperModel model3 (model_map m2 model2));
+  fold (SuperModel model2 (model_map m1 model1));
+  intros super32 super21; destruct super21 as [ melem2 super21 ].
   split.
   apply (SuperModel_elem (model_map m2 model2)); [ apply ModelElem_map | ]; assumption.
   apply IHmodel1; assumption.
 Qed.
-*)
 
 
 (**
  ** Morphisms
  **)
 
-(* A morphism maps the elements of one spec to those of another *)
-(*
-Definition IsMorphism_spec {flds1} (spec1 : Spec (flds:=flds1))
-           {flds2} (spec2 : Spec (flds:=flds2))
-           (m : string -> string) : Prop :=
-  forall f A a,
-    SpecElem f A a spec1 ->
-    SpecElem (m f) A a spec2.
-*)
-
-(* Another def of morphisms, as being a subset mapping for models *)
+(* A morphism maps a spec to one with a subset of the models *)
 Definition IsMorphism {flds1} (spec1 : Spec (flds:=flds1))
            {flds2} (spec2 : Spec (flds:=flds2))
-           (m : string -> string) : Prop :=
-  forall flds_m (model : Model (flds:=flds_m)),
-    IsModel model spec2 ->
-    IsModel model (spec_map m spec1).
-
-(* proof that the two definitions are equivalent *)
-(*
-Lemma IsMorphism_equiv {flds1} (spec1 : Spec (flds:=flds1))
-      {flds2} (spec2 : Spec (flds:=flds2))
-      (m : string -> string) :
-  IsMorphism spec1 spec2 m <-> IsMorphism_models spec1 spec2 m.
-  split.
-*)
+           (m : string -> string) :=
+  forall model2,
+    IsModel spec2 model2 ->
+    { model1 : _ & IsModel spec1 model1 & SuperModel model2 (model_map m model1) }.
 
 Definition Morphism {flds1} (spec1 : Spec (flds:=flds1))
            {flds2} (spec2 : Spec (flds:=flds2)) :=
-  { m : _ | IsMorphism spec1 spec2 m }.
+  { m : _ & IsMorphism spec1 spec2 m }.
 
 Definition mkMorphism {flds1} (spec1 : Spec (flds:=flds1))
            {flds2} (spec2 : Spec (flds:=flds2))
@@ -335,41 +252,13 @@ Definition mkMorphism {flds1} (spec1 : Spec (flds:=flds1))
 
 Lemma IsMorphism_id {flds} (spec : Spec (flds:=flds)) :
   IsMorphism spec spec id.
-  intros flds_m model ism.
-  apply
-    (eq_dep_rect
-       _ _ _ _
-       (fun fs sp => IsModel model sp)
-       ism _ _
-       (eq_dep_sym _ _ _ _ _ _ (spec_map_id spec))
-    ).
+  intros model ism;
+  apply (existT2 _ _ model); [ assumption | apply SuperModel_map_id ].
 Qed.
 
 Definition mid {flds} spec :
   Morphism (flds1:=flds) spec (flds2:=flds) spec :=
   mkMorphism spec spec id (IsMorphism_id _).
-
-Lemma IsMorphism_map {flds1} (spec1 : Spec (flds:=flds1))
-      {flds2} (spec2 : Spec (flds:=flds2)) m m' :
-  IsMorphism spec1 spec2 m ->
-  forall flds_m (model : Model (flds:=flds_m)),
-    IsModel model (spec_map m' spec2) ->
-    IsModel model (spec_map (fun f => m' (m f)) spec1).
-  induction spec1.
-  intros; apply IsModel_Nil.
-  intros.
-
-  FIXME HERE: how to prove this?!?
-
-  IDEA: "un-map" a model along an m, given a set of input fields:
-  - un-mapping should depend only on m and flds
-  - NOTE: might duplicate some fields, since model might have duplicate fields,
-    so we define unmap_flds : flds -> m -> model -> list string and
-    unmap : forall flds m model, Model (flds:=unmap_flds flds m model)
-  - need IsModel model (spec_map m spec) <-> IsModel (unmap flds m model) spec
-  - can then unmap, pass to the original IsMorphism, and then undo the unmapping
-
-  IsMorphism (spec_map m' spec1) (spec_map m' spec2)
 
 Lemma IsMorphism_trans {flds1} (spec1 : Spec (flds:=flds1))
       {flds2} (spec2 : Spec (flds:=flds2))
@@ -378,16 +267,7 @@ Lemma IsMorphism_trans {flds1} (spec1 : Spec (flds:=flds1))
   IsMorphism spec1 spec2 m1 ->
   IsMorphism spec2 spec3 m2 ->
   IsMorphism spec1 spec3 (fun x => m2 (m1 x)).
-  intros ismorph1 ismorph2 flds_m model ismodel. Check spec_map_comp.
-  assert (IsModel model (spec_map m2 (spec_map m1 spec1))).
-  apply (ismorph2 flds_m ).
-  apply
-    (eq_dep_rect
-       _ _ _ _
-       (fun fs sp => IsModel model sp)
-       ismodel _ _
-       (spec_map_comp spec1 m1 m2)).
-
+  intros ism1 ism2 model3 ismodel3.
   destruct (ism2 model3 ismodel3) as [ model2 ismodel2 super2 ].
   destruct (ism1 model2 ismodel2) as [ model1 ismodel1 super1 ].
   apply (existT2 _ _ model1).
