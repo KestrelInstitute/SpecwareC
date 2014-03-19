@@ -24,6 +24,51 @@ Definition or_proj_l A B : ~B -> A \/ B -> A.
 Qed.
 
 
+
+(*** useful list utility functions ***)
+
+Lemma In_remove {A} eq_dec (x y : A) l : In x (remove eq_dec y l) -> In x l.
+  induction l.
+  intro in_pf; destruct in_pf.
+  unfold remove; fold (remove eq_dec y); destruct (eq_dec y a); intro in_pf.
+  right; apply IHl; assumption.
+  destruct in_pf.
+  left; assumption.
+  right; apply IHl; assumption.
+Qed.
+
+Lemma remove_not_eq {A} eq_dec (x y : A) l :
+  x <> y -> In x l -> In x (remove eq_dec y l).
+  intro neq; induction l; intro in_pf.
+  destruct in_pf.
+  unfold remove; fold (remove eq_dec); destruct (eq_dec y a).
+  destruct in_pf;
+    [ elimtype False; apply neq; rewrite e; rewrite <- H; reflexivity
+    | apply IHl; assumption ].
+  destruct in_pf;
+    [ left; assumption | right; apply IHl; assumption ].
+Qed.
+
+
+(*** UIP (and friends) for strings ***)
+
+Module DecidableSetString.
+  Definition U := string.
+  Definition eq_dec : forall x y:U, {x=y} + {x<>y} := string_dec.
+End DecidableSetString.
+
+Module EqDepString := DecidableEqDep (DecidableSetString).
+
+Definition UIP_refl_string (str : string) (e : str=str) : e = eq_refl :=
+  EqDepString.UIP_refl str e.
+
+Lemma string_dec_true str : string_dec str str = left eq_refl.
+  destruct (string_dec str str).
+  rewrite (UIP_refl_string _ e); reflexivity.
+  elimtype False; apply n; reflexivity.
+Qed.
+
+
 (*** UIP (and friends) for lists of strings ***)
 
 (* decidability of equality for lists of strings *)
