@@ -100,6 +100,10 @@ Definition inj_pair2_flds {flds : list string} {A a b} :
 
 (*** helpers for proving eq_dep goals ***)
 
+Lemma eq_dep_fst {A B p x q y} : eq_dep A B p x q y -> p = q.
+  intro e; destruct e; reflexivity.
+Qed.
+
 Lemma eq_dep_commute A B (a1 a2 : A) (b1 : B a1) (b2 : B a2)
       C (f : forall x (y : B x), C x y) :
   eq_dep _ _ a1 b1 a2 b2 ->

@@ -72,6 +72,15 @@ Inductive ModelElem (fld : string) A (a:A) : Model -> Prop :=
     ModelElem fld A a (Model_Cons fld' A' a' model)
 .
 
+(* Model_Nil has no ModelElems *)
+Lemma not_ModelElem_nil (fld : string) A (a:A) :
+  ModelElem fld A a Model_Nil -> False.
+  assert (forall model,
+            ModelElem fld A a model -> model = Model_Nil -> False).
+  intros model melem e; induction melem; discriminate.
+  intro melem; apply (H _ melem); reflexivity.
+Qed.
+
 (* Projecting an element out of a Model *)
 (* FIXME: update or remove
 Fixpoint modelProj (model : Model) :
@@ -109,6 +118,9 @@ Qed.
  ** Defining the notion of models of specs
  **)
 
+FIXME HERE: need to define IsModel as a Fixpoint over the spec, so that
+we can prove IsModel_ConsNone_inversion, below
+
 (* A model of a Spec contains an element for each field in the spec *)
 Inductive IsModel (model : Model) :
   forall {flds}, Spec (flds:=flds) -> Prop :=
@@ -122,6 +134,24 @@ Inductive IsModel (model : Model) :
     IsModel model spec ->
     IsModel model (Spec_ConsSome f A a spec)
 .
+
+Lemma IsModel_nil_spec {flds} (spec : Spec (flds:=flds)) :
+  IsModel Model_Nil spec -> eq_dep _ (@Spec) _ spec _ Spec_Nil.
+  intro ism; destruct ism.
+  reflexivity.
+  elimtype False; apply (not_ModelElem_nil _ _ _ H).
+  elimtype False; apply (not_ModelElem_nil _ _ _ H).
+Qed.
+
+Lemma IsModel_ConsNone_inversion model {flds} f A
+      (spec : A -> Spec (flds:=flds)) :
+  IsModel model (Spec_ConsNone f A spec) ->
+  exists a, ModelElem f A a model /\ IsModel model (spec a).
+  intro ism; inversion ism.
+  exists a; split; [ assumption | ].
+  assert (spec1 = spec).
+  apply (inj_pair2_flds (inj_pair2_flds H3)).
+
 
 (* FIXME: write prove_ismodel tactic *)
 
@@ -287,8 +317,45 @@ Lemma spec_map_id {flds} (spec : Spec (flds:=flds)) :
                     IHspec).
 Qed.
 
+(* if the result of spec_map is Spec_Nil, then the input is as well *)
+Lemma spec_map_to_Nil m {flds} (spec : Spec (flds:=flds)) :
+  eq_dep _ (@Spec) _ (spec_map m spec) _ Spec_Nil ->
+  eq_dep _ (@Spec) _ spec _ Spec_Nil.
+  induction spec; unfold spec_map; fold spec_map; intro e;
+  [ reflexivity | | ];
+  (assert (map (applyFM m) (f :: flds) = []);
+   [ apply (eq_dep_fst e) | discriminate ]).
+Qed.
 
-FIXME HERE: rewrite the below to use FieldMaps
+
+(* if the result of spec_map is a Spec_ConsNone, then the input is as well *)
+(* FIXME HERE
+Lemma spec_map_to_ConsNone m {flds} (spec : Spec (flds:=flds))
+      f' A {flds'} (spec' : A -> Spec (flds:=flds')) :
+  eq_dep _ (@Spec) _ (spec_map m spec) _ (Spec_ConsNone f' A spec') ->
+  { f'':_ & { flds'':_ & { spec'' : A -> Spec (flds:=flds'') |
+                           eq_dep _ (@Spec) _ spec
+                                  _ (Spec_ConsNone f'' A spec'') }}}.
+  induction spec; unfold spec_map; fold spec_map; intro e.
+  assert ([] = f' :: flds'); [ apply (eq_dep_fst e) | discriminate ].
+  assert (map (applyFM m) (f :: flds) = f' :: flds') as H;
+    [ apply (eq_dep_fst e) | ].
+  injection H; intros e_flds' e_f'.
+  revert s spec' X e; rewrite <- e_f'; rewrite <- e_flds'; intros.
+  assert (Spec_ConsNone (applyFM m f) A0 (fun a : A0 => spec_map m (s a))
+          = Spec_ConsNone (applyFM m f) A spec');
+    apply (eq_dep_eq_flds _ e).
+
+  assert (A0 = A) as H;
+    [
+    | revert s X e; rewrite H; intros;
+      exists f; exists flds; exists s; reflexivity ].
+
+  [ reflexivity | | ];
+  (assert (map (applyFM m) (f :: flds) = []);
+   [ apply (eq_dep_fst e) | discriminate ]).
+Qed.
+*)
 
 (* composing two spec_maps together *)
 Lemma spec_map_comp {flds} (spec : Spec (flds:=flds)) m1 m2 :
@@ -296,15 +363,24 @@ Lemma spec_map_comp {flds} (spec : Spec (flds:=flds)) m1 m2 :
          (spec_map (composeFM m1 m2) spec).
   induction spec.
   apply eq_dep_intro.
+  unfold map; fold (map (applyFM m1)); fold (map (applyFM m2));
+  fold (map (applyFM (composeFM m1 m2))).
+  unfold spec_map; fold spec_map; rewrite FieldMap_compose.
   apply (eq_dep_ctx _ (fun fs => A -> @Spec fs)
                     (map (applyFM m2) (map (applyFM m1) flds))
                     (map (applyFM (composeFM m1 m2)) flds)
                     (fun a => spec_map m2 (spec_map m1 (s a)))
                     (fun a => spec_map (composeFM m1 m2) (s a))
-                    _ (fun fs => m2 (m1 f) :: fs)
-                    _ (fun _ spec => Spec_ConsNone (m2 (m1 f)) A spec)
+                    _ (fun fs => applyFM m2 (applyFM m1 f) :: fs)
+                    _ (fun _ spec => Spec_ConsNone (applyFM m2 (applyFM m1 f)) A spec)
         ).
-  apply eq_dep_flds_fun; [ apply map_map | assumption ].
+  apply eq_dep_flds_fun;
+    [ rewrite map_map; apply map_ext;
+      intro fld; symmetry; apply FieldMap_compose
+    | assumption ].
+  unfold map; fold (map (applyFM m1)); fold (map (applyFM m2));
+  fold (map (applyFM (composeFM m1 m2))).
+  unfold spec_map; fold spec_map; rewrite FieldMap_compose.
   apply (eq_dep_ctx _ (@Spec)
                     _ _ _ _ _
                     (fun fs => _ :: fs) _ (fun _ => Spec_ConsSome _ A a)
@@ -317,12 +393,11 @@ Qed.
 
 (* ModelElem commutes with mapping *)
 Lemma ModelElem_map model m f A a :
-  ModelElem f A a model -> ModelElem (m f) A a (model_map m model).
+  ModelElem f A a model -> ModelElem (applyFM m f) A a (model_map m model).
   intro melem; induction melem.
   apply ModelElem_Base.
   apply ModelElem_Cons; apply IHmelem.
 Qed.
-
 
 
 (* SpecElem commutes with mapping *)
@@ -391,17 +466,82 @@ Fixpoint multi_Model_Cons (flds : list string) A (a : A) model :=
   end.
 
 (* Un-map a model *)
-Fixpoint model_unmap (m : FieldMap) (model : Model) : Model :=
+Fixpoint model_unmap (m : FieldMap) (model : Model) {struct model} : Model :=
   match model with
     | Model_Nil => Model_Nil
     | Model_Cons fld A a model =>
       multi_Model_Cons (semiInvertFM m fld) A a (model_map m model)
   end.
 
-FIXME HERE: prove the below
+(* Un-mapping the identity function is an identity *)
+Lemma model_unmap_id model : model_unmap idFM model = model.
+  induction model.
+  reflexivity.
+  unfold model_unmap; fold model_unmap.
+  unfold idFM; unfold semiInvertFM; rewrite model_map_id;
+  unfold multi_Model_Cons; reflexivity.
+Qed.
+
+(* FIXME HERE: prove this stupid lemma! *)
 
 Lemma IsModel_spec_map_model_unmap model {flds} (spec : Spec (flds:=flds)) m :
   IsModel model (spec_map m spec) <-> IsModel (model_unmap m model) spec.
+  split.
+  induction spec; unfold spec_map; fold spec_map; intro ism.
+  apply IsModel_Nil.
+  inversion ism.
+  apply (IsModel_ConsNone _ _ _ a).
+  Focus 2.
+  apply H.
+
+ [ | assumption ].
+
+  revert flds spec;
+  assert (forall {flds} (spec : Spec (flds:=flds)),
+            IsModel model spec ->
+            forall {flds'} (spec' : Spec (flds:=flds')),
+              eq_dep _ (@Spec) _ spec _ (spec_map m spec') ->
+              IsModel (model_unmap m model) spec').
+  intros flds spec; induction spec; intros.
+  rewrite (spec_map_to_nil m spec');
+    [ apply IsModel_Nil | apply eq_dep_sym; assumption ].
+  injection e.
+
+  intro ism; induction spec.
+  apply IsModel_Nil.
+  
+
+
+ intro ism; try (apply IsModel_Nil).
+  
+
+  induction 
+
+
+  FIXME HERE: previous approach
+
+  induction model.
+  unfold model_unmap; split; intro ism.
+  rewrite (spec_map_to_nil m spec);
+    [ apply IsModel_Nil | apply IsModel_nil_spec; assumption ].
+  rewrite (IsModel_nil_spec spec ism); apply IsModel_Nil.
+  unfold model_unmap; fold model_unmap; split; intro ism.
+  
+
+  rewrite 
+(IsModel_nil_spec _ ism).
+
+
+FIXME HERE
+
+  rewrite spec_map_id; rewrite model_unmap_id. reflexivity.
+
+
+  unfold spec_map; fold spec_map.
+
+  split; intro. destruct H.
+
+apply IsModel_Nil.
 
 (**
  ** Morphisms
