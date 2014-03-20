@@ -360,7 +360,7 @@ Qed.
 
 
 (* if the result of spec_map is a Spec_ConsNone, then the input is as well *)
-(* FIXME HERE
+(* FIXME: prove or remove
 Lemma spec_map_to_ConsNone m {flds} (spec : Spec (flds:=flds))
       f' A {flds'} (spec' : A -> Spec (flds:=flds')) :
   eq_dep _ (@Spec) _ (spec_map m spec) _ (Spec_ConsNone f' A spec') ->
@@ -513,6 +513,18 @@ Lemma multi_Model_Cons_ModelElem (flds : list string) A (a : A) model f A' a' :
   apply ModelElem_Cons; apply IHflds; assumption.
 Qed.
 
+Lemma multi_Model_Cons_un_ModelElem (flds : list string) A (a : A) model f A' a' :
+  ModelElem f A' a' (multi_Model_Cons flds A a model) ->
+  (In f flds /\ eq_dep _ id A a A' a') \/ ModelElem f A' a' model.
+  revert A a model f A' a'; induction flds; intros.
+  right; assumption.
+  inversion H.
+  left; split; [ left; reflexivity | reflexivity ].
+  destruct (IHflds _ _ _ _ _ _ H1).
+  destruct H5; left; split; [ right | ]; assumption.
+  right; assumption.
+Qed.
+
 (* Un-map a model *)
 Fixpoint model_unmap (m : FieldMap) (model : Model) {struct model} : Model :=
   match model with
@@ -531,8 +543,7 @@ Lemma model_unmap_id model : model_unmap idFM model = model.
 Qed.
 
 
-FIXME HERE: prove this stupid lemma first!
-
+(* applyFM and model_unmap form an adjunction w.r.t. ModelElem *)
 Lemma ModelElem_spec_map_model_unmap f A a model m :
   ModelElem (applyFM m f) A a model <-> ModelElem f A a (model_unmap m model).
   split; intro melem.
@@ -542,20 +553,17 @@ Lemma ModelElem_spec_map_model_unmap f A a model m :
   induction model.
   inversion melem.
   unfold model_unmap in melem; fold model_unmap in melem.
-  inversion melem.
-  rewrite H0.
-
-  destruct (string_dec (applyFM m f) fld).
-  rewrite e; apply ModelElem_Base.
-
-induction model;
-  unfold model_map; fold model_map; unfold model_unmap; fold model_unmap;
-  intro H; [ inversion H | | inversion H | ].
-  inversion H.
+  destruct (multi_Model_Cons_un_ModelElem _ _ _ _ _ _ _ melem).
+  destruct H.
+  rewrite H0. rewrite (semiInvertFM_sound _ _ _ H).
+  apply ModelElem_Base.
+  apply ModelElem_Cons; apply IHmodel; assumption.
+Qed.
 
 
 (* FIXME HERE: prove this stupid lemma! *)
 
+(* spec_map and model_unmap form an adjunction w.r.t. IsModel *)
 Lemma IsModel_spec_map_model_unmap model {flds} (spec : Spec (flds:=flds)) m :
   IsModel model (spec_map m spec) <-> IsModel (model_unmap m model) spec.
   split.
