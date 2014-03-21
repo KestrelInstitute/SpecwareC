@@ -570,59 +570,24 @@ Lemma IsModel_spec_map_model_unmap model {flds} (spec : Spec (flds:=flds)) m :
   induction spec; unfold spec_map; fold spec_map; intro ism.
   apply IsModel_Nil.
   destruct ism as [ a sig ]; destruct sig as [ melem ism ].
-  exists a; split.
-  apply (IsModel_ConsNone _ _ _ a).
-  Focus 2.
-  apply H.
+  exists a; split;
+  [ apply ModelElem_spec_map_model_unmap; assumption
+  | apply H; assumption ].
+  destruct ism as [ melem ism ]; split;
+  [ apply ModelElem_spec_map_model_unmap; assumption
+  | apply IHspec; assumption ].
 
- [ | assumption ].
-
-  revert flds spec;
-  assert (forall {flds} (spec : Spec (flds:=flds)),
-            IsModel model spec ->
-            forall {flds'} (spec' : Spec (flds:=flds')),
-              eq_dep _ (@Spec) _ spec _ (spec_map m spec') ->
-              IsModel (model_unmap m model) spec').
-  intros flds spec; induction spec; intros.
-  rewrite (spec_map_to_nil m spec');
-    [ apply IsModel_Nil | apply eq_dep_sym; assumption ].
-  injection e.
-
-  intro ism; induction spec.
+  induction spec; intro ism; unfold spec_map; fold spec_map.
   apply IsModel_Nil.
-  
+  destruct ism as [ a sig ]; destruct sig as [ melem ism ].
+  exists a; split;
+  [ apply ModelElem_spec_map_model_unmap; assumption
+  | apply H; assumption ].
+  destruct ism as [ melem ism ]; split;
+  [ apply ModelElem_spec_map_model_unmap; assumption
+  | apply IHspec; assumption ].
+Qed.
 
-
- intro ism; try (apply IsModel_Nil).
-  
-
-  induction 
-
-
-  FIXME HERE: previous approach
-
-  induction model.
-  unfold model_unmap; split; intro ism.
-  rewrite (spec_map_to_nil m spec);
-    [ apply IsModel_Nil | apply IsModel_nil_spec; assumption ].
-  rewrite (IsModel_nil_spec spec ism); apply IsModel_Nil.
-  unfold model_unmap; fold model_unmap; split; intro ism.
-  
-
-  rewrite 
-(IsModel_nil_spec _ ism).
-
-
-FIXME HERE
-
-  rewrite spec_map_id; rewrite model_unmap_id. reflexivity.
-
-
-  unfold spec_map; fold spec_map.
-
-  split; intro. destruct H.
-
-apply IsModel_Nil.
 
 (**
  ** Morphisms
