@@ -239,7 +239,7 @@ Lemma idFM_is_id (str : string) : applyFM idFM str = str.
   reflexivity.
 Qed.
 
-(* compose two FieldMaps *)
+(* compose two FieldMaps, applying m1 and then m2 *)
 Fixpoint composeFM (m1 m2 : FieldMap) : FieldMap :=
   match m1 with
     | [] => m2
@@ -561,8 +561,6 @@ Lemma ModelElem_spec_map_model_unmap f A a model m :
 Qed.
 
 
-(* FIXME HERE: prove this stupid lemma! *)
-
 (* spec_map and model_unmap form an adjunction w.r.t. IsModel *)
 Lemma IsModel_spec_map_model_unmap model {flds} (spec : Spec (flds:=flds)) m :
   IsModel model (spec_map m spec) <-> IsModel (model_unmap m model) spec.
@@ -606,7 +604,7 @@ Qed.
 (* Another def of morphisms, as being a subset mapping for models *)
 Definition IsMorphism {flds1} (spec1 : Spec (flds:=flds1))
            {flds2} (spec2 : Spec (flds:=flds2))
-           (m : string -> string) : Prop :=
+           (m : FieldMap) : Prop :=
   forall model,
     IsModel model spec2 ->
     IsModel model (spec_map m spec1).
@@ -626,8 +624,7 @@ Definition Morphism {flds1} (spec1 : Spec (flds:=flds1))
 
 Definition mkMorphism {flds1} (spec1 : Spec (flds:=flds1))
            {flds2} (spec2 : Spec (flds:=flds2))
-           (m : string -> string)
-           (ism : IsMorphism spec1 spec2 m) : Morphism spec1 spec2 :=
+           m (ism : IsMorphism spec1 spec2 m) : Morphism spec1 spec2 :=
   existT _ m ism.
 
 
@@ -636,24 +633,19 @@ Definition mkMorphism {flds1} (spec1 : Spec (flds:=flds1))
  **)
 
 Lemma IsMorphism_id {flds} (spec : Spec (flds:=flds)) :
-  IsMorphism spec spec id.
+  IsMorphism spec spec idFM.
   intros model ism.
-  apply
-    (eq_dep_rect
-       _ _ _ _
-       (fun fs sp => IsModel model sp)
-       ism _ _
-       (eq_dep_sym _ _ _ _ _ _ (spec_map_id spec))
-    ).
+  rewrite spec_map_id; assumption.
 Qed.
 
 Definition mid {flds} spec :
   Morphism (flds1:=flds) spec (flds2:=flds) spec :=
-  mkMorphism spec spec id (IsMorphism_id _).
+  mkMorphism spec spec idFM (IsMorphism_id _).
 
+(*
 Lemma IsMorphism_map {flds1} (spec1 : Spec (flds:=flds1))
-      {flds2} (spec2 : Spec (flds:=flds2)) m m' :
-  IsMorphism spec1 spec2 m ->
+      {flds2} (spec2 : Spec (flds:=flds2)) m1 m2 :
+  IsMorphism spec1 spec2 m1 ->
   forall model,
     IsModel model (spec_map m' spec2) ->
     IsModel model (spec_map (fun f => m' (m f)) spec1).
@@ -672,6 +664,7 @@ Lemma IsMorphism_map {flds1} (spec1 : Spec (flds:=flds1))
   - can then unmap, pass to the original IsMorphism, and then undo the unmapping
 
   IsMorphism (spec_map m' spec1) (spec_map m' spec2)
+*)
 
 Lemma IsMorphism_trans {flds1} (spec1 : Spec (flds:=flds1))
       {flds2} (spec2 : Spec (flds:=flds2))
@@ -679,22 +672,14 @@ Lemma IsMorphism_trans {flds1} (spec1 : Spec (flds:=flds1))
       m1 m2 :
   IsMorphism spec1 spec2 m1 ->
   IsMorphism spec2 spec3 m2 ->
-  IsMorphism spec1 spec3 (fun x => m2 (m1 x)).
-  intros ismorph1 ismorph2 flds_m model ismodel. Check spec_map_comp.
-  assert (IsModel model (spec_map m2 (spec_map m1 spec1))).
-  apply (ismorph2 flds_m ).
-  apply
-    (eq_dep_rect
-       _ _ _ _
-       (fun fs sp => IsModel model sp)
-       ismodel _ _
-       (spec_map_comp spec1 m1 m2)).
-
-  destruct (ism2 model3 ismodel3) as [ model2 ismodel2 super2 ].
-  destruct (ism1 model2 ismodel2) as [ model1 ismodel1 super1 ].
-  apply (existT2 _ _ model1).
+  IsMorphism spec1 spec3 (composeFM m1 m2).
+  intros ismorph1 ismorph2 model ism3.
+  rewrite <- spec_map_comp.
+  apply IsModel_spec_map_model_unmap.
+  apply ismorph1.
+  apply IsModel_spec_map_model_unmap.
+  apply ismorph2.
   assumption.
-  apply (SuperModel_map_trans _ model2); assumption.
 Qed.
 
 Definition mcompose {flds1} {spec1 : Spec (flds:=flds1)}
@@ -702,7 +687,7 @@ Definition mcompose {flds1} {spec1 : Spec (flds:=flds1)}
       {flds3} {spec3 : Spec (flds:=flds3)}
       (morph1 : Morphism spec1 spec2)
       (morph2 : Morphism spec2 spec3) : Morphism spec1 spec3 :=
-  mkMorphism spec1 spec3 (fun x => (projT1 morph2) (projT1 morph1 x))
+  mkMorphism spec1 spec3 (composeFM (projT1 morph1) (projT1 morph2))
              (IsMorphism_trans _ _ _ _ _ (projT2 morph1) (projT2 morph2)).
 
 

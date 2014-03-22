@@ -56,22 +56,22 @@ Ltac apply_morphism morph :=
 (*** Instantiating a field in a spec ***)
 
 Lemma IsModel_SomeToNone f A a {flds} (spec : A -> Spec (flds:=flds)) model :
-  IsModel ({# f ::: A := a ; spec a #}) model ->
-  IsModel ({# f ::: A ;  x =>  spec x #}) model.
+  IsModel model ({# f ::: A := a ; spec a #}) ->
+  IsModel model ({# f ::: A ;  x =>  spec x #}).
   revert f A a flds spec model.
   assert
     (forall flds (spec : Spec (flds:=flds)) model,
-       IsModel spec model ->
+       IsModel model spec ->
        forall f A a flds' (spec' : A -> Spec (flds:= flds')),
        existT (@Spec) flds spec
        = existT (@Spec) (cons f flds') ({# f ::: A := a ; spec' a #}) ->
        exists model',
          existT _ flds model = existT _ (cons f flds') model' /\
-         IsModel ({# f ::: A ;  x =>  spec' x #}) model').
-  intros flds spec model ism; induction ism; intros.
-  discriminate H.
-  discriminate H.
-  injection H; intros.
+         IsModel model' ({# f ::: A ;  x =>  spec' x #})).
+  intros flds spec; induction spec; intros.
+  discriminate H0.
+  discriminate H1.
+  injection H0; intros.
   revert a0 spec' H H0 H2; rewrite <- H1; rewrite <- H3; rewrite <- H6;
   intros.
   exists (Model_Cons f A a model); split;
