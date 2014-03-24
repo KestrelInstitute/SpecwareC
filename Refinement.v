@@ -37,7 +37,7 @@ Ltac end_refine := apply id_refinement.
 
 (*** A Refinement step that applies an arbitrary morphism ***)
 
-(* Applying a morphism to a refinement goal *)
+(* Applying a morphism to prove a refinement goal *)
 Definition apply_morphism_fun {flds1} (spec1 : Spec (flds:=flds1))
            {flds2} (spec2 : Spec (flds:=flds2))
            (m12 : Morphism spec1 spec2) :
@@ -58,57 +58,32 @@ Ltac apply_morphism morph :=
 Lemma IsModel_SomeToNone f A a {flds} (spec : A -> Spec (flds:=flds)) model :
   IsModel model ({# f ::: A := a ; spec a #}) ->
   IsModel model ({# f ::: A ;  x =>  spec x #}).
-  revert f A a flds spec model.
-  assert
-    (forall flds (spec : Spec (flds:=flds)) model,
-       IsModel model spec ->
-       forall f A a flds' (spec' : A -> Spec (flds:= flds')),
-       existT (@Spec) flds spec
-       = existT (@Spec) (cons f flds') ({# f ::: A := a ; spec' a #}) ->
-       exists model',
-         existT _ flds model = existT _ (cons f flds') model' /\
-         IsModel model' ({# f ::: A ;  x =>  spec' x #})).
-  intros flds spec; induction spec; intros.
-  discriminate H0.
-  discriminate H1.
-  injection H0; intros.
-  revert a0 spec' H H0 H2; rewrite <- H1; rewrite <- H3; rewrite <- H6;
-  intros.
-  exists (Model_Cons f A a model); split;
-  [ reflexivity | apply IsModel_ConsNone ].
-  rewrite <- (inj_pair2 _ _ _ _ _ H2) in H; injection H; intro.
-  rewrite <- (inj_pair2 _ _ _ _ _ H7); assumption.
-  intros;
-  destruct (H _ _ _ H0 f A a _ spec eq_refl) as [ model' H1 ];
-  destruct H1 as [ e ism' ].
-  rewrite (inj_pair2 _ _ _ _ _ e); assumption.
+  intro ism; destruct ism.
+  exists a; split; assumption.
 Qed.
 
+(*
 Definition instantiate_helper_base_fun
         f A a {flds} (spec : A -> Spec (flds:=flds)) :
-  { spec' : Spec (flds:= f :: flds) & IsMorphism (Spec_ConsNone f A spec) spec' id } :=
+  { spec' : Spec (flds:= f :: flds) & IsMorphism (Spec_ConsNone f A spec) spec' idFM } :=
   existT (fun spec' => IsMorphism _ spec' id) (Spec_ConsSome f A a (spec a))
          (fun model2 ism2 =>
             existT2 (fun _ => _) (fun _ => _) model2
                     (IsModel_SomeToNone _ _ _ _ _ ism2)
                     (SuperModel_map_id _)).
-
+*)
 
 Lemma IsMorphism_id_ConsNone f A {flds} (spec1 : A -> Spec (flds:=flds))
       (spec2 : A -> Spec (flds:=flds)) :
-  (forall a, IsMorphism (spec1 a) (spec2 a) id) ->
-  IsMorphism ({# f ::: A ; a => spec1 a #}) ({# f ::: A ; a => spec2 a #}) id.
-  intros ismorph model ism; exists model; [ | apply SuperModel_map_id ].
-  inversion ism.
-  rewrite <- (inj_pair2 _ _ _ _ _ H4).
-  apply IsModel_ConsNone.
-  assert (forall a, spec2 a = spec0 a);
-    [ rewrite (inj_pair2 _ _ _ _ _ (inj_pair2 _ _ _ _ _ H3)); intro; reflexivity | ].
-  rewrite <- (H5 a) in H0.
-  destruct (ismorph a model0 H0).
+  (forall a, IsMorphism (spec1 a) (spec2 a) idFM) ->
+  IsMorphism ({# f ::: A ; a => spec1 a #}) ({# f ::: A ; a => spec2 a #}) idFM.
+  intros ismorph model ism;
+  destruct ism as [ a sig ]; destruct sig as [ melem ism ].
+  exists a; split;
+  [ rewrite idFM_is_id; assumption | apply ismorph; assumption ].
+Qed.
 
- assumption.
-
+(*
 Program Definition instantiate_helper_step_ConsNone
            f A {flds} (spec : A -> Spec (flds:=flds))
            (F : forall a,
@@ -128,7 +103,7 @@ apply (IsModel_ConsNone)
 Definition instantiate_helper_step_ConsSome
            f A a {flds} (spec : A -> Spec (flds:=flds)) :
   { spec' : Spec (flds:= f :: flds) & IsMorphism (Spec_ConsNone f A spec) spec' id } :
-
+*)
 
 Ltac instantiate_field f val :=
   match goal with
