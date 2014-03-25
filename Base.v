@@ -33,6 +33,9 @@ Inductive Spec : forall {flds : list string}, Type :=
     Spec (flds:= f :: flds)
 .
 
+(* helper function for printing purposes *)
+Definition get_fields {flds} (spec : @Spec flds) := flds.
+
 
 (**
  ** Notions of elements of structures
@@ -618,14 +621,22 @@ Lemma IsMorphism_equiv {flds1} (spec1 : Spec (flds:=flds1))
   split.
 *)
 
-Definition Morphism {flds1} (spec1 : Spec (flds:=flds1))
+Inductive Morphism {flds1} (spec1 : Spec (flds:=flds1))
            {flds2} (spec2 : Spec (flds:=flds2)) :=
-  { m : _ | IsMorphism spec1 spec2 m }.
+| mkMorphism m : IsMorphism spec1 spec2 m -> Morphism spec1 spec2.
 
-Definition mkMorphism {flds1} (spec1 : Spec (flds:=flds1))
-           {flds2} (spec2 : Spec (flds:=flds2))
-           m (ism : IsMorphism spec1 spec2 m) : Morphism spec1 spec2 :=
-  existT _ m ism.
+Definition projMorph {flds1 spec1 flds2 spec2}
+           (morph : @Morphism flds1 spec1 flds2 spec2) : FieldMap :=
+  match morph with
+    | mkMorphism m _ => m
+  end.
+
+Definition projMorph_pf {flds1 spec1 flds2 spec2}
+           (morph : @Morphism flds1 spec1 flds2 spec2) :
+  IsMorphism spec1 spec2 (projMorph morph) :=
+  match morph with
+    | mkMorphism _ pf => pf
+  end.
 
 
 (**
@@ -687,8 +698,8 @@ Definition mcompose {flds1} {spec1 : Spec (flds:=flds1)}
       {flds3} {spec3 : Spec (flds:=flds3)}
       (morph1 : Morphism spec1 spec2)
       (morph2 : Morphism spec2 spec3) : Morphism spec1 spec3 :=
-  mkMorphism spec1 spec3 (composeFM (projT1 morph1) (projT1 morph2))
-             (IsMorphism_trans _ _ _ _ _ (projT2 morph1) (projT2 morph2)).
+  mkMorphism spec1 spec3 (composeFM (projMorph morph1) (projMorph morph2))
+             (IsMorphism_trans _ _ _ _ _ (projMorph_pf morph1) (projMorph_pf morph2)).
 
 
 (**
