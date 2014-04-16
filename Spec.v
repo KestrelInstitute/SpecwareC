@@ -12,14 +12,10 @@ Require Import Specware.Util.
 
 Section Spec.
 
-Variable F : Set.
-Variable F_dec : forall (fld1 fld2 : F), {fld1=fld2} + {fld1<>fld2}.
+Class FieldType (F : Set) : Set :=
+  field_dec : forall (fld1 fld2 : F), {fld1=fld2} + {fld1<>fld2}.
 
-Lemma F_dec_true fld : F_dec fld fld = left eq_refl.
-  destruct (F_dec fld fld).
-  rewrite (UIP_dec F_dec e eq_refl); reflexivity.
-  elimtype False; apply n; reflexivity.
-Qed.
+Context `{F_dec : FieldType}.
 
 
 (**
