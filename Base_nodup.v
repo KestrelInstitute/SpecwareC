@@ -1,7 +1,6 @@
 
 (*** An approach to representing Models with inductive types ***)
 
-Require Export String.
 Require Import List.
 Import ListNotations.
 
@@ -11,63 +10,54 @@ Add LoadPath "." as Specware.
 Require Import Specware.Util.
 
 
+Section Spec.
+
+(* The type of spec fields *)
+Variable F : Set.
+Variable F_dec : forall (f1 f2 : F), {f1=f2} + {f1<>f2}.
+
+
 (**
- ** The basic structures: signatures, models, and specs
+ ** Models and specs
  **)
 
 (* A Model is an element of the record type denoted by a Sig *)
 Inductive Model : Type :=
 | Model_Nil : Model
-| Model_Cons (fld:string) A (a : A) (M:Model) : Model
+| Model_Cons (fld:F) A (a : A) (M:Model) : Model
 .
 
 (* A Spec is a partial Model of a Sig; README: Specs are indexed with
    their fields so that the fields they contain are known: i.e., even
    an inconsistent Spec has a fixed list of fields *)
-Inductive Spec : forall {flds : list string}, Type :=
+Inductive Spec : forall {flds : list F}, Type :=
 | Spec_Nil : Spec (flds:=nil)
 | Spec_ConsNone f A {flds} :
+    ~ In f flds ->
     (forall (a:A), Spec (flds:=flds)) -> Spec (flds:= f :: flds)
 | Spec_ConsSome f A (a : A) {flds} :
+    ~ In f flds ->
     Spec (flds:=flds) ->
     Spec (flds:= f :: flds)
 .
 
 (* helper function for printing purposes *)
-Definition get_fields {flds} (spec : @Spec flds) := flds.
+(* Definition get_fields {flds} (spec : @Spec flds) := flds. *)
 
 
 (**
  ** Notions of elements of structures
  **)
 
-(* Proof that field f is associated with type A in spec *)
-(* FIXME: the types (and elements!) depend on earlier elements! *)
-(*
-Inductive SpecElem (f : string) :
-  forall A, option A -> forall {flds}, Spec (flds:=flds) -> Prop :=
-| SpecElem_BaseNone flds (spec : A -> Spec (flds:=flds)) :
-    SpecElem f A None (Spec_ConsNone f A spec)
-| SpecElem_BaseSome a flds (spec : Spec (flds:=flds)) :
-    SpecElem f A (Some a) (Spec_ConsSome f A a spec)
-| SpecElem_ConsNone A a f' A' flds (spec : A' -> Spec (flds:=flds)) :
-    (forall a', SpecElem f A a (spec a')) ->
-    SpecElem f A a (Spec_ConsNone f' A' spec)
-| SpecElem_ConsSome a f' A' a' flds (spec : Spec (flds:=flds)) :
-    SpecElem f A a spec ->
-    SpecElem f A a (Spec_ConsSome f' A' a' spec)
-.
-*)
-
 (* Get the fields of a Model *)
-Fixpoint modelFields (M : Model) : list string :=
+Fixpoint modelFields (M : Model) : list F :=
   match M with
     | Model_Nil => []
     | Model_Cons fld _ _ M' => fld :: modelFields M'
   end.
 
 (* Proof that field f is associated with element a of type A in model *)
-Inductive ModelElem (fld : string) A (a:A) : Model -> Prop :=
+Inductive ModelElem (fld : F) A (a:A) : Model -> Prop :=
 | ModelElem_Base (model : Model) :
     ModelElem fld A a (Model_Cons fld A a model)
 | ModelElem_Cons fld' A' a' (model : Model) :
@@ -76,7 +66,7 @@ Inductive ModelElem (fld : string) A (a:A) : Model -> Prop :=
 .
 
 (* Model_Nil has no ModelElems *)
-Lemma not_ModelElem_nil (fld : string) A (a:A) :
+Lemma not_ModelElem_nil (fld : F) A (a:A) :
   ModelElem fld A a Model_Nil -> False.
   assert (forall model,
             ModelElem fld A a model -> model = Model_Nil -> False).
@@ -94,7 +84,7 @@ Fixpoint modelProj (model : Model) :
     | Model_Nil => fun f in_nil => False_rect _ in_nil
     | Model_Cons f' A a _ model =>
       fun f in_pf =>
-        match string_dec f' f with
+        match F_dec f' f with
             | left _ => existT id A a
             | right neq =>
               modelProj model f (or_proj_r _ _ neq in_pf)
@@ -109,7 +99,7 @@ Lemma modelProj_correct flds (model : Model (flds:=flds)) f in_pf :
   revert f in_pf; induction model; intros.
   elimtype False; apply in_pf.
   unfold modelProj; fold (modelProj (flds:=flds)).
-  destruct (string_dec f f0).
+  destruct (F_dec f f0).
   rewrite <- e; apply ModelElem_Base.
   apply ModelElem_Cons.
   apply IHmodel.
@@ -124,23 +114,25 @@ Qed.
 Fixpoint IsModel (model : Model) {flds} (spec : Spec (flds:=flds)) {struct spec} : Prop :=
   match spec in Spec (flds:=flds) with
     | Spec_Nil => True
-    | Spec_ConsNone f A _ specF =>
+    | Spec_ConsNone f A _ _ specF =>
       exists a, ModelElem f A a model /\ IsModel model (specF a)
-    | Spec_ConsSome f A a _ spec' =>
+    | Spec_ConsSome f A a _ _ spec' =>
       ModelElem f A a model /\ IsModel model spec'
   end.
 
 Definition IsModel_Nil model : IsModel model Spec_Nil := I.
 
-Definition IsModel_ConsNone model f A a {flds} (spec : A -> Spec (flds:=flds))
+Definition IsModel_ConsNone model f A a {flds} not_in
+           (spec : A -> Spec (flds:=flds))
            (melem : ModelElem f A a model) (ism : IsModel model (spec a)) :
-  IsModel model (Spec_ConsNone f A spec).
+  IsModel model (Spec_ConsNone f A not_in spec).
   exists a; split; assumption.
 Qed.
 
-Definition IsModel_ConsSome model f A a {flds} (spec : Spec (flds:=flds))
+Definition IsModel_ConsSome model f A a {flds} not_in
+           (spec : Spec (flds:=flds))
            (melem : ModelElem f A a model) (ism : IsModel model spec) :
-  IsModel model (Spec_ConsSome f A a spec).
+  IsModel model (Spec_ConsSome f A a not_in spec).
   split; assumption.
 Qed.
 
@@ -190,55 +182,29 @@ Lemma ModelElem_to_SpecElem {flds_m} (model : Model (flds:=flds_m))
   ModelElem f A a
 *)
 
+FIXME HERE: need a notion of when a FieldMap applies to a spec
 
 (**
- ** Oooh, supermodels!
- **)
-
-Definition SuperModel (model1 : Model) (model2 : Model) : Prop :=
-  forall f A a,
-    ModelElem f A a model2 -> ModelElem f A a model1.
-
-Lemma SuperModel_cons_l f A a (model1 : Model) (model2 : Model) :
-  SuperModel model1 model2 ->
-  SuperModel (Model_Cons f A a model1) model2.
-  intros super12 f' A' a' melem2;
-  apply ModelElem_Cons; apply (super12 f' A' a' melem2); assumption.
-Qed.
-
-Lemma SuperModel_id (model : Model) : SuperModel model model.
-  intros f A a ism; assumption.
-Qed.
-
-Lemma SuperModel_trans model1 model2 model3 :
-  SuperModel model1 model2 -> SuperModel model2 model3 ->
-  SuperModel model1 model3.
-  intros super12 super23 f A a melem3;
-  apply (super12 f A a (super23 f A a melem3)).
-Qed.
-
-
-(**
- ** Field maps: finite functions on strings
+ ** Field maps: finite functions on Fs
  **)
 
 (* A FieldMap is represented as a list of pairs *)
-Definition FieldMap := list (string * string).
+Definition FieldMap := list (F * F).
 
 (* The identity FieldMap *)
 Definition idFM : FieldMap := [].
 
-(* Apply a FieldMap to a string *)
-Fixpoint applyFM (m : FieldMap) (str : string) : string :=
+(* Apply a FieldMap to a F *)
+Fixpoint applyFM (m : FieldMap) (str : F) : F :=
   match m with
     | [] => str
     | (str_from, str_to) :: m' =>
-      if string_dec str str_from then str_to else
+      if F_dec str str_from then str_to else
         applyFM m' str
   end.
 
 (* Applying idFM is the identity *)
-Lemma idFM_is_id (str : string) : applyFM idFM str = str.
+Lemma idFM_is_id (str : F) : applyFM idFM str = str.
   reflexivity.
 Qed.
 
@@ -257,21 +223,21 @@ Lemma FieldMap_compose m1 m2 str :
   reflexivity.
   destruct a as [ str_from str_to ]; unfold composeFM; fold composeFM.
   unfold applyFM; fold applyFM.
-  destruct (string_dec str str_from).
+  destruct (F_dec str str_from).
   reflexivity.
   apply IHm1.
 Qed.
 
-(* Return the list of strings that map to an output string *)
-Fixpoint semiInvertFM (m : FieldMap) str : list string :=
+(* Return the list of Fs that map to an output F *)
+Fixpoint semiInvertFM (m : FieldMap) str : list F :=
   match m with
     | [] => [str]
     | (str_from, str_to) :: m' =>
-      if string_dec str str_to then str_from :: semiInvertFM m' str
-      else remove string_dec str_from (semiInvertFM m' str)
+      if F_dec str str_to then str_from :: semiInvertFM m' str
+      else remove F_dec str_from (semiInvertFM m' str)
   end.
 
-(* semiInvertFM returns only strings that map back to str *)
+(* semiInvertFM returns only Fs that map back to str *)
 Lemma semiInvertFM_sound m str str' :
   In str' (semiInvertFM m str) -> applyFM m str' = str.
   induction m.
@@ -279,8 +245,8 @@ Lemma semiInvertFM_sound m str str' :
     [ rewrite H; reflexivity | destruct H ].
   destruct a as [ str_from str_to ]; unfold applyFM; fold applyFM.
   unfold semiInvertFM; fold semiInvertFM.
-  destruct (string_dec str str_to); intro in_pf;
-  destruct (string_dec str' str_from).
+  destruct (F_dec str str_to); intro in_pf;
+  destruct (F_dec str' str_from).
   rewrite e; reflexivity.
   apply IHm; destruct in_pf;
   [ elimtype False; apply n; rewrite H; reflexivity | assumption ].
@@ -288,15 +254,15 @@ Lemma semiInvertFM_sound m str str' :
   apply IHm; apply (In_remove _ _ _ _ in_pf).
 Qed.
   
-(* semiInvertFM returns all strings that map back to str *)
+(* semiInvertFM returns all Fs that map back to str *)
 Lemma semiInvertFM_complete m str str' :
   applyFM m str' = str -> In str' (semiInvertFM m str).
   induction m; unfold applyFM; fold applyFM.
   intro e; left; symmetry; assumption.
   destruct a as [ str_from str_to ]; unfold semiInvertFM; fold semiInvertFM.
-  destruct (string_dec str' str_from); intro eApp.
-  rewrite eApp; rewrite string_dec_true; left; symmetry; assumption.
-  destruct (string_dec str str_to).
+  destruct (F_dec str' str_from); intro eApp.
+  rewrite eApp; rewrite F_dec_true; left; symmetry; assumption.
+  destruct (F_dec str str_to).
   right; apply IHm; assumption.
   apply remove_not_eq; [ assumption | apply IHm; assumption ].
 Qed.
@@ -450,7 +416,7 @@ Qed.
 (* IsModel commutes with mapping *)
 (* FIXME: prove or remove *)
 (*
-Lemma IsModel_map_commutes (g : string -> string)
+Lemma IsModel_map_commutes (g : F -> F)
       {flds_s} (spec : Spec (flds:=flds_s))
       {flds_m} (model : Model (flds:=flds_m)) :
   IsModel model spec ->
@@ -470,7 +436,7 @@ Lemma SuperModel_map_trans {flds1} (model1 : Model (flds:=flds1))
       m1 m2 :
   SuperModel model3 (model_map m2 model2) ->
   SuperModel model2 (model_map m1 model1) ->
-  SuperModel model3 (model_map (fun x : string => m2 (m1 x)) model1).
+  SuperModel model3 (model_map (fun x : F => m2 (m1 x)) model1).
   induction model1.
   intros super32 super21 f A a melem; inversion melem.
   unfold model_map; fold model_map;
@@ -493,13 +459,13 @@ Qed.
  **)
 
 (* Apply Model_Cons once for each field name in a list *)
-Fixpoint multi_Model_Cons (flds : list string) A (a : A) model :=
+Fixpoint multi_Model_Cons (flds : list F) A (a : A) model :=
   match flds with
     | [] => model
     | fld :: flds' => Model_Cons fld A a (multi_Model_Cons flds' A a model)
   end.
 
-Lemma In_multi_Model_Cons (flds : list string) A (a : A) model f :
+Lemma In_multi_Model_Cons (flds : list F) A (a : A) model f :
   In f flds -> ModelElem f A a (multi_Model_Cons flds A a model).
   induction flds; intro in_pf.
   inversion in_pf.
@@ -508,7 +474,7 @@ Lemma In_multi_Model_Cons (flds : list string) A (a : A) model f :
   apply ModelElem_Cons; apply IHflds; assumption.
 Qed.
 
-Lemma multi_Model_Cons_ModelElem (flds : list string) A (a : A) model f A' a' :
+Lemma multi_Model_Cons_ModelElem (flds : list F) A (a : A) model f A' a' :
   ModelElem f A' a' model ->
   ModelElem f A' a' (multi_Model_Cons flds A a model).
   induction flds; intro melem.
@@ -516,7 +482,7 @@ Lemma multi_Model_Cons_ModelElem (flds : list string) A (a : A) model f A' a' :
   apply ModelElem_Cons; apply IHflds; assumption.
 Qed.
 
-Lemma multi_Model_Cons_un_ModelElem (flds : list string) A (a : A) model f A' a' :
+Lemma multi_Model_Cons_un_ModelElem (flds : list F) A (a : A) model f A' a' :
   ModelElem f A' a' (multi_Model_Cons flds A a model) ->
   (In f flds /\ eq_dep _ id A a A' a') \/ ModelElem f A' a' model.
   revert A a model f A' a'; induction flds; intros.
@@ -598,7 +564,7 @@ Qed.
 (*
 2Definition IsMorphism_spec {flds1} (spec1 : Spec (flds:=flds1))
            {flds2} (spec2 : Spec (flds:=flds2))
-           (m : string -> string) : Prop :=
+           (m : F -> F) : Prop :=
   forall f A a,
     SpecElem f A a spec1 ->
     SpecElem (m f) A a spec2.
@@ -616,7 +582,7 @@ Definition IsMorphism {flds1} (spec1 : Spec (flds:=flds1))
 (*
 Lemma IsMorphism_equiv {flds1} (spec1 : Spec (flds:=flds1))
       {flds2} (spec2 : Spec (flds:=flds2))
-      (m : string -> string) :
+      (m : F -> F) :
   IsMorphism spec1 spec2 m <-> IsMorphism_models spec1 spec2 m.
   split.
 *)
@@ -669,7 +635,7 @@ Lemma IsMorphism_map {flds1} (spec1 : Spec (flds:=flds1))
   IDEA: "un-map" a model along an m, given a set of input fields:
   - un-mapping should depend only on m and flds
   - NOTE: might duplicate some fields, since model might have duplicate fields,
-    so we define unmap_flds : flds -> m -> model -> list string and
+    so we define unmap_flds : flds -> m -> model -> list F and
     unmap : forall flds m model, Model (flds:=unmap_flds flds m model)
   - need IsModel model (spec_map m spec) <-> IsModel (unmap flds m model) spec
   - can then unmap, pass to the original IsMorphism, and then undo the unmapping
