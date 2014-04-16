@@ -69,67 +69,69 @@ Lemma string_dec_true str : string_dec str str = left eq_refl.
 Qed.
 
 
-(*** UIP (and friends) for lists of strings ***)
+(*** UIP and friends for field types ***)
 
-(* decidability of equality for lists of strings *)
-Module DecidableSetListString.
-  Definition U := list string.
-  Lemma eq_dec : forall x y:U, {x=y} + {x<>y}.
-    apply list_eq_dec; apply string_dec.
+Section UIP_fields.
+
+  Variable F : Set.
+  Variable F_dec : forall (fld1 fld2 : F), {fld1=fld2} + {fld1<>fld2}.
+
+  Lemma F_dec_true fld : F_dec fld fld = left eq_refl.
+    destruct (F_dec fld fld).
+    rewrite (UIP_dec F_dec e eq_refl); reflexivity.
+    elimtype False; apply n; reflexivity.
   Qed.
-End DecidableSetListString.
 
-(* EqDep module for lists of strings *)
-Module EqDepListString := DecidableEqDep (DecidableSetListString).
+  Definition UIP_flds { flds1 flds2 : list F } (p1 p2 : flds1 = flds2) : p1 = p2 :=
+    UIP_dec (list_eq_dec F_dec) p1 p2.
 
-Definition UIP_flds flds1 flds2 (p1 p2 : flds1 = flds2) : p1 = p2 :=
-  EqDepListString.UIP flds1 flds2 p1 p2.
+  Definition UIP_refl_flds { flds } (p : flds = flds) : p = eq_refl :=
+    UIP_flds p eq_refl.
 
-Definition UIP_refl_flds flds (p : flds = flds) : p = eq_refl :=
-  EqDepListString.UIP_refl flds p.
+  Definition eq_dep_eq_flds P {flds} {x y : P flds}
+             (ed : eq_dep _ P flds x flds y) : x = y :=
+    eq_dep_eq_dec (list_eq_dec F_dec) ed.
 
-Definition eq_dep_eq_flds :
-  forall P {flds} {x y : P flds}, eq_dep _ P flds x flds y -> x = y :=
-  EqDepListString.eq_dep_eq.
-
-(* inj_pair2 for lists of strings *)
-Definition inj_pair2_flds {flds : list string} {A a b} :
-  existT A flds a = existT A flds b -> a = b :=
-  EqDepListString.inj_pairT2 A flds a b.
+  (* inj_pair2 for lists of strings *)
+  Definition inj_pair2_flds {flds : list F} {A a b}
+             (e : existT A flds a = existT A flds b) : a = b :=
+    eq_dep_eq__inj_pair2 _ (eq_dep_eq_flds) _ _ _ _ e.
 
 
-(*** helpers for proving eq_dep goals ***)
+  (*** helpers for proving eq_dep goals ***)
 
-Lemma eq_dep_fst {A B p x q y} : eq_dep A B p x q y -> p = q.
-  intro e; destruct e; reflexivity.
-Qed.
+  Lemma eq_dep_fst {A B p x q y} : eq_dep A B p x q y -> p = q.
+    intro e; destruct e; reflexivity.
+  Qed.
 
-Lemma eq_dep_commute A B (a1 a2 : A) (b1 : B a1) (b2 : B a2)
-      C (f : forall x (y : B x), C x y) :
-  eq_dep _ _ a1 b1 a2 b2 ->
-  eq_dep _ (fun tup => C (projT1 tup) (projT2 tup))
-         (existT B a1 b1) (f a1 b1)
-         (existT B a2 b2) (f a2 b2).
-  intro e; induction e.
-  apply eq_dep_intro.
-Qed.
+  Lemma eq_dep_commute A B (a1 a2 : A) (b1 : B a1) (b2 : B a2)
+        C (f : forall x (y : B x), C x y) :
+    eq_dep _ _ a1 b1 a2 b2 ->
+    eq_dep _ (fun tup => C (projT1 tup) (projT2 tup))
+           (existT B a1 b1) (f a1 b1)
+           (existT B a2 b2) (f a2 b2).
+    intro e; induction e.
+    apply eq_dep_intro.
+  Qed.
 
-Lemma eq_dep_ctx A B (a1 a2 : A) (b1 : B a1) (b2 : B a2)
-      A' (f : A -> A')
-      B' (g : forall x, B x -> B' (f x)) :
-  eq_dep _ _ a1 b1 a2 b2 ->
-  eq_dep _ _ (f a1) (g a1 b1) (f a2) (g a2 b2).
-  intro e; induction e.
-  apply eq_dep_intro.
-Qed.
+  Lemma eq_dep_ctx A B (a1 a2 : A) (b1 : B a1) (b2 : B a2)
+        A' (f : A -> A')
+        B' (g : forall x, B x -> B' (f x)) :
+    eq_dep _ _ a1 b1 a2 b2 ->
+    eq_dep _ _ (f a1) (g a1 b1) (f a2) (g a2 b2).
+    intro e; induction e.
+    apply eq_dep_intro.
+  Qed.
 
-Lemma eq_dep_flds_fun U B (a1 a2 : list string)
-      (b1 : U -> B a1) (b2 : U -> B a2) (e : a1 = a2) :
-  (forall u, eq_dep _ B a1 (b1 u) a2 (b2 u)) ->
-  eq_dep _ (fun a => U -> B a) a1 b1 a2 b2.
-  revert b1 b2; rewrite e; intros.
-  rewrite (functional_extensionality_dep
-             _ _
-             (fun u' => eq_dep_eq_flds _ (H u'))).
-  apply eq_dep_intro.
-Qed.
+  Lemma eq_dep_flds_fun U B (a1 a2 : list F)
+        (b1 : U -> B a1) (b2 : U -> B a2) (e : a1 = a2) :
+    (forall u, eq_dep _ B a1 (b1 u) a2 (b2 u)) ->
+    eq_dep _ (fun a => U -> B a) a1 b1 a2 b2.
+    revert b1 b2; rewrite e; intros.
+    rewrite (functional_extensionality_dep
+               _ _
+               (fun u' => eq_dep_eq_flds _ (H u'))).
+    apply eq_dep_intro.
+  Qed.
+
+End UIP_fields.
