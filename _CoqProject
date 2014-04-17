@@ -1,7 +1,7 @@
 # Create the Makefile by running coq_makefile -f _CoqProject -o Makefile
 -R . Specware
 ./Util.v
-./Spec.v
-./MetaSlang.v
+./Spec_sh.v
+./Spec_deep.v
 ./Refinement.v
 ./Examples.v

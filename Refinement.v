@@ -3,8 +3,8 @@
 
 Add LoadPath "." as Specware.
 Require Import Specware.Util.
-Require Export Specware.Spec.
-Require Export Specware.MetaSlang.
+Require Export Specware.Spec_sh.
+Require Export Specware.Spec_deep.
 
 Import ListNotations.
 Require Export Coq.Logic.Eqdep.
