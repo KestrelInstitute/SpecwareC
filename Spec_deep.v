@@ -57,16 +57,17 @@ Inductive MSPolyType `{FieldType} : Type1 :=
 
 (*** Typing contexts ***)
 
-Definition ctxElem `{FieldType} : Type1 := 
+Definition ctxElem `{FieldType} : Type1 :=
+  prod string { A : Type0 & A }.
 
 
 (*** Typing and kinding rules ***)
 
-Inductive 
+(* Inductive *)
 
 
 (*** Interpreting terms and types ***)
 
-Definition 
-
+(*
 Fixpoint interpType `{FieldType} (list )
+*)
