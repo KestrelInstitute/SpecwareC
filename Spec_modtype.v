@@ -1,5 +1,7 @@
 
 Require Import Coq.Arith.Even.
+Require Import Coq.Arith.Minus.
+Require Import Coq.Logic.FunctionalExtensionality.
 
 (* A spec with an arbitrary T, foo, and axiom about foo being the identity *)
 Module Type spec_id.
@@ -18,13 +20,18 @@ Module spec_id_consistent : spec_id.
 End spec_id_consistent.
 
 
-(* A refinement of spec_id, where foo is defined and the axiom is proven *)
+(* A refinement of spec_id, where foo is defined as the identity *)
 Module Type spec_id_foo.
   Parameter T : Set.
   Definition foo : T -> T := fun x => x.
+  Parameter foo_is_id : forall x, foo x = x.
+
+  (* README: don't prove the lemma in the spec, as this requires all
+     *proofs* to be equal to this proof
   Lemma foo_is_id : forall x, foo x = x.
     intro; reflexivity.
   Qed.
+   *)
 End spec_id_foo.
 
 
@@ -63,9 +70,7 @@ End spec_id_T.
 Module Type spec_id_T_foo.
   Definition T : Set := nat.
   Definition foo : T -> T := fun x => x.
-  Lemma foo_is_id : forall x, foo x = x.
-    intros; reflexivity.
-  Qed.
+  Parameter foo_is_id : forall x, foo x = x.
 End spec_id_T_foo.
 
 (* morphism from spec_id >=> spec_id_T *)
@@ -134,9 +139,7 @@ End morph_foo_I.
 Module Type renaming1_spec_id.
   Parameter T : Set.
   Definition foo : T -> T := fun x => x.
-  Lemma foo_is_id : forall x, foo x = x.
-    intros; reflexivity.
-  Qed.
+  Parameter foo_is_id : forall x, foo x = x.
 End renaming1_spec_id.
 
 (* the import then becomes trivial, as there is no "rest" of the spec *)
@@ -191,3 +194,36 @@ Module morph_id2_proj2 (s : spec_id2) : spec_id.
   Definition foo := s.bar.
   Definition foo_is_id := s.bar_is_id.
 End morph_id2_proj2.
+
+
+(*** Handling propositional but not definitional equality in specs ***)
+
+(* A spec with a more complex version of the identity function *)
+Module Type spec_id_complexid.
+  Definition T : Set := nat.
+  Definition foo : T -> T :=
+    fun x => match x with | 0 => 0 | _ => S (x - 1) end.
+  Parameter foo_is_id : forall x, foo x = x.
+  (*
+  Lemma foo_is_id : forall x, foo x = x.
+    intro x; induction x.
+    reflexivity.
+    unfold foo. rewrite <- pred_of_minus. unfold minus. reflexivity.
+  Qed.
+   *)
+End spec_id_complexid.
+
+(* morphism spec_id_foo >=> spec_id_complexid *)
+Module morph_complexid (s : spec_id_complexid) : spec_id_foo.
+  Definition T := s.T.
+  Definition foo := fun (x:T) => x.
+  (* need to prove that this definition of foo equals the expected one *)
+  Lemma foo_eq : foo = s.foo.
+    apply functional_extensionality.
+    intros; rewrite s.foo_is_id. reflexivity.
+  Qed.
+  (*  *)
+  Lemma foo_is_id : forall x, foo x = x.
+    intros; reflexivity.
+  Qed.
+End morph_complexid.
