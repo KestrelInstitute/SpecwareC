@@ -14,16 +14,37 @@ Require Import Specware.Util.
 Definition Field : Set := string.
 Definition Field_dec : forall (f1 f2 : Field), {f1=f2} + {f1<>f2} := string_dec.
 
+(* Type-level versions of bool and unit (needed below) *)
+Inductive boolT : Type := | trueT : boolT | falseT : boolT.
+Inductive unitT : Type := | ttT : unitT.
+
+Definition boolTT : Type := boolT.
+Definition unitTT : Type := unitT.
+
+Lemma neq_trueT_falseT : trueT = falseT -> False.
+  discriminate.
+Qed.
+
+(* The types bool and unit (in universe Type) are unequal *)
+Lemma bool_neq_unit : boolTT = unitTT -> False.
+  intro e; apply neq_trueT_falseT.
+  transitivity (eq_rect unitTT id (eq_rect boolTT id trueT unitTT e) boolTT (eq_sym e)).
+  unfold eq_rect; destruct e; unfold eq_sym; reflexivity.
+  transitivity (eq_rect unitTT id (eq_rect boolTT id falseT unitTT e) boolTT (eq_sym e)).
+  destruct (eq_rect boolTT id trueT unitTT e); destruct (eq_rect boolTT id falseT unitTT e); reflexivity.
+  unfold eq_rect; destruct e; unfold eq_sym; reflexivity.
+Qed.
+
 
 (*** Dependent record types ***)
 
 (* Dependent record types, indexed by their fields *)
 Inductive RecType : forall {flds : list Field}, Type :=
 | RecType_Nil : RecType (flds:=nil)
-| RecType_Cons f {flds} A :
-    (A -> RecType (flds:=flds)) -> RecType (flds:= f :: flds)
-| RecType_ConsAxiom f {flds} (P : Prop) :
-    (P -> RecType (flds:=flds)) -> RecType (flds:= f :: flds)
+| RecType_Cons f {flds} A (rectp: A -> RecType (flds:=flds)) :
+    RecType (flds:= f :: flds)
+| RecType_ConsAxiom f {flds} (P : Prop) (rectp: P -> RecType (flds:=flds)) :
+    RecType (flds:= f :: flds)
 .
 
 (* Map a function over the fields of a RecType *)
@@ -57,6 +78,7 @@ Inductive subtype : Type -> Type -> Prop :=
 (*** Models, aka records, aka heterogenous lists ***)
 
 Definition Any := { A : Type & A}.
+Definition mkAny A a : Any := existT id A a.
 Definition Model := list (Field * Any).
 
 (* Project a field from a Model, returning unit if the field is not
@@ -89,6 +111,46 @@ Inductive IsModelOf_RT (m: Model) : forall {flds}, @RecType flds -> Prop :=
 .
 
 
+(*** Lowering ***)
+
+(* Lower Prop P inside rectp, i.e., augment it to quantify over all
+   types / axioms of rectp. Note that lowering P is stronger than
+   (forall m, IsModelOf_RT m rectp -> P) since lowering is insensitive
+   to duplicate fields *)
+Fixpoint RecType_lowerP {flds} (rectp: @RecType flds) (P:Prop) : Prop :=
+  match rectp with
+    | RecType_Nil => P
+    | RecType_Cons f' flds' A' rectp' =>
+      forall a, RecType_lowerP (rectp' a) P
+    | RecType_ConsAxiom f' flds' P' rectp' =>
+      forall pf, RecType_lowerP (rectp' pf) P
+  end.
+
+(* Same as above, but in Type instead of Prop *)
+Fixpoint RecType_lower {flds} (rectp: @RecType flds) A : Type :=
+  match rectp with
+    | RecType_Nil => A
+    | RecType_Cons f' flds' A' rectp' =>
+      forall a, RecType_lower (rectp' a) A
+    | RecType_ConsAxiom f' flds' P rectp' =>
+      forall pf, RecType_lower (rectp' pf) A
+  end.
+
+(*
+Lemma lowerP_Cons f A {flds} (rectp: A -> @RecType flds) (P:Prop) :
+  RecType_lowerP rectp P -> 
+*)
+
+Lemma lowered_in_model {flds} (rectp: @RecType flds) (P:Prop)
+      (loweredP: RecType_lowerP rectp P)
+      model (ismodel: IsModelOf_RT model rectp) : P.
+  induction ismodel.
+  apply loweredP.
+  apply IHismodel; apply loweredP.
+  apply IHismodel; apply loweredP.
+Qed.
+
+
 (*** Specs ***)
 
 (* A Spec is a RecType with an arbitrary field list *)
@@ -109,11 +171,25 @@ Definition IsModelOf (m: Model) (spec: Spec) : Prop :=
 
 (*** Sub-specs and model inclusion ***)
 
+(* Model inclusion: when all models of rectp1 are models of rectp2 *)
+Definition Model_incl_RT {flds1} rectp1 {flds2} rectp2 : Prop :=
+  forall m, @IsModelOf_RT m flds1 rectp1 -> @IsModelOf_RT m flds2 rectp2.
+
 (* Model inclusion: when all models of spec1 are models of spec2 *)
 Definition Model_incl spec1 spec2 : Prop :=
   forall m, IsModelOf m spec1 -> IsModelOf m spec2.
 
 (* Predicate for when a RecType contains a top-level field,type pair *)
+Fixpoint RecTypeContains (f:Field) (A:Type) {flds} (rectp: @RecType flds) : Prop :=
+  match rectp with
+    | RecType_Nil => False
+    | RecType_Cons f' flds' A' rectp' =>
+      (f = f' /\ forall a, RecType_lowerP (rectp' a) (A = A'))
+      \/ (forall a, RecTypeContains f A (rectp' a))
+    | RecType_ConsAxiom f' flds' P rectp' =>
+      (forall pf, RecTypeContains f A (rectp' pf))
+  end.
+(*
 Inductive RecTypeContains (f:Field) (A:Type) :
   forall {flds}, @RecType flds -> Prop :=
 | RecTypeContains_Base {flds} rectp :
@@ -125,8 +201,20 @@ Inductive RecTypeContains (f:Field) (A:Type) :
     (forall pf, RecTypeContains f A (rectp pf)) ->
     RecTypeContains f A (@RecType_ConsAxiom f' flds P rectp)
 .
+*)
 
 (* A super-spec is intuitively a spec with more fields and/or axioms *)
+Fixpoint SuperRecType {flds1} (rectp1: @RecType flds1) {flds2} (rectp2: @RecType flds2) : Prop :=
+  match rectp2 with
+    | RecType_Nil => True
+    | RecType_Cons f flds2' A rectp2' =>
+      (RecTypeContains f A rectp1) /\
+      (forall a, SuperRecType rectp1 (rectp2' a))
+    | RecType_ConsAxiom f flds2' P rectp2' =>
+      (forall model, IsModelOf_RT model rectp1 -> P) /\
+      (forall pf, SuperRecType rectp1 (rectp2' pf))
+  end.
+(*
 Inductive SuperRecType {flds1} (rectp1: @RecType flds1) :
   forall {flds2}, @RecType flds2 -> Prop :=
 | SuperRecType_Nil : SuperRecType rectp1 RecType_Nil
@@ -139,6 +227,80 @@ Inductive SuperRecType {flds1} (rectp1: @RecType flds1) :
     (forall model, IsModelOf_RT model rectp1 -> P) ->
     SuperRecType rectp1 (RecType_ConsAxiom f P rectp2)
 .
+*)
+
+Definition SuperSpec spec1 spec2 :=
+  SuperRecType (spec_recType spec1) (spec_recType spec2).
+
+(* Helper lemma for Soundness: if a Spec contains field f at type A
+   then any model of that spec contains an element at f of type A *)
+Lemma RecTypeContains_Model_proj model {flds} rectp
+      (ismodelof: @IsModelOf_RT model flds rectp) :
+  forall f A, RecTypeContains f A rectp -> Model_projT model f = A.
+  induction ismodelof.
+  intros f A rtc; elimtype False; apply rtc.
+  intros f' A rtc; destruct rtc;
+  [ destruct H as [ ef eA ]; rewrite ef; rewrite (lowered_in_model _ _ (eA _) _ ismodelof); reflexivity
+  | apply IHismodelof; apply H ].
+  intros; apply IHismodelof; apply H.
+Qed.
+
+(* Soundness of SuperRecType: it implies model inclusion *)
+Lemma SuperRecType_Soundness {flds1} rectp1 {flds2} rectp2 :
+  @SuperRecType flds1 rectp1 flds2 rectp2 -> Model_incl_RT rectp1 rectp2.
+  induction rectp2.
+  intros _ model _; apply IsModelOf_RT_Nil.
+  intros super model ismodelof; destruct super.
+  revert rectp H H1;
+  rewrite <- (RecTypeContains_Model_proj _ _ ismodelof _ _ H0); intros.
+  apply IsModelOf_RT_Cons.
+  apply (H _ (H1 _)); assumption.
+  intros super model ismodelof; destruct super.
+  apply (IsModelOf_RT_ConsAxiom _ _ _ (H0 _ ismodelof)).
+  apply H; [ apply H1 | assumption ].
+Qed.
+
+(* Any inhabited type A is not equal to A -> False *) Print eq_rect.
+Definition exists_unequal_type (A:Type) (a:A) : A <> (A -> False) :=
+  fun e => (eq_rect A id a (A -> False) e) a.
+
+(* Helper lemma for Completeness: if all models of a Spec contain
+   field f of type A then the spec contains field f of type A *)
+Lemma Model_proj_RecTypeContains f {flds} A rectp :
+  (forall model, @IsModelOf_RT model flds rectp -> Model_projT model f = A) ->
+  RecTypeContains f A rectp.
+  induction rectp.
+
+  intro allmodels; elimtype False; apply bool_neq_unit.
+  transitivity (Model_projT [(f,mkAny boolTT trueT)] f);
+    [ unfold Model_projT; unfold Model_proj;
+      rewrite F_dec_true; unfold mkAny; unfold projT1; reflexivity | ].
+  transitivity (Model_projT [(f,mkAny unitTT ttT)] f);
+    [ 
+    | unfold Model_projT; unfold Model_proj;
+      rewrite F_dec_true; unfold mkAny; unfold projT1; reflexivity ].
+  rewrite (allmodels _ (IsModelOf_RT_Nil _));
+  rewrite (allmodels _ (IsModelOf_RT_Nil _));
+  reflexivity.
+
+  intro allmodels; destruct (Field_dec f f0).
+  rewrite <- e; left; split; [ reflexivity | ].
+  intros a model ismodelof.
+
+  FIXME HERE: move the quantification over models out of
+  RecTypeContains and make it a global quantification at the top level
+  of the definition of SuperRecType
+
+rewrite <- (allmodels ).
+Qed.
+
+(* Completeness of SuperRecType: it is implied by model inclusion *)
+Lemma SuperRecType_Completeness {flds1} rectp1 {flds2} rectp2 :
+  Model_incl_RT rectp1 rectp2 -> @SuperRecType flds1 rectp1 flds2 rectp2.
+  induction rectp2.
+  constructor.
+  intro; split.
+
 
 
 (*** Morphisms ***)
