@@ -49,6 +49,24 @@ Lemma remove_not_eq {A} eq_dec (x y : A) l :
     [ left; assumption | right; apply IHl; assumption ].
 Qed.
 
+Lemma remove_still_In A eq_dec x y l : In x (@remove A eq_dec y l) -> In x l.
+  induction l.
+  intro i; destruct i.
+  unfold remove; fold (remove eq_dec); destruct (eq_dec y a).
+  intro i; right; apply IHl; assumption.
+  intro i; destruct i; [ left; assumption | right; apply IHl; assumption ].
+Qed.
+
+Lemma NoDup_remove {A} eq_dec (x:A) l (nodup : NoDup l) : NoDup (remove eq_dec x l).
+  induction nodup.
+  apply NoDup_nil.
+  unfold remove; fold (remove eq_dec); destruct (eq_dec x x0).
+  assumption.
+  apply NoDup_cons;
+    [ intro i; apply H; apply (remove_still_In _ _ _ _ _ i)
+    | assumption ].
+Qed.
+
 
 (*** UIP (and friends) for strings ***)
 
@@ -80,6 +98,12 @@ Section UIP_fields.
     destruct (F_dec fld fld).
     rewrite (UIP_dec F_dec e eq_refl); reflexivity.
     elimtype False; apply n; reflexivity.
+  Qed.
+
+  Lemma F_dec_false f1 f2 (neq: f1 <> f2) : { neq : _ & F_dec f1 f2 = right neq }.
+    case_eq (F_dec f1 f2).
+    intros; elimtype False; apply (neq e).
+    intros n e; exists n; reflexivity.
   Qed.
 
   Definition UIP_flds { flds1 flds2 : list F } (p1 p2 : flds1 = flds2) : p1 = p2 :=
