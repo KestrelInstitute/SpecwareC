@@ -303,11 +303,12 @@ Definition unified_by (g : Field -> Field) f1 f2 : Prop :=
 
 (* A model respects a mapping g iff any fields unified by g are equal
    in the model *)
-Definition model_respects g model :=
-  forall f1 f2, In f1 (Model_fields model) -> In f2 (Model_fields model) ->
+Definition model_respects_on flds g model :=
+  forall f1 f2, In f1 flds -> In f2 flds ->
                 unified_by g f1 f2 -> Model_proj model f1 = Model_proj model f2.
 
 (* Cons preserves model_respects *)
+(* FIXME: re-prove or remove
 Lemma model_respects_cons g model f elem
       (not_in: forall f', In f' (Model_fields model) -> unified_by g f f' ->
                           Model_proj model f' = elem)
@@ -323,6 +324,7 @@ Lemma model_respects_cons g model f elem
   destruct in2 as [ | in2 ]; [ elimtype False; apply n0; assumption | ];
   apply resp; assumption.
 Qed.  
+*)
 
 (* Sub-models with no duplicates preserve model_respects *)
 (*
@@ -365,23 +367,31 @@ Lemma map_Model_projH g model f
 Qed.
 
 (* Mapping lemma for Model_proj *)
+Lemma map_Model_proj flds g model
+      (resp: model_respects_on flds g model) f (i: In f flds) :
+  Model_proj (map_model g model) (g f) = Model_proj model f.
+  apply map_Model_projH; intros; apply resp; assumption.
+Qed.
+
+(* FIXME: this one doesn't work...
 Lemma map_Model_proj g model (resp: model_respects g model) f :
   Model_proj (map_model g model) (g f) = Model_proj model f.
-  destruct (in_dec Field_dec f (Model_fields model)).
-  apply map_Model_projH; intros f2 i2 unif; apply resp; assumption.
+  destruct (in_dec Field_dec (g f) (Model_fields (map_model g model))).
+  assert (exists f', g f' = g f /\ In f' (Model_fields model));
+    [ apply in_map_iff; rewrite <- map_model_fields; assumption | ].
+  destruct H as [ f' H ]; destruct H as [ e i2 ].
+  transitivity (Model_proj model f').
+  rewrite <- e; apply map_Model_projH; intros; apply resp; assumption.
+  apply resp; try assumption.
+*)
 
-  FIXME HERE: prove that, if (g f) is in (map_model g model), then
-  there must be some f' in model that g unifies with f
-
-  assert (~ In (g f) (Model_fields (map_model g model))).
-  intro in_g.
-
-  rewrite Model_proj_not_in;
-    [ rewrite Model_proj_not_in; [ reflexivity | assumption ] | ].
-  rewrite map_model_fields.
-  intro in_g; apply n. 
-
-
+Lemma map_IsModelOf_RT g model {flds} (rectp: @RecType flds) :
+  IsModelOf_RT model rectp ->
+  IsModelOf_RT (map_model g model) (map_RecType g rectp).
+  intro ismodel; induction ismodel.
+  constructor.
+  unfold map_RecType; fold map_RecType.
+  constructor.
 
 Lemma unmap_IsModelOf_RT g model {flds} (rectp: @RecType flds) :
   IsModelOf_RT model (map_RecType g rectp) ->
