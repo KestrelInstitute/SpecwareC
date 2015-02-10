@@ -1,0 +1,4 @@
+# Create the Makefile by running coq_makefile -f _CoqProject -o Makefile COQDEP = coqdep
+-R . Specware
+./specware.ml4
+
