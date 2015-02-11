@@ -8,21 +8,38 @@ Spec S1 {
 Print S1.
 
 Spec S2 {
-       Variable x2 : nat ;
-       Axiom x_gt_5 : (x2 > 5)
+       Variable x : nat ;
+       Axiom x_gt_5 : (x > 5)
      }.
 Print S2.
 
 Spec S3 {
-       Variable x3 : nat ;
-       Definition y : nat := (x3 + 2)
+       Variable x : nat ;
+       Definition y : nat := (x + 2)
      }.
 Print S3.
-Print x3__class.
 
-Definition z `{S3} := y + 5.
+(*
+Definition S3 `{S3.S3} := S3.S3.
+Print S3.
+*)
+
+(*
+Notation S3 := S3.S3.
+*)
+
+Class S3 `{S3.S3} := { }.
+
+Definition z `{S3} := S3.y + 5.
 Print z.
-Eval compute in z (x3__param := 2).
+Eval compute in z (x__param := 2).
+
+Export S3.
+
+Definition z2 `{S3} := y + 5.
+Print z2.
+Eval compute in z2 (x__param := 3).
+
 
 Spec blah {
        Variable x : nat;

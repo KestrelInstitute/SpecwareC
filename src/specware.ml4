@@ -89,16 +89,13 @@ let add_typeclass class_id is_op_class params fields =
                         else
                           RecordDecl (None, List.map mk_record_field fields)),
                        []]))
-(*
-  vernac_inductive false false BiFinite
-                   (((false, class_name), params,
-                     Some (if is_op_class then type_expr else prop_expr),
-                     Class is_op_class,
-                     RecordDecl (None, fields)),
-                    [])
- *)
 
-(* Add a definition to the current Coq image *)
+(* Perform some operation(s) inside a newly-defined module *)
+let within_module mod_name f =
+  let loc = located_loc mod_name in
+  interp (loc, VernacDefineModule (None, mod_name, [], Check [], []));
+  f ();
+  interp (loc, VernacEndSegment mod_name)
 
 
 (***
@@ -240,7 +237,8 @@ let rec interp_spec_entries spec_name op_ctx ax_fields entries =
 (* Top-level entrypoint to interpret a spec expression *)
 (* FIXME: put each spec inside a module *)
 let interp_spec spec_name entries =
-  interp_spec_entries spec_name [] [] entries
+  within_module spec_name
+                (fun () -> interp_spec_entries spec_name [] [] entries)
 ;;
 
 
