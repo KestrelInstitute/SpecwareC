@@ -9,6 +9,8 @@ open Vernacexpr
 open Vernacentries
 open Constrexpr
 open Misctypes
+open Decl_kinds
+
 
 (***
  *** Helper functions for interacting with Coq
@@ -70,7 +72,7 @@ let add_definition id params type_opt body =
   interp
     (located_loc id,
      VernacDefinition
-       ((None, Decl_kinds.Definition), id,
+       ((None, Definition), id,
         DefineBody (params, None, body, type_opt)))
 
 (* Add a type-class to the current Coq image, where is_op_class says
@@ -79,7 +81,7 @@ let add_definition id params type_opt body =
 let add_typeclass class_id is_op_class params fields =
   interp
     (located_loc class_id,
-     VernacInductive (false, Decl_kinds.BiFinite,
+     VernacInductive (false, BiFinite,
                       [((false, class_id), params,
                         Some (if is_op_class then type_expr else prop_expr),
                         Class is_op_class,
@@ -103,18 +105,6 @@ let within_module mod_name f =
  ***)
 
 (* The syntactic representation (parsed but not yet type-checked) of a
-   single spec entry, i.e., a single element of a spec. This is either
-   a normal Gallina top-level command (though only certain ones are
-   allowed), or is a spec import form *)
-(* FIXME HERE: use this new approach!
-type spec_entry =
-  | GallinaEntry of vernac_expr
-  (* Import of another spec: contains the spec name and a list of
-    "with clauses" that define some declared ops of that spec *)
-  | ImportEntry of lident * (Id.t * Constrexpr.constr_expr) list
- *)
-
-(* The syntactic representation (parsed but not yet type-checked) of a
    single spec entry, i.e., a single element of a spec *)
 type spec_entry =
   (* Declaration of an op: contains its name and type *)
@@ -126,6 +116,21 @@ type spec_entry =
   (* Import of another spec: contains the spec name and a list of
     "with clauses" that define some declared ops of that spec *)
   | ImportEntry of lident * (Id.t * Constrexpr.constr_expr) list
+
+(* FIXME HERE: need to figure out how to parse top-level Gallina
+   commands in order to use this alternate version of spec_entry *)
+
+(* The syntactic representation (parsed but not yet type-checked) of a
+   single spec entry, i.e., a single element of a spec. This is either
+   a normal Gallina top-level command (though only certain ones are
+   allowed), or is a spec import form *)
+(*
+type spec_entry =
+  | GallinaEntry of vernac_expr
+  (* Import of another spec: contains the spec name and a list of
+    "with clauses" that define some declared ops of that spec *)
+  | ImportEntry of lident * (Id.t * constr_expr) list
+ *)
 
 (* An op context specifies the ops that are currently in scope, and,
    for each op, whether it is defined or just declared.
@@ -155,7 +160,7 @@ let op_ctx_cons_defn op_name op_ctx =
 let op_ctx_elem_to_param elem =
   let id = op_ctx_elem_id elem in
   LocalRawAssum ([(Loc.dummy_loc, Name (add_suffix id "param"))],
-                 Default Decl_kinds.Implicit,
+                 Default Implicit,
                  mk_var (Loc.dummy_loc, add_suffix id "class"))
 
 (* Convert an op_ctx to a list of class parameters, one for each
@@ -191,6 +196,11 @@ let rec interp_spec_entries spec_name op_ctx ax_fields entries =
      add_typeclass spec_name false
                    (op_ctx_to_params op_ctx) (List.rev ax_fields)
   | OpEntry (op_name, op_type) :: entries' ->
+(*
+  | GallinaEntry (VernacAssumption ((_, Definitional), NoInline,
+                                    [false, ([op_name], op_type)]))
+    :: entries' ->
+ *)
      (* For an op declaration, make an operational typeclass
         Class op__class {op_params} := { op : op_type }
       *)
@@ -200,6 +210,12 @@ let rec interp_spec_entries spec_name op_ctx ax_fields entries =
      interp_spec_entries spec_name (op_ctx_cons_decl op_name op_ctx)
                          ax_fields entries'
   | OpDefEntry (op_name, op_type_opt, op_body) :: entries' ->
+(*
+  | GallinaEntry (VernacDefinition
+                    ((_, Definition), op_name,
+                     DefineBody (old_params, None, op_body, op_type_opt)))
+    :: entries' ->
+ *)
      (* For an op definition, add the forms
 
         Definition op {op_params} : op_type := op_body
@@ -213,6 +229,9 @@ let rec interp_spec_entries spec_name op_ctx ax_fields entries =
        | None -> CHole (located_loc op_name, None,
                         IntroIdentifier (located_elem op_name), None)
      in
+(*
+     let params = op_ctx_to_params op_ctx @ old_params in
+ *)
      let params = op_ctx_to_params op_ctx in
      let op_def_id = add_suffix_l op_name "def" in
      add_definition op_name (op_ctx_to_params op_ctx) op_type_opt op_body ;
@@ -225,11 +244,20 @@ let rec interp_spec_entries spec_name op_ctx ax_fields entries =
                           :: ax_fields)
                          entries'
   | AxEntry (ax_name, ax_type) :: entries' ->
+(*
+  | GallinaEntry (VernacAssumption ((_, Logical), NoInline,
+                                    [false, ([ax_name], ax_type)]))
+    :: entries' ->
+ *)
      (* For axioms, just make a record field for the final,
         propositional type-class and pass it forward *)
      interp_spec_entries spec_name op_ctx
                          ((ax_name, ax_type, false) :: ax_fields)
                          entries'
+(*
+  | GallinaEntry (gallina_cmd) :: _ ->
+     raise (located_loc spec_name) (Failure "Unhandled form in spec")
+ *)
   | ImportEntry (import_spec, with_defs) :: entries' ->
      raise (located_loc import_spec) (Failure "Imports not handled yet")
 
