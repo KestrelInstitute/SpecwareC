@@ -67,6 +67,12 @@ let mk_record_field (id, tp, coercion_p) =
   ((((if coercion_p then Some true else None),
      AssumExpr (lname_of_lident id, tp)), None), [])
 
+(* Extract the name of a record field *)
+let record_field_name fld =
+  match fld with
+  | (((_, AssumExpr (lid, _)), _), _) -> located_elem lid
+  | _ -> raise dummy_loc (Failure "record_field_name")
+
 (* Add a definition to the current Coq image *)
 let add_definition id params type_opt body =
   interp
@@ -104,6 +110,9 @@ let within_module mod_name f =
  *** The data-types for specifying specs (ha ha)
  ***)
 
+(* An additional definition in a spec import, of the form "name := def" *)
+type import_def = Id.t * Constrexpr.constr_expr
+
 (* The syntactic representation (parsed but not yet type-checked) of a
    single spec entry, i.e., a single element of a spec *)
 type spec_entry =
@@ -115,7 +124,7 @@ type spec_entry =
   | AxEntry of lident * Constrexpr.constr_expr
   (* Import of another spec: contains the spec name and a list of
     "with clauses" that define some declared ops of that spec *)
-  | ImportEntry of lident * (Id.t * Constrexpr.constr_expr) list
+  | ImportEntry of Loc.t * reference * import_def list
 
 (* FIXME HERE: need to figure out how to parse top-level Gallina
    commands in order to use this alternate version of spec_entry *)
@@ -168,33 +177,58 @@ let op_ctx_elem_to_param elem =
 let op_ctx_to_params op_ctx =
   List.rev_map op_ctx_elem_to_param op_ctx
 
-(*
-(* The axiom context specifies fields in the propositional class *)
-type ax_ctx_elem =
-  (* Axioms are specified by their name and type *)
-  | AxSpec of Id.t * Constrexpr.constr_expr
-  (* Imports are specified by the spec being imported and the list of
-     "with" clauses giving additional definitions to that spec *)
-  | ImportSpec of Id.t * ((Id.t * Constrexpr.constr_expr) list)
+(* A spec is represented internally as a global name, an op context
+   (giving the names of the ops it declares and/or defines), and a
+   list of axiom names. Note that we do not store the types and/or
+   values of ops and axioms, as we rely on Coq's other definition
+   mechanisms to do that.
+*)
+type spec = {
+  spec_name : Globnames.global_reference option;
+  spec_ops : op_ctx;
+  spec_axioms : Id.t list
+}
 
-type ax_ctx = ax_ctx_elem list
- *)
+(* FIXME HERE: this is failing; RefMan-tus says to use
+Machops.global_reference, which does not exist...? *)
+let lookup_spec_global ref =
+  Smartlocate.global_of_extended_global (Nametab.extended_global_of_path ref)
+
+let lookup_spec_global_from_lid lid =
+  lookup_spec_global (make_path DirPath.empty (located_elem lid))
+
+(* The global table of registered specs *)
+(* let spec_table  *)
+
+let register_global_spec spec =
+  match spec.spec_name with
+  | Some (Globnames.ConstRef constant) ->
+     Format.eprintf "\nregister_global_spec: name = %s\n" (Constant.to_string constant)
+  | _ ->
+     raise dummy_loc (Failure "register_global_spec")
 
 
 (***
  *** Interpreting specs into type-classes
  ***)
 
-(* Interpret a list of spec_entries into a series of typeclasses and
-   definitions, given an op_ctx and the current list of fields, in
-   reverse order, to go into the axiom typeclass *)
+(* Interpret a list of spec_entries into a spec object, installing a
+   series of typeclasses and definitions into the current Coq
+   image. Also takes in an op_ctx of the ops that have been added so
+   far and the current list of fields, in reverse order, to go into
+   the axiom typeclass *)
 let rec interp_spec_entries spec_name op_ctx ax_fields entries =
   match entries with
   | [] ->
      (* At the end of all entries, make the final, propositional
-        type-class for all the axioms and imports *)
+        type-class for all the axioms and imports, and return the spec
+        object *)
      add_typeclass spec_name false
-                   (op_ctx_to_params op_ctx) (List.rev ax_fields)
+                   (op_ctx_to_params op_ctx) (List.rev ax_fields) ;
+     { spec_name = None;
+       spec_ops = op_ctx;
+       spec_axioms = List.map (fun (lid,_,_) -> located_elem lid) ax_fields
+     }
   | OpEntry (op_name, op_type) :: entries' ->
 (*
   | GallinaEntry (VernacAssumption ((_, Definitional), NoInline,
@@ -258,15 +292,19 @@ let rec interp_spec_entries spec_name op_ctx ax_fields entries =
   | GallinaEntry (gallina_cmd) :: _ ->
      raise (located_loc spec_name) (Failure "Unhandled form in spec")
  *)
-  | ImportEntry (import_spec, with_defs) :: entries' ->
-     raise (located_loc import_spec) (Failure "Imports not handled yet")
+  | ImportEntry (loc, import_spec, with_defs) :: entries' ->
+     raise loc (Failure "Imports not handled yet")
 
 
 (* Top-level entrypoint to interpret a spec expression *)
-(* FIXME: put each spec inside a module *)
 let interp_spec spec_name entries =
   within_module spec_name
-                (fun () -> interp_spec_entries spec_name [] [] entries)
+                (fun () ->
+                 let spec = interp_spec_entries spec_name [] [] entries in
+                 let spec = { spec with spec_name =
+                                          (* Coqlib.find_reference "Spec name" [] (Id.to_string (located_elem spec_name)) *)
+                                          Some (lookup_spec_global_from_lid spec_name)} in
+                 register_global_spec spec)
 ;;
 
 
@@ -276,12 +314,21 @@ let interp_spec spec_name entries =
 
 (* FIXME: get the locations of all the identifiers right! *)
 
+(* Syntactic class to parse import defs *)
+VERNAC ARGUMENT EXTEND import_defs
+  | [ ident(nm) ":=" constr(def) ";" import_defs(rest) ] -> [ (nm, def)::rest ]
+  | [ ident(nm) ":=" constr(def) ] -> [ [nm, def] ]
+END
+
 (* New syntactic class to parse individual spec entries *)
 VERNAC ARGUMENT EXTEND spec_entry
   | [ "Variable" ident(nm) ":" constr(tp) ] -> [ OpEntry ((loc, nm), tp) ]
   | [ "Definition" ident(nm) ":" constr(tp) ":=" constr(body) ] -> [ OpDefEntry ((loc, nm), Some tp, body) ]
   | [ "Definition" ident(nm) ":=" constr(body) ] -> [ OpDefEntry ((loc, nm), None, body) ]
   | [ "Axiom" ident(nm) ":" constr(tp) ] -> [ AxEntry ((loc, nm), tp) ]
+  | [ "Import" global(spec) ] -> [ ImportEntry (loc, spec, []) ]
+  | [ "Import" global(spec) "with" "{" import_defs(defs) "}" ] ->
+     [ ImportEntry (loc, spec, defs) ]
 END
 
 type spec_entries = spec_entry list
