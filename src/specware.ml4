@@ -111,116 +111,8 @@ let within_module mod_name f =
   interp (loc, VernacEndSegment mod_name);
   ret
 
-
 (***
- *** The data-types for specifying specs (ha ha)
- ***)
-
-(* An additional definition in a spec import, of the form "name := def" *)
-type import_def = Id.t * Constrexpr.constr_expr
-
-(* A name mapping specifies a mapping on identifiers *)
-type name_mapping_elem =
-  (* Map a single name to another *)
-  | NameXSingle of Id.t * Id.t
-  (* Map all names with a given prefix to instead use a different prefix *)
-  | NameXPrefix of string * string
-
-type name_mapping = name_mapping_elem list
-
-(* Spec terms are syntactic forms for building specs from existing specs *)
-type spec_term =
-  (* A reference by name to an existing spec *)
-  | SpecRef of reference
-  (* A translation of the names of a spec *)
-  | SpecXlate of spec_term * name_mapping
-  (* A spec substitution, where the morphism must be named *)
-  | SpecSubst of spec_term * qualid
-
-(* Get the source location of a spec_term *)
-let rec spec_term_loc st =
-  match st with
-  | SpecRef r -> loc_of_reference r
-  | SpecXlate (st', _) -> spec_term_loc st'
-  | SpecSubst (st', _) -> spec_term_loc st'
-
-(* A spec def entry is an op, axiom, or import in a spec definition *)
-type spec_def_entry =
-  (* Declaration of an op: contains its name and type *)
-  | OpEntry of lident * Constrexpr.constr_expr
-  (* Definition of an op: contains its name, type, and value *)
-  | OpDefEntry of lident * Constrexpr.constr_expr option * Constrexpr.constr_expr
-  (* Declaration of an axiom: contains its name and type *)
-  | AxEntry of lident * Constrexpr.constr_expr
-  (* Import of another spec: contains the spec name and a list of
-    "with clauses" that define some declared ops of that spec *)
-  | ImportEntry of spec_term * import_def list
-
-(* FIXME HERE: need to figure out how to parse top-level Gallina
-   commands in order to use this alternate version of spec_def_entry *)
-
-(* The syntactic representation (parsed but not yet type-checked) of a
-   single spec entry, i.e., a single element of a spec. This is either
-   a normal Gallina top-level command (though only certain ones are
-   allowed), or is a spec import form *)
-(*
-type spec_def_entry =
-  | GallinaEntry of vernac_expr
-  (* Import of another spec: contains the spec name and a list of
-    "with clauses" that define some declared ops of that spec *)
-  | ImportEntry of lident * (Id.t * constr_expr) list
- *)
-
-(* An op context specifies the ops that are currently in scope, and,
-   for each op, whether it is defined or just declared.
-
-   NOTE: op contexts always have the most recently declared or defined
-   op first, i.e., the first op in a spec is the last op in an op
-   context; this is to make it easy to append ops as we go *)
-type op_ctx_elem = | OpCtx_Decl of Id.t | OpCtx_Defn of Id.t
-type op_ctx = op_ctx_elem list
-
-(* Get the identifier from an op_ctx_elem *)
-let op_ctx_elem_id op_ctx_elem =
-  match op_ctx_elem with
-  | OpCtx_Decl id -> id
-  | OpCtx_Defn id -> id
-
-(* Cons an op declaration to an op_ctx *)
-let op_ctx_cons_decl op_name op_ctx =
-  OpCtx_Decl (located_elem op_name) :: op_ctx
-
-(* Cons an op definition to an op_ctx *)
-let op_ctx_cons_defn op_name op_ctx =
-  OpCtx_Defn (located_elem op_name) :: op_ctx
-
-(* Convert an op_ctx_elem to a class parameter of the form
-   {op__param:op__class} *)
-let op_ctx_elem_to_param elem =
-  let id = op_ctx_elem_id elem in
-  LocalRawAssum ([(Loc.dummy_loc, Name (add_suffix id "param"))],
-                 Default Implicit,
-                 mk_var (Loc.dummy_loc, add_suffix id "class"))
-
-(* Convert an op_ctx to a list of class parameters, one for each
-   OpCtx_Decl in the context (remember: op_ctx is reversed) *)
-let op_ctx_to_params op_ctx =
-  List.rev_map op_ctx_elem_to_param op_ctx
-
-(* A spec is represented internally as a global name, an op context
-   (giving the names of the ops it declares and/or defines), and a
-   list of axiom names. Note that we do not store the types and/or
-   values of ops and axioms, as we rely on Coq's other definition
-   mechanisms to do that.
-*)
-type spec = {
-  spec_ops : op_ctx;
-  spec_axioms : Id.t list
-}
-
-
-(***
- *** Global and local references to specs, and the global spec table
+ *** Global and local references to specs
  ***)
 
 (* FIXME: figure out how to get good error messages in the lookup
@@ -280,6 +172,139 @@ let spec_globref_to_string spec_ref =
 let spec_globref_to_qualid spec_globref =
   qualid_of_string (MutInd.to_string spec_globref)
 
+
+(***
+ *** The data-types for specifying specs (ha ha)
+ ***)
+
+(* A name mapping specifies a mapping on identifiers *)
+type name_mapping_elem =
+  (* Map a single name to another *)
+  | NameXSingle of Id.t * Id.t
+  (* Map all names with a given prefix to instead use a different prefix *)
+  | NameXPrefix of string * string
+
+type name_mapping = name_mapping_elem list
+
+(* Spec terms are syntactic forms for building specs from existing specs *)
+type spec_term =
+  (* A reference by name to an existing spec *)
+  | SpecRef of reference
+  (* A translation of the names of a spec *)
+  | SpecXlate of spec_term * name_mapping
+  (* A spec substitution, where the morphism must be named *)
+  | SpecSubst of spec_term * qualid
+  (* Adding definitions to ops in a spec *)
+  | SpecAddDefs of spec_term * (Id.t * Constrexpr.constr_expr) list
+
+(* Get the source location of a spec_term *)
+let rec spec_term_loc st =
+  match st with
+  | SpecRef r -> loc_of_reference r
+  | SpecXlate (st', _) -> spec_term_loc st'
+  | SpecSubst (st', _) -> spec_term_loc st'
+  | SpecAddDefs (st', _) -> spec_term_loc st'
+
+(* A spec def entry is an op, axiom, or import in a spec definition *)
+type spec_def_entry =
+  (* Declaration of an op: contains its name and type *)
+  | OpEntry of lident * Constrexpr.constr_expr
+  (* Definition of an op: contains its name, type, and value *)
+  | OpDefEntry of lident * Constrexpr.constr_expr option * Constrexpr.constr_expr
+  (* Declaration of an axiom: contains its name and type *)
+  | AxEntry of lident * Constrexpr.constr_expr
+  (* Import of another spec: contains the spec name and a list of
+    "with clauses" that define some declared ops of that spec *)
+  | ImportEntry of spec_term
+
+(* FIXME HERE: need to figure out how to parse top-level Gallina
+   commands in order to use this alternate version of spec_def_entry *)
+
+(* The syntactic representation (parsed but not yet type-checked) of a
+   single spec entry, i.e., a single element of a spec. This is either
+   a normal Gallina top-level command (though only certain ones are
+   allowed), or is a spec import form *)
+(*
+type spec_def_entry =
+  | GallinaEntry of vernac_expr
+  (* Import of another spec: contains the spec name and a list of
+    "with clauses" that define some declared ops of that spec *)
+  | ImportEntry of lident * (Id.t * constr_expr) list
+ *)
+
+
+(***
+ *** The internal representation of a spec
+ ***)
+
+(* An op context specifies the ops that are currently in scope, and,
+   for each op, whether it is defined or just declared. It also
+   includes all the spec imports of a spec. Note that any ops that
+   come from an included spec are not listed at the top level of an
+   op_ctx, but are instead captured in the import form in the op_ctx.
+
+   NOTE: op contexts always have the most recently declared or defined
+   op first, i.e., the first op in a spec is the last op in an op
+   context; this is to make it easy to append ops as we go *)
+type op_ctx_elem =
+  | OpCtx_Decl of Id.t
+  | OpCtx_Defn of Id.t
+  (* Imports are specified by the local name of the imported spec
+     (usually the last identifier in the path to the module of the
+     spec), a global reference to the spec, the names of any ops in
+     the imported spec that are shared with the current spec (i.e.,
+     the ops from the spec that are already in the current op_ctx),
+     and the imported spec's op_ctx minus any of the shared ops *)
+  | OpCtx_Import of Id.t * spec_globref * Id.t list * op_ctx
+ and op_ctx = op_ctx_elem list
+
+(* FIXME HERE: do imports need global refs? If so, all specs need to
+   have a global ref! *)
+
+(* Get the identifier from an op_ctx_elem *)
+let op_ctx_elem_id op_ctx_elem =
+  match op_ctx_elem with
+  | OpCtx_Decl id -> id
+  | OpCtx_Defn id -> id
+  | OpCtx_Import (id, _, _, _) -> id
+
+(* Cons an op declaration to an op_ctx *)
+let op_ctx_cons_decl op_name op_ctx =
+  OpCtx_Decl (located_elem op_name) :: op_ctx
+
+(* Cons an op definition to an op_ctx *)
+let op_ctx_cons_defn op_name op_ctx =
+  OpCtx_Defn (located_elem op_name) :: op_ctx
+
+(* Convert an op_ctx_elem to a class parameter of the form
+   {op__param:op__class} *)
+let op_ctx_elem_to_param elem =
+  let id = op_ctx_elem_id elem in
+  LocalRawAssum ([(Loc.dummy_loc, Name (add_suffix id "param"))],
+                 Default Implicit,
+                 mk_var (Loc.dummy_loc, add_suffix id "class"))
+
+(* Convert an op_ctx to a list of class parameters, one for each
+   OpCtx_Decl in the context (remember: op_ctx is reversed) *)
+let op_ctx_to_params op_ctx =
+  List.rev_map op_ctx_elem_to_param op_ctx
+
+(* A spec is represented internally as a global name, an op context
+   (giving the names of the ops it declares and/or defines), and a
+   list of axiom names. Note that we do not store the types and/or
+   values of ops and axioms, as we rely on Coq's other definition
+   mechanisms to do that.
+*)
+type spec = {
+  spec_ops : op_ctx;
+  spec_axioms : Id.t list
+}
+
+
+(***
+ *** Global registration of specs
+ ***)
+
 (* The global table of registered specs, indexed by spec global
 refs *)
 let spec_table = ref (Mindmap.empty)
@@ -293,10 +318,15 @@ let register_global_spec spec_lident spec =
    *)
   spec_table := Mindmap.add spec_globref spec !spec_table
 
-(* Find a spec from a local reference to its module, which is the
+(* Look up a spec and its spec_globref from a local reference to the
+   spec's module, which is the user-visible way to name specs *)
+let lookup_spec_and_globref ref =
+  let globref = lookup_spec_globref ref in
+  (Mindmap.find globref !spec_table, globref)
+
+(* Look up a spec from a local reference to its module, which is the
    user-visible way to name specs *)
-let find_spec ref =
-  Mindmap.find (lookup_spec_globref ref) !spec_table
+let lookup_spec ref = fst (lookup_spec_and_globref ref)
 
 
 (***
@@ -305,10 +335,18 @@ let find_spec ref =
 
 (* Interpret a spec term (which for now is just a name) into a spec
    and a local reference to that spec *)
-let rec interp_spec_term spec_term : spec * spec_locref =
-  match spec_term with
+let rec interp_spec_term sterm : spec * spec_locref =
+  match sterm with
   | SpecRef ref ->
-     (find_spec ref, spec_locref_of_ref ref)
+     (lookup_spec ref, spec_locref_of_ref ref)
+  | SpecXlate (sterm', nmap) ->
+     raise (spec_term_loc sterm) (Failure "interp_spec_term")
+  (* A spec substitution, where the morphism must be named *)
+  | SpecSubst (sterm', morph_name) ->
+     raise (spec_term_loc sterm) (Failure "interp_spec_term")
+  (* Adding definitions to ops in a spec *)
+  | SpecAddDefs (sterm', defs) ->
+     raise (spec_term_loc sterm) (Failure "interp_spec_term")
 
 (* Interpret a list of spec_entries into a spec object, installing a
    series of typeclasses and definitions into the current Coq
@@ -389,9 +427,9 @@ let rec interp_spec_def_entries spec_name op_ctx ax_fields entries =
   | GallinaEntry (gallina_cmd) :: _ ->
      raise (located_loc spec_name) (Failure "Unhandled form in spec")
  *)
-  | ImportEntry (spec_term, with_defs) :: entries' ->
-     let (im_spec, im_spec_ref) = interp_spec_term spec_term in
-     raise (spec_term_loc spec_term) (Failure "Imports not handled yet")
+  | ImportEntry sterm :: entries' ->
+     let (im_spec, im_spec_ref) = interp_spec_term sterm in
+     raise (spec_term_loc sterm) (Failure "Imports not handled yet")
 
 
 (* Top-level entrypoint to interpret a spec expression *)
@@ -421,9 +459,7 @@ VERNAC ARGUMENT EXTEND spec_def_entry
   | [ "Definition" ident(nm) ":" constr(tp) ":=" constr(body) ] -> [ OpDefEntry ((loc, nm), Some tp, body) ]
   | [ "Definition" ident(nm) ":=" constr(body) ] -> [ OpDefEntry ((loc, nm), None, body) ]
   | [ "Axiom" ident(nm) ":" constr(tp) ] -> [ AxEntry ((loc, nm), tp) ]
-  | [ "Import" global(spec_term) ] -> [ ImportEntry (SpecRef spec_term, []) ]
-  | [ "Import" global(spec_term) "with" "{" import_defs(defs) "}" ] ->
-     [ ImportEntry (SpecRef spec_term, defs) ]
+  | [ "Import" global(spec_term) ] -> [ ImportEntry (SpecRef spec_term) ]
 END
 
 type spec_entries = spec_def_entry list
