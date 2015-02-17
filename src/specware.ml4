@@ -214,28 +214,59 @@ let op_ctx_to_params op_ctx =
    mechanisms to do that.
 *)
 type spec = {
-  spec_name : Globnames.global_reference;
   spec_ops : op_ctx;
   spec_axioms : Id.t list
 }
 
 
 (***
- *** The global table of specs
+ *** Global and local references to specs, and the global spec table
  ***)
 
-(* FIXME: figure out how to get good error messages! *)
+(* FIXME: figure out how to get good error messages in the lookup
+   functions! *)
 
-(* Canonicalize a qualified name for a spec, which refers to it in a
-   local way via the current module, into a global name for the spec.
-   NOTE: this assumes the given spec has already been defined; raises
-   Not_found if this is not the case. *)
-let canonicalize_spec_qualid qualid =
-  Nametab.locate qualid
+(* A local reference to a spec is a name for the spec that is relative
+   to the current module, section, etc. Local spec references contain
+   local references (qualified identifiers) to the module where the
+   spec is defined, as well the names of the op and axiom
+   typeclasses inside that module. *)
+type spec_locref = { spec_module_qualid : qualid;
+                     op_class_name : Id.t;
+                     ax_class_name : Id.t }
 
-(* Canonicalize a located identifier into a global spec name *)
-let canonicalize_spec_lident spec_lident =
-  canonicalize_spec_qualid (qualid_of_ident (located_elem spec_lident))
+(* Build a spec_locref from a local reference to a spec's module,
+   which is the user-visible way to name specs *)
+let spec_locref_of_ref ref =
+  let mod_qualid = located_elem (qualid_of_reference ref) in
+  let (_,mod_name) = repr_qualid mod_qualid in
+  { spec_module_qualid = mod_qualid;
+    op_class_name = add_suffix mod_name "ops";
+    ax_class_name = mod_name }
+
+(* Return a qualid for the op class of a spec given a spec_locref *)
+let op_class_qualid spec_locref =
+  let (mod_path,mod_name) = repr_qualid spec_locref.spec_module_qualid in
+  make_qualid (DirPath.make (DirPath.repr mod_path @ [mod_name]))
+              spec_locref.op_class_name
+
+(* Return a qualid for the axiom class of a spec given a spec_locref *)
+let ax_class_qualid spec_locref =
+  let (mod_path,mod_name) = repr_qualid spec_locref.spec_module_qualid in
+  make_qualid (DirPath.make (DirPath.repr mod_path @ [mod_name]))
+              spec_locref.ax_class_name
+
+(* A global reference to a spec is a global reference to the axiom
+   typeclass of the spec, which is a Coq inductive object *)
+type spec_globref = MutInd.t
+
+(* Lookup the global reference for a spec given a local reference to
+   its axiom class. *)
+(* FIXME: make better error messages! *)
+let lookup_spec_globref ref =
+  match Nametab.locate (located_elem (qualid_of_reference ref)) with
+  | Globnames.IndRef (ind, i) -> ind
+  | _ -> raise (loc_of_reference ref) (Failure "Does not refer to a spec")
 
 (* FIXME: figure out how to print constrs to strings *)
 (* Turn a global spec name into a string, for printing *)
@@ -244,47 +275,40 @@ let spec_globref_to_string spec_ref =
   (printable_constr_of_global spec_ref)
  *)
 
-(* Turn the global name for a spec into the inductive object that
-   defines the spec *)
-let spec_globref_to_ind spec_ref =
-  match spec_ref with
-  | Globnames.IndRef (ind, i) -> ind
-  | _ -> raise dummy_loc
-               (Failure "Does not refer to a spec")
-
-(* Turn the global name for a spec into a local qualid *)
+(* Turn the global reference to a spec into a local qualid *)
 (* FIXME: find a better way than going through strings... *)
-let spec_globref_to_qualid spec_ref =
-  qualid_of_string (MutInd.to_string (spec_globref_to_ind spec_ref))
+let spec_globref_to_qualid spec_globref =
+  qualid_of_string (MutInd.to_string spec_globref)
 
-(* The global table of registered specs *)
+(* The global table of registered specs, indexed by spec global
+refs *)
 let spec_table = ref (Mindmap.empty)
 
 (* Register a spec in the spec_table *)
-let register_global_spec spec =
-  let spec_ind = spec_globref_to_ind spec.spec_name in
+let register_global_spec spec_lident spec =
+  let spec_globref = lookup_spec_globref (Ident spec_lident) in
   (*
   Format.eprintf "\nregister_global_spec: ind (name = %s, id = %i)\n"
                  (MutInd.to_string ind) i
    *)
-  spec_table := Mindmap.add spec_ind spec !spec_table
+  spec_table := Mindmap.add spec_globref spec !spec_table
 
-(* Find a spec from a qualified identifier *)
-let find_spec qualid =
-  let spec_ind = spec_globref_to_ind
-                   (canonicalize_spec_qualid (located_elem qualid)) in
-  Mindmap.find spec_ind !spec_table
+(* Find a spec from a local reference to its module, which is the
+   user-visible way to name specs *)
+let find_spec ref =
+  Mindmap.find (lookup_spec_globref ref) !spec_table
 
 
 (***
  *** Interpreting specs into type-classes
  ***)
 
-(* Interpret a spec term (which for now is just a name) into a spec *)
-let rec interp_spec_term spec_term =
+(* Interpret a spec term (which for now is just a name) into a spec
+   and a local reference to that spec *)
+let rec interp_spec_term spec_term : spec * spec_locref =
   match spec_term with
   | SpecRef ref ->
-     find_spec (qualid_of_reference ref)
+     (find_spec ref, spec_locref_of_ref ref)
 
 (* Interpret a list of spec_entries into a spec object, installing a
    series of typeclasses and definitions into the current Coq
@@ -299,8 +323,7 @@ let rec interp_spec_def_entries spec_name op_ctx ax_fields entries =
         object *)
      add_typeclass spec_name false
                    (op_ctx_to_params op_ctx) (List.rev ax_fields) ;
-     { spec_name = canonicalize_spec_lident spec_name;
-       spec_ops = op_ctx;
+     { spec_ops = op_ctx;
        spec_axioms = List.map (fun (lid,_,_) -> located_elem lid) ax_fields
      }
   | OpEntry (op_name, op_type) :: entries' ->
@@ -367,7 +390,7 @@ let rec interp_spec_def_entries spec_name op_ctx ax_fields entries =
      raise (located_loc spec_name) (Failure "Unhandled form in spec")
  *)
   | ImportEntry (spec_term, with_defs) :: entries' ->
-     let im_spec = interp_spec_term spec_term in
+     let (im_spec, im_spec_ref) = interp_spec_term spec_term in
      raise (spec_term_loc spec_term) (Failure "Imports not handled yet")
 
 
@@ -376,7 +399,7 @@ let interp_spec_def spec_name entries =
   within_module spec_name
                 (fun () ->
                  let spec = interp_spec_def_entries spec_name [] [] entries in
-                 register_global_spec spec)
+                 register_global_spec spec_name spec)
 ;;
 
 
