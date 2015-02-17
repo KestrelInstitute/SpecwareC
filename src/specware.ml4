@@ -92,8 +92,13 @@ let add_typeclass class_id is_op_class params fields =
                         Some (if is_op_class then type_expr else prop_expr),
                         Class is_op_class,
                         if is_op_class then
-                          let (id, tp, _) = List.hd fields in
-                          Constructors [false, (id, Constrexpr_ops.mkCProdN (located_loc id) params tp)]
+                          match fields with
+                          | [] -> Constructors []
+                          | [(id, tp, _)] ->
+                             Constructors [false, (id, Constrexpr_ops.mkCProdN
+                                                         (located_loc id)
+                                                         params tp)]
+                          | _ -> raise (located_loc class_id) (Failure "add_typeclass")
                         else
                           RecordDecl (None, List.map mk_record_field fields)),
                        []]))
@@ -102,8 +107,9 @@ let add_typeclass class_id is_op_class params fields =
 let within_module mod_name f =
   let loc = located_loc mod_name in
   interp (loc, VernacDefineModule (None, mod_name, [], Check [], []));
-  f ();
-  interp (loc, VernacEndSegment mod_name)
+  let ret = f () in
+  interp (loc, VernacEndSegment mod_name);
+  ret
 
 
 (***
@@ -113,9 +119,33 @@ let within_module mod_name f =
 (* An additional definition in a spec import, of the form "name := def" *)
 type import_def = Id.t * Constrexpr.constr_expr
 
-(* The syntactic representation (parsed but not yet type-checked) of a
-   single spec entry, i.e., a single element of a spec *)
-type spec_entry =
+(* A name mapping specifies a mapping on identifiers *)
+type name_mapping_elem =
+  (* Map a single name to another *)
+  | NameXSingle of Id.t * Id.t
+  (* Map all names with a given prefix to instead use a different prefix *)
+  | NameXPrefix of string * string
+
+type name_mapping = name_mapping_elem list
+
+(* Spec terms are syntactic forms for building specs from existing specs *)
+type spec_term =
+  (* A reference by name to an existing spec *)
+  | SpecRef of reference
+  (* A translation of the names of a spec *)
+  | SpecXlate of spec_term * name_mapping
+  (* A spec substitution, where the morphism must be named *)
+  | SpecSubst of spec_term * qualid
+
+(* Get the source location of a spec_term *)
+let rec spec_term_loc st =
+  match st with
+  | SpecRef r -> loc_of_reference r
+  | SpecXlate (st', _) -> spec_term_loc st'
+  | SpecSubst (st', _) -> spec_term_loc st'
+
+(* A spec def entry is an op, axiom, or import in a spec definition *)
+type spec_def_entry =
   (* Declaration of an op: contains its name and type *)
   | OpEntry of lident * Constrexpr.constr_expr
   (* Definition of an op: contains its name, type, and value *)
@@ -124,17 +154,17 @@ type spec_entry =
   | AxEntry of lident * Constrexpr.constr_expr
   (* Import of another spec: contains the spec name and a list of
     "with clauses" that define some declared ops of that spec *)
-  | ImportEntry of Loc.t * reference * import_def list
+  | ImportEntry of spec_term * import_def list
 
 (* FIXME HERE: need to figure out how to parse top-level Gallina
-   commands in order to use this alternate version of spec_entry *)
+   commands in order to use this alternate version of spec_def_entry *)
 
 (* The syntactic representation (parsed but not yet type-checked) of a
    single spec entry, i.e., a single element of a spec. This is either
    a normal Gallina top-level command (though only certain ones are
    allowed), or is a spec import form *)
 (*
-type spec_entry =
+type spec_def_entry =
   | GallinaEntry of vernac_expr
   (* Import of another spec: contains the spec name and a list of
     "with clauses" that define some declared ops of that spec *)
@@ -184,40 +214,84 @@ let op_ctx_to_params op_ctx =
    mechanisms to do that.
 *)
 type spec = {
-  spec_name : Globnames.global_reference option;
+  spec_name : Globnames.global_reference;
   spec_ops : op_ctx;
   spec_axioms : Id.t list
 }
 
-(* FIXME HERE: this is failing; RefMan-tus says to use
-Machops.global_reference, which does not exist...? *)
-let lookup_spec_global ref =
-  Smartlocate.global_of_extended_global (Nametab.extended_global_of_path ref)
 
-let lookup_spec_global_from_lid lid =
-  lookup_spec_global (make_path DirPath.empty (located_elem lid))
+(***
+ *** The global table of specs
+ ***)
+
+(* FIXME: figure out how to get good error messages! *)
+
+(* Canonicalize a qualified name for a spec, which refers to it in a
+   local way via the current module, into a global name for the spec.
+   NOTE: this assumes the given spec has already been defined; raises
+   Not_found if this is not the case. *)
+let canonicalize_spec_qualid qualid =
+  Nametab.locate qualid
+
+(* Canonicalize a located identifier into a global spec name *)
+let canonicalize_spec_lident spec_lident =
+  canonicalize_spec_qualid (qualid_of_ident (located_elem spec_lident))
+
+(* FIXME: figure out how to print constrs to strings *)
+(* Turn a global spec name into a string, for printing *)
+(*
+let spec_globref_to_string spec_ref =
+  (printable_constr_of_global spec_ref)
+ *)
+
+(* Turn the global name for a spec into the inductive object that
+   defines the spec *)
+let spec_globref_to_ind spec_ref =
+  match spec_ref with
+  | Globnames.IndRef (ind, i) -> ind
+  | _ -> raise dummy_loc
+               (Failure "Does not refer to a spec")
+
+(* Turn the global name for a spec into a local qualid *)
+(* FIXME: find a better way than going through strings... *)
+let spec_globref_to_qualid spec_ref =
+  qualid_of_string (MutInd.to_string (spec_globref_to_ind spec_ref))
 
 (* The global table of registered specs *)
-(* let spec_table  *)
+let spec_table = ref (Mindmap.empty)
 
+(* Register a spec in the spec_table *)
 let register_global_spec spec =
-  match spec.spec_name with
-  | Some (Globnames.ConstRef constant) ->
-     Format.eprintf "\nregister_global_spec: name = %s\n" (Constant.to_string constant)
-  | _ ->
-     raise dummy_loc (Failure "register_global_spec")
+  let spec_ind = spec_globref_to_ind spec.spec_name in
+  (*
+  Format.eprintf "\nregister_global_spec: ind (name = %s, id = %i)\n"
+                 (MutInd.to_string ind) i
+   *)
+  spec_table := Mindmap.add spec_ind spec !spec_table
+
+(* Find a spec from a qualified identifier *)
+let find_spec qualid =
+  let spec_ind = spec_globref_to_ind
+                   (canonicalize_spec_qualid (located_elem qualid)) in
+  Mindmap.find spec_ind !spec_table
 
 
 (***
  *** Interpreting specs into type-classes
  ***)
 
+(* Interpret a spec term (which for now is just a name) into a spec *)
+let rec interp_spec_term spec_term =
+  match spec_term with
+  | SpecRef ref ->
+     find_spec (qualid_of_reference ref)
+
 (* Interpret a list of spec_entries into a spec object, installing a
    series of typeclasses and definitions into the current Coq
    image. Also takes in an op_ctx of the ops that have been added so
    far and the current list of fields, in reverse order, to go into
    the axiom typeclass *)
-let rec interp_spec_entries spec_name op_ctx ax_fields entries =
+let rec interp_spec_def_entries spec_name op_ctx ax_fields entries =
   match entries with
   | [] ->
      (* At the end of all entries, make the final, propositional
@@ -225,7 +299,7 @@ let rec interp_spec_entries spec_name op_ctx ax_fields entries =
         object *)
      add_typeclass spec_name false
                    (op_ctx_to_params op_ctx) (List.rev ax_fields) ;
-     { spec_name = None;
+     { spec_name = canonicalize_spec_lident spec_name;
        spec_ops = op_ctx;
        spec_axioms = List.map (fun (lid,_,_) -> located_elem lid) ax_fields
      }
@@ -241,7 +315,7 @@ let rec interp_spec_entries spec_name op_ctx ax_fields entries =
      add_typeclass (add_suffix_l op_name "class") true
                    (op_ctx_to_params op_ctx)
                    [(op_name, op_type, false)] ;
-     interp_spec_entries spec_name (op_ctx_cons_decl op_name op_ctx)
+     interp_spec_def_entries spec_name (op_ctx_cons_decl op_name op_ctx)
                          ax_fields entries'
   | OpDefEntry (op_name, op_type_opt, op_body) :: entries' ->
 (*
@@ -271,7 +345,7 @@ let rec interp_spec_entries spec_name op_ctx ax_fields entries =
      add_definition op_name (op_ctx_to_params op_ctx) op_type_opt op_body ;
      add_typeclass (add_suffix_l op_name "class") true params
                    [(op_def_id, op_type, false)] ;
-     interp_spec_entries spec_name (op_ctx_cons_defn op_name op_ctx)
+     interp_spec_def_entries spec_name (op_ctx_cons_defn op_name op_ctx)
                          (((add_suffix_l op_name "eq"),
                            (mk_ident_equality op_def_id op_name),
                            false)
@@ -285,25 +359,23 @@ let rec interp_spec_entries spec_name op_ctx ax_fields entries =
  *)
      (* For axioms, just make a record field for the final,
         propositional type-class and pass it forward *)
-     interp_spec_entries spec_name op_ctx
+     interp_spec_def_entries spec_name op_ctx
                          ((ax_name, ax_type, false) :: ax_fields)
                          entries'
 (*
   | GallinaEntry (gallina_cmd) :: _ ->
      raise (located_loc spec_name) (Failure "Unhandled form in spec")
  *)
-  | ImportEntry (loc, import_spec, with_defs) :: entries' ->
-     raise loc (Failure "Imports not handled yet")
+  | ImportEntry (spec_term, with_defs) :: entries' ->
+     let im_spec = interp_spec_term spec_term in
+     raise (spec_term_loc spec_term) (Failure "Imports not handled yet")
 
 
 (* Top-level entrypoint to interpret a spec expression *)
-let interp_spec spec_name entries =
+let interp_spec_def spec_name entries =
   within_module spec_name
                 (fun () ->
-                 let spec = interp_spec_entries spec_name [] [] entries in
-                 let spec = { spec with spec_name =
-                                          (* Coqlib.find_reference "Spec name" [] (Id.to_string (located_elem spec_name)) *)
-                                          Some (lookup_spec_global_from_lid spec_name)} in
+                 let spec = interp_spec_def_entries spec_name [] [] entries in
                  register_global_spec spec)
 ;;
 
@@ -321,31 +393,31 @@ VERNAC ARGUMENT EXTEND import_defs
 END
 
 (* New syntactic class to parse individual spec entries *)
-VERNAC ARGUMENT EXTEND spec_entry
+VERNAC ARGUMENT EXTEND spec_def_entry
   | [ "Variable" ident(nm) ":" constr(tp) ] -> [ OpEntry ((loc, nm), tp) ]
   | [ "Definition" ident(nm) ":" constr(tp) ":=" constr(body) ] -> [ OpDefEntry ((loc, nm), Some tp, body) ]
   | [ "Definition" ident(nm) ":=" constr(body) ] -> [ OpDefEntry ((loc, nm), None, body) ]
   | [ "Axiom" ident(nm) ":" constr(tp) ] -> [ AxEntry ((loc, nm), tp) ]
-  | [ "Import" global(spec) ] -> [ ImportEntry (loc, spec, []) ]
-  | [ "Import" global(spec) "with" "{" import_defs(defs) "}" ] ->
-     [ ImportEntry (loc, spec, defs) ]
+  | [ "Import" global(spec_term) ] -> [ ImportEntry (SpecRef spec_term, []) ]
+  | [ "Import" global(spec_term) "with" "{" import_defs(defs) "}" ] ->
+     [ ImportEntry (SpecRef spec_term, defs) ]
 END
 
-type spec_entries = spec_entry list
+type spec_entries = spec_def_entry list
 
 (* New syntactic class to parse lists of one or more spec entries,
    separated by semicolons *)
 VERNAC ARGUMENT EXTEND spec_entries
-  | [ spec_entry(entry) ";" spec_entries(rest) ] -> [ entry::rest ]
-  | [ spec_entry(entry) ] -> [ [entry] ]
+  | [ spec_def_entry(entry) ";" spec_entries(rest) ] -> [ entry::rest ]
+  | [ spec_def_entry(entry) ] -> [ [entry] ]
 END
 
 (* Top-level syntax for specs *)
 VERNAC COMMAND EXTEND Spec
   | [ "Spec" ident(spec_name) "{" spec_entries(entries) "}" ]
     => [ (Vernacexpr.VtSideff [spec_name], Vernacexpr.VtLater) ]
-    -> [ interp_spec (dummy_loc, spec_name) entries ]
+    -> [ interp_spec_def (dummy_loc, spec_name) entries ]
   | [ "Spec" ident(spec_name) "{" "}" ]
     => [ (Vernacexpr.VtSideff [spec_name], Vernacexpr.VtLater) ]
-    -> [ interp_spec (dummy_loc, spec_name) [] ]
+    -> [ interp_spec_def (dummy_loc, spec_name) [] ]
 END
