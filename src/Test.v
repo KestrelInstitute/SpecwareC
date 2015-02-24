@@ -47,6 +47,11 @@ Check S3.foo.
 Print S3.
 Print S3.y.
 
+Spec S4 {
+       Variable x : nat ;
+       Import S3
+     }.
+
 (*
 Definition S3 `{S3.S3} := S3.S3.
 Print S3.

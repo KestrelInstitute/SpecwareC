@@ -268,6 +268,17 @@ type op_ctx_elem =
   | OpCtx_Import of spec_locref * Id.t list * op_ctx
  and op_ctx = op_ctx_elem list
 
+(* A spec is represented internally as a global name, an op context
+   (giving the names of the ops it declares and/or defines), and a
+   list of axiom names. Note that we do not store the types and/or
+   values of ops and axioms, as we rely on Coq's other definition
+   mechanisms to do that.
+*)
+type spec = {
+  spec_ops : op_ctx;
+  spec_axioms : Id.t list
+}
+
 (* FIXME HERE: do imports need global refs? If so, all specs need to
    have a global ref! *)
 
@@ -296,6 +307,40 @@ let op_ctx_elem_param_class op_ctx_elem =
                    mk_var (dummy_loc, add_suffix id "param")))
                  shared_fields)
 
+(* Get the field names represented by an op_ctx *)
+let rec op_ctx_fields op_ctx =
+  match op_ctx with
+  | [] -> []
+  | OpCtx_Decl id :: op_ctx' ->
+     id :: op_ctx_fields op_ctx'
+  | OpCtx_Defn id :: op_ctx' ->
+     id :: op_ctx_fields op_ctx'
+  | OpCtx_Import (locref, shared_fields, im_op_ctx) :: op_ctx' ->
+     op_ctx_fields im_op_ctx @ (locref.ax_class_name :: op_ctx_fields op_ctx')
+
+(* Subtract some named fields from an op_ctx *)
+(* FIXME: write this using a filter_map function *)
+let rec op_ctx_subtract_fields op_ctx fields =
+  match op_ctx with
+  | [] -> []
+  | (OpCtx_Decl id as elem) :: op_ctx' ->
+     if List.exists ((=) id) fields then
+       op_ctx_subtract_fields op_ctx' fields
+     else
+       elem :: op_ctx_subtract_fields op_ctx' fields
+  | (OpCtx_Defn id as elem) :: op_ctx' ->
+     if List.exists ((=) id) fields then
+       op_ctx_subtract_fields op_ctx' fields
+     else
+       elem :: op_ctx_subtract_fields op_ctx' fields
+  | OpCtx_Import (locref, shared_fields, im_op_ctx) :: op_ctx' ->
+     if List.exists ((=) locref.ax_class_name) fields then
+       op_ctx_subtract_fields op_ctx' fields
+     else
+       OpCtx_Import (locref, shared_fields,
+                     op_ctx_subtract_fields im_op_ctx fields)
+       :: op_ctx_subtract_fields op_ctx' fields
+
 (* Cons an op declaration to an op_ctx *)
 let op_ctx_cons_decl op_name op_ctx =
   OpCtx_Decl (located_elem op_name) :: op_ctx
@@ -304,10 +349,15 @@ let op_ctx_cons_decl op_name op_ctx =
 let op_ctx_cons_defn op_name op_ctx =
   OpCtx_Defn (located_elem op_name) :: op_ctx
 
-(* Subtract some named fields from an op_ctx *)
-(* FIXME: implement this (recursively remove ops from imports...) *)
-let op_ctx_subtract_fields op_ctx fields =
-  raise dummy_loc (Failure "op_ctx_subtract_fields")
+(* Cons an import to an op_ctx *)
+let op_ctx_cons_import spec_locref spec op_ctx =
+  (* Get the list of fields in the current op_ctx *)
+  let fields = op_ctx_fields op_ctx in
+  (* Get the sub-list of fields in spec that are in the current context *)
+  let shared_fields = List.filter (fun id -> List.mem id fields)
+                                  (op_ctx_fields spec.spec_ops) in
+  OpCtx_Import (spec_locref, shared_fields,
+                op_ctx_subtract_fields spec.spec_ops shared_fields) :: op_ctx
 
 (* Convert an op_ctx_elem to a class parameter of the form
    {op__param:op__class} *)
@@ -320,28 +370,6 @@ let op_ctx_elem_to_param elem =
    OpCtx_Decl in the context (remember: op_ctx is reversed) *)
 let op_ctx_to_params op_ctx =
   List.rev_map op_ctx_elem_to_param op_ctx
-
-(* A spec is represented internally as a global name, an op context
-   (giving the names of the ops it declares and/or defines), and a
-   list of axiom names. Note that we do not store the types and/or
-   values of ops and axioms, as we rely on Coq's other definition
-   mechanisms to do that.
-*)
-type spec = {
-  spec_ops : op_ctx;
-  spec_axioms : Id.t list
-}
-
-
-(* Cons an import to an op_ctx (needs type spec; FIXME: finish this,
-   and put it somewhere else?) *)
-let op_ctx_cons_import spec_locref spec op_ctx =
-  let shared_fields =
-    raise dummy_loc (Failure "op_ctx_cons_import")
-  in
-  OpCtx_Import (spec_locref, shared_fields,
-                op_ctx_subtract_fields spec.spec_ops shared_fields) :: op_ctx
-
 
 
 (***
