@@ -46,6 +46,14 @@ let add_suffix_l lid suffix =
 (* Build an expression for a variable from a located identifier *)
 let mk_var id = CRef (Libnames.Ident id, None)
 
+(* Build an expression for a variable applied to named implicit args,
+   where the args are given as (name,value) pairs *)
+let mk_var_app_named_args id args =
+  CApp (dummy_loc,
+        (None, CRef (Libnames.Ident id, None)),
+        List.map (fun (id,arg) ->
+                  (arg, Some (dummy_loc, ExplByName id))) args)
+
 (* Build a qualified id *)
 let mk_qual_id dir id =
   make_qualid (DirPath.make (List.rev_map Id.of_string dir)) id
@@ -249,24 +257,44 @@ type spec_def_entry =
 type op_ctx_elem =
   | OpCtx_Decl of Id.t
   | OpCtx_Defn of Id.t
-  (* Imports are specified by the local name of the imported spec
-     (usually the last identifier in the path to the module of the
-     spec), a global reference to the spec, the names of any ops in
-     the imported spec that are shared with the current spec (i.e.,
-     the ops from the spec that are already in the current op_ctx),
-     and the imported spec's op_ctx minus any of the shared ops *)
-  | OpCtx_Import of Id.t * spec_globref * Id.t list * op_ctx
+  (* Imports are specified by the local names of the op and axiom
+     type-classes of the imported spec (the axiom class name is
+     usually the last identifier in the path to the module of the
+     spec, and the op class name is usually the former suffixed with
+     "ops"), the names of any ops in the imported spec that are shared
+     with the current spec (i.e., the ops from the spec that are
+     already in the current op_ctx), and the imported spec's op_ctx
+     minus any of the shared ops *)
+  | OpCtx_Import of spec_locref * Id.t list * op_ctx
  and op_ctx = op_ctx_elem list
 
 (* FIXME HERE: do imports need global refs? If so, all specs need to
    have a global ref! *)
 
-(* Get the identifier from an op_ctx_elem *)
-let op_ctx_elem_id op_ctx_elem =
+(* Get the identifier for the parameter name of an op_ctx_elem *)
+let op_ctx_elem_param_name op_ctx_elem =
+  let id = match op_ctx_elem with
+    | OpCtx_Decl id -> id
+    | OpCtx_Defn id -> id
+    | OpCtx_Import (locref, _, _) -> locref.ax_class_name
+  in
+  add_suffix id "param"
+
+(* Build a term for the type-class of the identifier for the parameter
+   name of an op_ctx_elem *)
+let op_ctx_elem_param_class op_ctx_elem =
   match op_ctx_elem with
-  | OpCtx_Decl id -> id
-  | OpCtx_Defn id -> id
-  | OpCtx_Import (id, _, _, _) -> id
+  | OpCtx_Decl id ->
+     mk_var (Loc.dummy_loc, add_suffix id "class")
+  | OpCtx_Defn id ->
+     mk_var (Loc.dummy_loc, add_suffix id "class")
+  | OpCtx_Import (locref, shared_fields, _) ->
+     mk_var_app_named_args
+       (Loc.dummy_loc, locref.op_class_name)
+       (List.map (fun id ->
+                  (add_suffix id "param",
+                   mk_var (dummy_loc, add_suffix id "param")))
+                 shared_fields)
 
 (* Cons an op declaration to an op_ctx *)
 let op_ctx_cons_decl op_name op_ctx =
@@ -276,13 +304,17 @@ let op_ctx_cons_decl op_name op_ctx =
 let op_ctx_cons_defn op_name op_ctx =
   OpCtx_Defn (located_elem op_name) :: op_ctx
 
+(* Subtract some named fields from an op_ctx *)
+(* FIXME: implement this (recursively remove ops from imports...) *)
+let op_ctx_subtract_fields op_ctx fields =
+  raise dummy_loc (Failure "op_ctx_subtract_fields")
+
 (* Convert an op_ctx_elem to a class parameter of the form
    {op__param:op__class} *)
 let op_ctx_elem_to_param elem =
-  let id = op_ctx_elem_id elem in
-  LocalRawAssum ([(Loc.dummy_loc, Name (add_suffix id "param"))],
+  LocalRawAssum ([(Loc.dummy_loc, Name (op_ctx_elem_param_name elem))],
                  Default Implicit,
-                 mk_var (Loc.dummy_loc, add_suffix id "class"))
+                 op_ctx_elem_param_class elem)
 
 (* Convert an op_ctx to a list of class parameters, one for each
    OpCtx_Decl in the context (remember: op_ctx is reversed) *)
@@ -299,6 +331,17 @@ type spec = {
   spec_ops : op_ctx;
   spec_axioms : Id.t list
 }
+
+
+(* Cons an import to an op_ctx (needs type spec; FIXME: finish this,
+   and put it somewhere else?) *)
+let op_ctx_cons_import spec_locref spec op_ctx =
+  let shared_fields =
+    raise dummy_loc (Failure "op_ctx_cons_import")
+  in
+  OpCtx_Import (spec_locref, shared_fields,
+                op_ctx_subtract_fields spec.spec_ops shared_fields) :: op_ctx
+
 
 
 (***
@@ -335,6 +378,7 @@ let lookup_spec ref = fst (lookup_spec_and_globref ref)
 
 (* Interpret a spec term (which for now is just a name) into a spec
    and a local reference to that spec *)
+(* FIXME: finish implementing this... *)
 let rec interp_spec_term sterm : spec * spec_locref =
   match sterm with
   | SpecRef ref ->
@@ -421,15 +465,20 @@ let rec interp_spec_def_entries spec_name op_ctx ax_fields entries =
      (* For axioms, just make a record field for the final,
         propositional type-class and pass it forward *)
      interp_spec_def_entries spec_name op_ctx
-                         ((ax_name, ax_type, false) :: ax_fields)
-                         entries'
+                             ((ax_name, ax_type, false) :: ax_fields)
+                             entries'
 (*
   | GallinaEntry (gallina_cmd) :: _ ->
      raise (located_loc spec_name) (Failure "Unhandled form in spec")
  *)
   | ImportEntry sterm :: entries' ->
      let (im_spec, im_spec_ref) = interp_spec_term sterm in
-     raise (spec_term_loc sterm) (Failure "Imports not handled yet")
+     interp_spec_def_entries spec_name
+                             (op_ctx_cons_import im_spec_ref im_spec op_ctx)
+                             (((dummy_loc, im_spec_ref.ax_class_name),
+                               mk_var (dummy_loc, im_spec_ref.ax_class_name), true)
+                              :: ax_fields)
+                             entries'
 
 
 (* Top-level entrypoint to interpret a spec expression *)
