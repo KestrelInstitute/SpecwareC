@@ -86,6 +86,11 @@ let record_field_name fld =
   | (((_, AssumExpr (lid, _)), _), _) -> located_elem lid
   | _ -> raise dummy_loc (Failure "record_field_name")
 
+(* Make an implicit {name:tp} assumption, where name is an id and tp
+   is a construction (type constr) *)
+let mk_implicit_assum name tp =
+  LocalRawAssum ([(Loc.dummy_loc, Name name)], Default Implicit, tp)
+
 (* Add a definition to the current Coq image *)
 let add_definition id params type_opt body =
   interp
@@ -259,15 +264,16 @@ type spec_def_entry =
 type op_ctx_elem =
   | OpCtx_Decl of Id.t
   | OpCtx_Defn of Id.t
-  (* Imports are specified by the local names of the op and axiom
-     type-classes of the imported spec (the axiom class name is
-     usually the last identifier in the path to the module of the
-     spec, and the op class name is usually the former suffixed with
-     "ops"), the names of any ops in the imported spec that are shared
-     with the current spec (i.e., the ops from the spec that are
-     already in the current op_ctx), and the imported spec's op_ctx
-     minus any of the shared ops *)
-  | OpCtx_Import of spec_locref * Id.t list * op_ctx
+  (* Imports are specified by: an optional global name for the
+  imported spec (specs that are the result of spec substitutions,
+  translations, etc. do not have global names, and are thus called
+  anonymous specs); a local field name to refer to the axiom
+  type-class of the imported spec (the op type-class is formed by
+  appending "__ops"); the names of any ops in the imported spec that
+  are shared with the current spec (i.e., the ops from the spec that
+  are already in the current op_ctx); and the imported spec's op_ctx
+  minus any of the shared ops *)
+  | OpCtx_Import of (spec_globref) option * Id.t * Id.t list * op_ctx
  and op_ctx = op_ctx_elem list
 
 (* A spec is represented internally as a global name, an op context
@@ -285,6 +291,7 @@ type spec = {
    have a global ref! *)
 
 (* Get the identifier for the parameter name of an op_ctx_elem *)
+(*
 let op_ctx_elem_param_name op_ctx_elem =
   let id = match op_ctx_elem with
     | OpCtx_Decl id -> id
@@ -292,9 +299,11 @@ let op_ctx_elem_param_name op_ctx_elem =
     | OpCtx_Import (locref, _, _) -> locref.ax_class_name
   in
   add_suffix id "param"
+ *)
 
 (* Build a term for the type-class of the identifier for the parameter
    name of an op_ctx_elem *)
+(*
 let op_ctx_elem_param_class op_ctx_elem =
   match op_ctx_elem with
   | OpCtx_Decl id ->
@@ -308,6 +317,7 @@ let op_ctx_elem_param_class op_ctx_elem =
                   (add_suffix id "param",
                    mk_var (dummy_loc, add_suffix id "param")))
                  shared_fields)
+ *)
 
 (* Get the field names represented by an op_ctx *)
 let rec op_ctx_fields op_ctx =
@@ -361,17 +371,33 @@ let op_ctx_cons_import spec_locref spec op_ctx =
   OpCtx_Import (spec_locref, shared_fields,
                 op_ctx_subtract_fields spec.spec_ops shared_fields) :: op_ctx
 
-(* Convert an op_ctx_elem to a class parameter of the form
-   {op__param:op__class} *)
-let op_ctx_elem_to_param elem =
-  LocalRawAssum ([(Loc.dummy_loc, Name (op_ctx_elem_param_name elem))],
-                 Default Implicit,
-                 op_ctx_elem_param_class elem)
-
-(* Convert an op_ctx to a list of class parameters, one for each
-   OpCtx_Decl in the context (remember: op_ctx is reversed) *)
-let op_ctx_to_params op_ctx =
-  List.rev_map op_ctx_elem_to_param op_ctx
+(* Convert an op_ctx to a list of class parameters, one for each op in
+   the context (remember: op_ctx is reversed, so we fold left instead
+   of right) *)
+let rec op_ctx_to_params op_ctx =
+  List.fold_left
+    (fun params elem ->
+     match elem with
+     | OpCtx_Decl id ->
+        mk_implicit_assum
+          (add_suffix id "param")
+          (mk_var (Loc.dummy_loc, add_suffix id "class"))
+        :: params
+     | OpCtx_Defn id ->
+        mk_implicit_assum
+          (add_suffix id "param")
+          (mk_var (Loc.dummy_loc, add_suffix id "class"))
+        :: params
+     | OpCtx_Import (_, im_id, shared_fields, im_op_ctx) ->
+        op_ctx_to_params im_op_ctx
+        @ (mk_var_app_named_args
+             (Loc.dummy_loc, add_suffix im_id "ops")
+             (List.map (fun id ->
+                        (add_suffix id "param",
+                         mk_var (dummy_loc, add_suffix id "param")))
+                       shared_fields)
+           :: params))
+    [] op_ctx
 
 
 (***
