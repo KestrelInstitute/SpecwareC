@@ -17,15 +17,14 @@ open Decl_kinds
  *** Helper functions for interacting with Coq
  ***)
 
-(* Useful list function *)
+(* Useful list function: map f on a list but only keep the "Some"s *)
 let rec filter_map f l =
   match l with
   | [] -> []
   | x :: l' ->
-     if f x then
-       x :: filter_map f l'
-     else
-       filter_map f l'
+     (match f x with
+      | Some y -> y :: filter_map f l'
+      | None -> filter_map f l')
 
 (* Syntactic expressions for the sorts Type and Prop *)
 let type_expr = Constrexpr.CSort (Loc.dummy_loc, Misctypes.GType [])
@@ -45,6 +44,14 @@ let name_of_ident (id : Id.t) : Name.t = Name id
 let lname_of_lident (id : lident) : lname =
   (located_loc id, name_of_ident (located_elem id))
 
+(* Check if an identifier has a given suffix *)
+let has_suffix id suffix =
+  let str = Id.to_string id in
+  let str_len = String.length str in
+  let suffix_len = String.length suffix in
+  str_len > suffix_len &&
+    suffix = String.sub str (str_len - suffix_len) suffix_len
+
 (* Append a suffix to an Id, with "__" in between *)
 let add_suffix id suffix =
   Id.of_string (Id.to_string id ^ "__" ^ suffix)
@@ -55,15 +62,20 @@ let add_suffix_l lid suffix =
   (loc, add_suffix id suffix)
 
 (* Build an expression for a variable from a located identifier *)
-let mk_var id = CRef (Libnames.Ident id, None)
+let mk_var id = CRef (Ident id, None)
+
+(* Build an expression for a local reference applied to named implicit
+   args, where the args are given as (name,value) pairs *)
+let mk_ref_app_named_args r args =
+  CApp (dummy_loc,
+        (None, CRef (r, None)),
+        List.map (fun (id,arg) ->
+                  (arg, Some (dummy_loc, ExplByName id))) args)
 
 (* Build an expression for a variable applied to named implicit args,
    where the args are given as (name,value) pairs *)
-let mk_var_app_named_args id args =
-  CApp (dummy_loc,
-        (None, CRef (Libnames.Ident id, None)),
-        List.map (fun (id,arg) ->
-                  (arg, Some (dummy_loc, ExplByName id))) args)
+let mk_id_app_named_args id args =
+  mk_ref_app_named_args (Ident id) args
 
 (* Build a qualified id *)
 let mk_qualid dir id =
@@ -73,6 +85,23 @@ let mk_qualid dir id =
 let qualid_cons qualid id =
   let (mod_path,mod_name) = repr_qualid qualid in
   make_qualid (DirPath.make (DirPath.repr mod_path @ [mod_name])) id
+
+(* Get a string for a global reference *)
+let global_to_string gr =
+  match gr with
+  | VarRef v -> raise dummy_loc (Failure "global_to_string")
+  | ConstRef c -> Constant.to_string c
+  | IndRef i -> MutInd.to_string i
+  | ConstructRef _ -> raise dummy_loc (Failure "global_to_string")
+
+(* Turn a global reference into a local one *)
+(* FIXME: find a better way than using strings! *)
+let qualid_of_global gr =
+  qualid_of_string (global_to_string gr)
+
+(* Build an expression for a global applied to named implicit args *)
+let mk_global_app_named_args gr args =
+  mk_ref_app_named_args (Qualid (qualid_of_global gr)) args
 
 (* Build the expression id1 = id2 for identifiers id1 and id2 *)
 let mk_ident_equality id1 id2 =
@@ -200,126 +229,172 @@ let spec_globref_to_qualid spec_globref =
 
 
 (***
- *** Op Contexts
+ *** Field Substitutions
  ***)
 
-(* An op context specifies the ops that are currently in scope, and,
-   for each op, whether it is defined or just declared.
+(* A field substitution is a finite mapping on field names *)
+type field_subst = (Id.t * Id.t) list
 
-   NOTE: op contexts always have the most recently declared or defined
-   op first, i.e., the first op in a spec is the last op in an op
-   context; this is to make it easy to append ops as we go *)
-type op_ctx_elem =
-  | OpCtx_Decl of Id.t
-  | OpCtx_Defn of Id.t
+(* Equality on field substitutions *)
+(* FIXME: can the orders be different? *)
+let rec eq_subst s1 s2 =
+  match (s1, s2) with
+  | ([], []) -> true
+  | ((id1, id1') :: s1', (id2, id2') :: s2') ->
+     id1 == id2 && id1' == id2' && eq_subst s1' s2'
 
-type op_ctx = op_ctx_elem list
+(* Apply a field substitution to a field *)
+let rec subst_id subst id =
+  match subst with
+  | [] -> id
+  | (id_from, id_to) :: subst' ->
+     if id_from = id then id_to else subst_id subst' id
 
-(* Get the identifier for an op_ctx_elem *)
-let op_ctx_elem_id op_ctx_elem =
-  match op_ctx_elem with
-  | OpCtx_Decl id -> id
-  | OpCtx_Defn id -> id
-
-(* Return true iff an op_cxt_elem is a definition *)
-let op_ctx_elem_is_def op_ctx_elem =
-  match op_ctx_elem with
-  | OpCtx_Decl _ -> false
-  | OpCtx_Defn _ -> true
-
-(* Get the identifier for the variable bound to an op_ctx_elem in an
-   implicit argument list *)
-let op_ctx_elem_var_id op_ctx_elem =
-  add_suffix (op_ctx_elem_id op_ctx_elem) "param"
-
-(* Get the identifier for the type-class of an op_ctx_elem *)
-let op_ctx_elem_class_id op_ctx_elem =
-  add_suffix (op_ctx_elem_id op_ctx_elem) "class"
-
-(* Build a term for the type-class of the identifier for the parameter
-   name of an op_ctx_elem *)
-let op_ctx_elem_class op_ctx_elem =
-  mk_var (Loc.dummy_loc, op_ctx_elem_class_id op_ctx_elem)
-
-(* Get the field names represented by an op_ctx *)
-(*
-let rec op_ctx_fields op_ctx =
-  match op_ctx with
+(* Apply field substitution subst to all the fields in the range of
+   another field substitution subst2 *)
+let rec subst_field_subst subst subst2 =
+  match subst2 with
   | [] -> []
-  | OpCtx_Decl id :: op_ctx' ->
-     id :: op_ctx_fields op_ctx'
-  | OpCtx_Defn id :: op_ctx' ->
-     id :: op_ctx_fields op_ctx'
-  | OpCtx_Import (locref, shared_fields, im_op_ctx) :: op_ctx' ->
-     op_ctx_fields im_op_ctx @ (locref.ax_class_name :: op_ctx_fields op_ctx')
- *)
+  | (id_from, id_to) :: subst2' ->
+     (id_from, subst_id subst id_to)
+     :: subst_field_subst subst subst2'
 
-(* Subtract the fields of op_ctx2 from op_ctx *)
-(* FIXME: should check that fields being subtracted are compatible *)
-let rec op_ctx_sub op_ctx op_ctx2 =
-  filter_map
-    (fun elem ->
+(* Build the identifier used to quantify over a field as a local
+   variable *)
+let field_var_id f = add_suffix f "param"
+
+(* Get the identifier used locally for the type of a field *)
+let field_type_id f = add_suffix f "type"
+
+(* Get the identifier used locally for the type-class of a field *)
+let field_class_id f = add_suffix f "class"
+
+(* Turn a name substitution into a list of (name,value) pairs, where
+   value is a term expression; omit pairs where name = value *)
+let subst_to_args subst =
+  List.filter_map
+    (fun (id_from, id_to) ->
+     if id_from = id_to then None else
+       Some (field_var_id id_from, mk_var (dummy_loc, id_to)))
+    subst
+
+
+(***
+ *** Field Contexts
+ ***)
+
+(* A field context specifies a list of named fields, each of which has
+   a type and an optional definition. Types and definitions are given
+   as global references to existing definitions applied to some number
+   of named arguments, the latter being given as a name substitution
+   mapping the argument names to earlier fields in the context.
+
+   NOTE: field contexts are stored backwards, in that the "earlier"
+   fields are stored later in the list; i.e., fields can only refer to
+   fields later in a field context. This is to make it easy to add new
+   fields as we go *)
+type glob_defn = | Defn of global_reference * name_subst
+type fctx_elem = | FCtx_Elem of Id.t * glob_defn * glob_defn option
+type fctx = fctx_elem list
+
+(* Equality on global definitions *)
+let eq_glob_defn d1 d2 =
+  match (d1, d2) with
+  | (Defn (r1, s1), Defn (r2, s2)) ->
+     eq_gr r1 r2 && eq_subst s1 s2
+
+(* Turn a global definition into a term *)
+let glob_defn_term d =
+  match d with
+  | Defn (r, subst) -> mk_global_app_named_args r (subst_to_args subst)
+
+(* Accessors for fctx_elems *)
+let fctx_elem_id fctx_elem =
+  match fctx_elem with FCtx_Elem (id, _, _) -> id
+let fctx_elem_type_defn fctx_elem =
+  match fctx_elem with FCtx_Elem (_, tp, _) -> tp
+let fctx_elem_defn fctx_elem =
+  match fctx_elem with FCtx_Elem (_, _, d) -> d
+
+(* Return true iff an fctx_elem is defined *)
+let fctx_elem_is_def elem =
+  match fctx_elem_defn elem with
+  | Some _ -> true
+  | None -> false
+
+(* Build a term for the global type of a field, i.e., a term which is
+   valid not inside the field context *)
+let fctx_elem_global_type elem = glob_defn_term (fctx_elem_type_defn elem)
+
+(* Apply a name substitution to a definition *)
+let subst_glob_defn subst d =
+  match d with
+  | Defn (r, args) -> Defn (r, subst_name_subst subst args)
+
+(* Apply a name substitution to an optional definition *)
+let subst_glob_defn_opt subst d_opt =
+  match d_opt with
+  | Some d -> subst_glob_defn subst d
+  | None -> None
+
+(* Apply a name substitution to an fctx_elem *)
+let subst_fctx_elem subst elem =
+  match elem with
+  | FCtx_Elem (id, tp, d) ->
+     FCtx_elem (subst_id subst id, subst_glob_defn subst tp,
+                subst_glob_defn_opt subst d)
+
+(* Apply a name substitution to an fctx *)
+let subst_fctx subst fctx =
+  List.map subst_fctx_elem fctx
+
+(* Build the identity substitution for the fields in an fctx
+   (remembering that field contexts are stored backwards) *)
+let subst_from_fctx fctx =
+  List.rev_map (fun elem -> (fctx_elem_id elem, fctx_elem_id elem)) fctx
+
+(* Subtract the fields of fctx2 from fctx1, where the types of any
+   fields that are shared must be equal *)
+(* FIXME: figure out the condition on definitions *)
+let rec fctx_subtract err_fun fctx1 fctx2 =
+  List.filter
+    (fun elem1 ->
      not (List.exists
-            (fun elem2 -> op_ctx_elem_id elem = op_ctx_elem_id elem2)
-            op_ctx2))
-    op_ctx
+            (fun elem2 ->
+             fctx_elem_id elem1 = fctx_elem_id elem2 &&
+               (if not (eq_glob_defn (fctx_elem_type_defn elem1)
+                                     (fctx_elem_type_defn elem2)) then
+                  err_fun ()
+                else true))
+            fctx2))
+    fctx1
 
-(* Cons an op declaration to an op_ctx *)
-let op_ctx_cons_decl op_name op_ctx =
-  OpCtx_Decl (located_elem op_name) :: op_ctx
+(* Cons a field to a field context, where we assume the type and
+   definition for the field have already been defined in the local
+   module; class_p and defn_p specify respectivly whether the field
+   has a type-class (versus a regular type) and a definition *)
+let fctx_cons_local id class_p defn_p fctx =
+  (* Get the global name for the type *)
+  let type_global =
+    Nametab.locate (qualid_of_id (if class_p then field_class_id id
+                                  else field_type_id id))
+  in
+  (* Build the arguments for the type and optional definition *)
+  let args = subst_from_fctx fctx in
+  FCtx_Elem (id, Defn (type_global, args),
+             if defn_p then
+               Some (Nametab.locate (qualid_of_id id))
+             else None)
 
-(* Cons an op definition to an op_ctx *)
-let op_ctx_cons_defn op_name op_ctx =
-  OpCtx_Defn (located_elem op_name) :: op_ctx
+(* Convert a single fctx_elem to an implicit class assumption *)
+let fctx_to_param fctx_elem =
+  mk_implicit_assum (fctx_elem_var_id fctx_elem)
+                    (mk_var (dummy_loc, fctx_elem_class_id fctx_elem))
 
-(* Cons an import to an op_ctx *)
-(*
-let op_ctx_cons_import spec_locref spec op_ctx =
-  (* Get the list of fields in the current op_ctx *)
-  let fields = op_ctx_fields op_ctx in
-  (* Get the sub-list of fields in spec that are in the current context *)
-  let shared_fields = List.filter (fun id -> List.mem id fields)
-                                  (op_ctx_fields spec.spec_ops) in
-  OpCtx_Import (spec_locref, shared_fields,
-                op_ctx_subtract_fields spec.spec_ops shared_fields) :: op_ctx
- *)
-
-(* Convert a single op_ctx_elem to an implicit class assumption *)
-let op_ctx_to_param op_ctx_elem =
-  mk_implicit_assum (op_ctx_elem_var_id op_ctx_elem)
-                    (op_ctx_elem_class op_ctx_elem)
-
-(* Convert an op_ctx to a list of class parameters, one for each op in
-   the context (remember: op_ctx is reversed, so we fold left instead
-   of right) *)
-let op_ctx_to_params op_ctx =
-  List.rev_map op_ctx_to_param op_ctx
-(*
-let rec op_ctx_to_params op_ctx =
-  List.fold_left
-    (fun params elem ->
-     match elem with
-     | OpCtx_Decl id ->
-        mk_implicit_assum
-          (add_suffix id "param")
-          (mk_var (Loc.dummy_loc, add_suffix id "class"))
-        :: params
-     | OpCtx_Defn id ->
-        mk_implicit_assum
-          (add_suffix id "param")
-          (mk_var (Loc.dummy_loc, add_suffix id "class"))
-        :: params
-     | OpCtx_Import (_, im_id, shared_fields, im_op_ctx) ->
-        op_ctx_to_params im_op_ctx
-        @ (mk_var_app_named_args
-             (Loc.dummy_loc, add_suffix im_id "ops")
-             (List.map (fun id ->
-                        (add_suffix id "param",
-                         mk_var (dummy_loc, add_suffix id "param")))
-                       shared_fields)
-           :: params))
-    [] op_ctx
- *)
+(* Convert an fctx to a list of class parameters, one for each field
+   in the context (remember: fctx is reversed) *)
+let fctx_params fctx =
+  List.rev_map fctx_to_param fctx
 
 
 (***
@@ -328,27 +403,18 @@ let rec op_ctx_to_params op_ctx =
 
 (* A spec is represented internally as having an optional global name
    (specs without names are called "anonymous", and are only for
-   temporary calculations), an op context (giving the names of the ops
-   it declares and/or defines), and a list of axiom names. Note that
-   we do not store the types or values of ops and axioms, relying on
-   Coq's other definition mechanisms for that. *)
+   temporary calculations) and field contexts for the ops and for the
+   axioms plus local theorems. *)
 type spec = {
   spec_name : spec_globref option;
-  spec_op_ctx : op_ctx;
-  spec_axioms : Id.t list
+  spec_op_ctx : fctx;
+  spec_axioms : fctx
 }
 
-(* Convert an axiom id to the id of the defined variable holding its type *)
-let axiom_type_id ax_id =
-  add_suffix ax_id "prop"
-
-(* Subtract a list of axioms from another list of axioms *)
-(* FIXME: check that any overlapping axioms have compatible types *)
-let axioms_sub axioms1 axioms2 =
-  filter_map
-    (fun id1 ->
-     not (List.exists (fun id2 -> id1 = id2) axioms2))
-    axioms1
+(* Apply a name substitution to a spec *)
+let subst_spec subst spec =
+  { spec_op_ctx = subst_fctx subst spec.spec_op_ctx;
+    spec_axioms = subst_fctx subst spec.axioms }
 
 (* Create an anonymous empty spec *)
 let empty_spec = { spec_name = None; spec_op_ctx = []; spec_axioms = [] }
@@ -357,60 +423,69 @@ let empty_spec = { spec_name = None; spec_op_ctx = []; spec_axioms = [] }
 
 (* Add a declared op to a spec, creating a type-class for it *)
 let add_declared_op spec op_name op_type =
-  let elem = OpCtx_Decl (located_elem op_name) in
-  add_typeclass
-    (located_loc op_name, op_ctx_elem_class_id elem)
-    true (op_ctx_to_params spec.spec_op_ctx)
-    [(op_name, op_type, false)] ;
-  { spec with spec_op_ctx = elem :: spec.spec_op_ctx }
+  let op_id = located_elem op_name in
+  let loc = localted_loc op_name in
+  add_typeclass (loc, field_class_id op_id) true
+                (fctx_params spec.spec_op_ctx) [(op_name, op_type, false)];
+  { spec with
+    spec_op_ctx = fctx_cons_local op_name true false spec.spec_op_ctx }
 
 (* Add an axiom to a spec, creating a definition for its type *)
 let add_axiom spec ax_name ax_type =
   let ax_id = located_elem ax_name in
-  add_definition (located_loc ax_name, axiom_type_id ax_id)
-                 (op_ctx_params spec.spec_op_ctx)
-                 prop_expr ax_type ;
-  { spec with spec_axioms = ax_id :: spec.spec_axioms }
+  add_definition (located_loc ax_name, field_type_id ax_id)
+                 (fctx_params spec.spec_op_ctx) prop_expr ax_type;
+  { spec with
+    spec_axioms = fctx_cons ax_id false false spec.spec_axioms }
 
 (* Add a defined op to a spec, creating a type-class and def for it *)
 let add_defined_op spec op_name op_type_opt op_body =
   let op_id = located_elem op_name in
   let loc = located_loc op_name in
-  let elem = OpCtx_Defn op_id in
   let op_type =
     match op_type_opt with
     | Some op_type -> op_type
     | None -> CHole (loc, None, IntroIdentifier op_id, None)
   in
-  let params = op_ctx_to_params spec.spec_op_ctx in
+  let params = fctx_params spec.spec_op_ctx in
   let op_var_id = add_suffix_l op_name "var" in
 
   (* Add a definition op_name = op_body *)
-  add_definition op_name params op_type_opt op_body ;
+  add_definition op_name params op_type_opt op_body;
 
   (* Add a type-class for op_name__var : op_type *)
-  add_typeclass (op_ctx_elem_class_name elem) true params
+  add_typeclass (field_class_name op_id) true params
                 [(op_var_id, op_type, false)] ;
+
+  (* Add the new op to spec *)
+  let spec' = 
+    { spec with
+      spec_op_ctx = fctx_cons op_id true true spec.spec_op_ctx } in
 
   (* Add an axiom "op_name = op_name__var" to the resulting spec *)
   add_axiom
-    { spec with spec_op_ctx = elem :: spec.spec_op_ctx }
+    spec'
     (add_suffix_l op_name "eq")
     (mk_ident_equality op_var_id op_name)
 
 
-(* Create the axiom type-class for a spec *)
-let add_axiom_typeclass spec =
-  let spec_name = match spec.spec_name with
-    | Some id -> id
-    | None -> anomaly (str "add_axiom_typeclass: anonymous spec!")
+(* Complete a spec, by creating its axiom type-class and giving it a
+   global name *)
+let complete_spec spec spec_name =
+  let _ = match spec.spec_name with
+    | Some id -> anomaly (str "compete_spec: spec is already named!")
+    | None -> ()
   in
   add_typeclass spec_name false
-                (op_ctx_to_params spec.spec_op_ctx)
+                (fctx_params spec.spec_op_ctx)
                 (List.rev_map
                    (fun ax_name ->
                     (ax_name, mk_var (dummy_loc, axiom_type_id ax_name), false))
-                   ax_fields)
+                   ax_fields);
+  { spec with
+    spec_name =
+      (* FIXME: make this nicer... *)
+      Some (lookup_spec_globref (spec_locref_of_ref (Ident spec_name)))}
 
 
 (***
@@ -420,16 +495,17 @@ let add_axiom_typeclass spec =
 (* The global table of registered specs, by spec global ref *)
 let spec_table = ref (Mindmap.empty)
 
-(* Register a spec in the spec_table given a local id that refers to
-   the axiom class in the spec *)
-let register_global_spec spec_lident spec =
-  let spec_globref = lookup_spec_globref
-                       (spec_locref_of_ref (Ident spec_lident)) in
+(* Register a spec in the spec_table *)
+let register_global_spec spec =
+  let spec_name = match spec.spec_name with
+    | Some n -> n
+    | None -> anomaly (str "register_global_spec: anonymous spec!")
+  in
   (*
   Format.eprintf "\nregister_global_spec: ind (name = %s, id = %i)\n"
                  (MutInd.to_string ind) i
    *)
-  spec_table := Mindmap.add spec_globref spec !spec_table
+  spec_table := Mindmap.add spec_name spec !spec_table
 
 (* Look up a spec and its spec_globref from a local spec reference *)
 let lookup_spec_and_globref locref =
@@ -441,50 +517,12 @@ let lookup_spec locref = fst (lookup_spec_and_globref locref)
 
 
 (***
- *** Name Substitutions and Name Translations
+ *** Name Translations
  ***)
 
-(* A name substitution is a finite mapping on identifiers, with an
-   additional flag stating whether the source is a defined op *)
-type name_subst = (Id.t * Id.t * bool) list
-
-(* Apply a name substitution to a name *)
-let rec subst_id subst id =
-  match subst with
-  | [] -> id
-  | (id_from, id_to, _) :: subst' ->
-     if id_from = id then id_to else subst_id subst' id
-
-(* Apply name substitution subst to all the names in the range of
-   another name substitution subst2 *)
-let rec subst_name_subst subst subst2 =
-  match subst2 with
-  | [] -> []
-  | (id_from, id_to, flag) :: subst2' ->
-     (id_from, subst_id subst id_to, flag)
-     :: subst_name_subst subst subst2'
-
-(* Apply a name substitution to an op_ctx_elem *)
-let subst_op_ctx_elem subst elem =
-  match elem with
-  | OpCtx_Decl id -> OpCtx_Decl (subst_id id)
-  | OpCtx_Defn id -> OpCtx_Defn (subst_id id)
-
-(* Apply a name substitution to an op_ctx *)
-let subst_op_ctx subst op_ctx =
-  List.map subst_op_ctx_elem op_ctx
-
-(* Apply a name substitution to a spec *)
-let subst_spec subst spec =
-  { spec_op_ctx = subst_op_ctx subst spec.spec_op_ctx;
-    spec_axioms = List.map (subst_id subst) spec.spec_axioms }
-
-(* Build the identity substitution for an op_ctx *)
-let subst_from_op_ctx op_ctx =
-  List.map (fun elem -> (op_ctx_elem_id elem, op_ctx_elem_id elem,
-                         op_ctx_elem_is_def elem)) op_ctx
-
-(* A name translation specifies a name substitution, e.g., with patterns *)
+(* A name translation specifies a field substitution, but can only be
+   resolved into a concrete field substitution by giving it a set of
+   field names to map *)
 type name_translation_elem =
   (* Map a single name to another *)
   | NameXSingle of Id.t * Id.t
@@ -512,28 +550,26 @@ let rec translate_id xlate id =
      else
        translate_id xlate' id
 
-(* Instantiate a name translation into a finite name substitution for
-   a particular spec *)
-let interp_name_translation spec xlate : name_subst =
-  let rec helper elem_fun l =
-    match l with
-    | [] -> []
-    | elem :: l' ->
-       let (id,flag) = elem_fun elem in
-       let rest = helper elem_fun l' in
-       (match translate_id xlate id with
-        | Some id' ->
-           if op_ctx_elem_is_def elem then
-             (* If id is a def, also map id__eq -> id'__eq *)
-             (id, id', flag) ::
-               (add_suffix id "eq", add_suffix id "eq", flag) :: rest
-           else
-             (id, id', flag) :: rest
-        | None -> rest)
-  in
-  helper (fun elem -> (op_ctx_elem_id elem,
-                       op_ctx_elem_is_def elem)) spec.spec_op_ctx
-  @ helper (fun id -> (id, false)) spec.spec_axioms
+(* Resolve a name translation into a name substitution for a spec *)
+let resolve_name_translation spec xlate : name_subst =
+  concat_map (fun elem ->
+              match translate_id xlate (fctx_elem_id elem) with
+              | Some id' ->
+                 if fctx_elem_is_def elem then
+                   (* If id is a def, also map id__eq -> id'__eq *)
+                   [(id, id'), (add_suffix id "eq", add_suffix id' "eq")]
+                 else
+                   [(id, id')]
+              | None -> [])
+             spec.spec_op_ctx
+  @ filter_map (fun elem ->
+                match translate_id xlate (fctx_elem_id elem) with
+                | Some id' ->
+                   (* Filter out mappings on "__eq" axioms *)
+                   if has_suffix id "__eq" then None else
+                     Some (id, id')
+                | None -> None)
+               spec.spec_axioms
 
 
 (***
@@ -551,22 +587,24 @@ type morphism = {
   morph_interp : global_reference
 }
 
-(* Apply morph to spec, yielding (target ++ (spec - source)); i.e.,
-   remove any ops and axioms listed in the source spec and then
-   prepend the target spec.  The loc is for any error messages; e.g.,
-   if an op or axiom is shared between spec and source but has
-   different types in these two specs, or if an op or axiom is shared
-   between (spec - source) and target but has different types in these
-   two specs. *)
-(* FIXME: figure out how to check these conditions! *)
+(* Apply morph to spec, yielding (target ++ subst (spec - source));
+   i.e., remove any ops and axioms listed in the source spec, apply
+   the given substitution (to any arguments in types or defs remaining
+   in spec), and then prepend the target spec. Prepending is because
+   the result of the substitution may refer to ops in target. The loc
+   is for any error messages *)
 let apply_morphism loc morph spec =
   { spec_name = None;
-    spec_op_ctx = morph.morph_target.spec_op_ctx
-                  @ op_ctx_sub spec.spec_op_ctx
-                               morph.morph_source.spec_op_ctx;
-    spec_axioms = morph.morph_target.spec_axioms
-                  @ (axioms_sub spec.spec_axioms
-                                morph.morph_source.spec_axioms) }
+    spec_op_ctx = (fctx_subtract
+                     (fun () -> raise loc (Failure "apply_morphism"))
+                     spec.spec_op_ctx
+                     morph.morph_source.spec_op_ctx)
+                  @ morph.morph_target.spec_op_ctx;
+    spec_axioms = (fctx_subtract
+                     spec.spec_axioms
+                     (fun () -> raise loc (Failure "apply_morphism"))         
+                     morph.morph_source.spec_axioms)
+                  @ morph.morph_target.spec_axioms }
 
 (* The implicit argument name for the spec argument of a morphism
    interpretation function *)
@@ -677,29 +715,30 @@ let apply_morphism_ax_subst morph ax_subst =
 
 (* An import morphism is a morphism where the interpretation function
    is determined by an axiom substitution with a list of intermediate
-   morphism applications. Also, an import morphism can add definitions
-   to ops that were undefined in the base spec. The source of an
-   import morphism is always given by name, while the target of an
-   import morphism is is left implicit as it is always the current spec. *)
+   morphism applications. The source of an import morphism is always
+   given by name, while the target of an import morphism is is left
+   implicit as it is always the current spec. *)
 type import_morphism = {
   imorph_source : spec_locref;
   imorph_op_subst : name_subst;
-  imorph_defs : (Id.t * name_subst * Constrexpr.constr_expr) list;
+  (* imorph_defs : (Id.t * name_subst * Constrexpr.constr_expr) list; *)
   imorph_ax_subst : ax_subst
 }
 
 (* Apply a name substitution to the defs of an import morphism *)
+(*
 let subst_imorph_defs subst defs =
   List.map (fun (id,subst,body) ->
             (subst_id subst id,
              subst_name_subst morph.morph_subst subst, body))
            defs
+ *)
 
 (* Apply a name substitution to an import morphism *)
 let subst_import_morph subst imorph =
   { imorph with
     imorph_op_subst = subst_name_subst subst imorph.imorph_op_subst;
-    imorph_defs = subst_imorph_defs subst imorph.imorph_defs;
+    (* imorph_defs = subst_imorph_defs subst imorph.imorph_defs; *)
     imorph_ax_subst = subst_ax_subst subst imorph.imorph_ax_subst }
 
 (* Apply a morphism to an import morphism *)
@@ -707,7 +746,7 @@ let apply_morphism_imorph morph imorph =
   { imorph with
     imorph_op_subst =
       subst_name_subst morph.morph_subst imorph.imorph_op_subst;
-    imorph_defs = subst_imorph_defs morph.morph_subst imorph.imorph_defs;
+    (* imorph_defs = subst_imorph_defs morph.morph_subst imorph.imorph_defs; *)
     imorph_ax_subst =
       apply_morphism_ax_subst morph imorph.imorph_ax_subst
   }
@@ -715,6 +754,7 @@ let apply_morphism_imorph morph imorph =
 (* For each (name,body) pair in a list of definitions, change name to
    be defined in spec and also form the triple (name,op_ctx,body)
    where op_ctx is the op_ctx prefix before name in spec *)
+(*
 let rec add_spec_defs loc spec defs =
   let rec add_def op_ctx id body =
     let add_elem elem (op_ctx_ret, form) = (elem :: op_ctx_ret, form) in
@@ -743,9 +783,13 @@ let rec add_spec_defs loc spec defs =
   in
   let (op_ctx', forms) = add_defs_op_ctx spec.spec_op_ctx defs in
   ({ spec with spec_op_ctx = op_ctx' }, forms)
+ *)
 
-(* Spec terms are syntactic forms for building specs from existing specs *)
-type spec_term =
+(* Spec terms are syntactic forms for building specs from existing
+   specs; they are built from a "body" that modifies an existing,
+   named spec via name translations and morphisms, along with a list
+   of definitions that are supplied for declared ops in the spec *)
+type spec_term_body =
   (* A reference by name to an existing spec *)
   | SpecRef of reference
   (* A translation of the names of a spec *)
@@ -753,7 +797,9 @@ type spec_term =
   (* A spec substitution, where the morphism must be named *)
   | SpecSubst of spec_term * qualid located
   (* Adding definitions to ops in a spec *)
-  | SpecAddDefs of spec_term * (Id.t * Constrexpr.constr_expr) list
+  (* | SpecAddDefs of spec_term * (Id.t * Constrexpr.constr_expr) list *)
+
+type spec_term = spec_term_body * (Id.t * Constrexpr.constr_expr) list
 
 (* Get the source location of a spec_term *)
 let rec spec_term_loc st =
@@ -761,11 +807,11 @@ let rec spec_term_loc st =
   | SpecRef r -> loc_of_reference r
   | SpecXlate (st', _) -> spec_term_loc st'
   | SpecSubst (st', _) -> spec_term_loc st'
-  | SpecAddDefs (st', _) -> spec_term_loc st'
+  (* | SpecAddDefs (st', _) -> spec_term_loc st' *)
 
 (* Interpret a spec term into a spec plus an import morphism to that
    spec from the base spec (the SpecRef) of the spec term *)
-let rec interp_spec_term sterm : spec * import_morphism =
+let rec interp_spec_term_body sterm : spec * import_morphism =
   match sterm with
   | SpecRef r ->
      (try
@@ -777,14 +823,15 @@ let rec interp_spec_term sterm : spec * import_morphism =
          user_err_loc (spec_term_loc sterm, "_",
                        str ("No spec named " ^ string_of_reference r)))
   | SpecXlate (sterm', xlate) ->
-     let (spec, imorph) = interp_spec_term sterm' in
-     let subst = interp_name_translation spec xlate in
+     let (spec, imorph) = interp_spec_term_body sterm' in
+     let subst = resolve_name_translation spec xlate in
      (subst_spec subst spec, subst_import_morph subst imorph)
   | SpecSubst (sterm', morph_ref) ->
-     let (spec, imorph) = interp_spec_term sterm' in
+     let (spec, imorph) = interp_spec_term_body sterm' in
      let morph = lookup_morphsim (located_elem morph_ref) in
      (apply_morphism (located_loc morph_ref) morph spec,
       apply_morphism_imorph morph imorph)
+(*
   | SpecAddDefs (sterm', defs) ->
      let (spec, imorph) = interp_spec_term sterm' in
      let (new_spec, new_defs) = add_spec_defs spec defs in
@@ -793,11 +840,15 @@ let rec interp_spec_term sterm : spec * import_morphism =
         imorph_defs = (List.map (fun (id,op_ctx,body) ->
                                  (id, subst_from_op_ctx op_ctx, body))
                                 new_defs) @ imorph.imorph_defs})
+ *)
 
 (* Interpret a spec term and then import the resulting spec into the
    current spec *)
-let import_spec_term spec sterm =
-  FIXME HERE: 
+let import_spec_term spec (sterm, defs) =
+  let (im_spec, imorph) = interp_spec_term_body sterm in
+  
+
+  FIXME HERE
 
 
 (***
@@ -854,7 +905,7 @@ let rec interp_spec_def_entries spec_name op_ctx ax_fields entries =
         type-class for all the axioms and imports, and return the spec
         object *)
      add_typeclass spec_name false
-                   (op_ctx_to_params op_ctx) (List.rev ax_fields) ;
+                   (fctx_params op_ctx) (List.rev ax_fields) ;
      { spec_ops = op_ctx;
        spec_axioms = List.map (fun (lid,_,_) -> located_elem lid) ax_fields
      }
@@ -868,7 +919,7 @@ let rec interp_spec_def_entries spec_name op_ctx ax_fields entries =
         Class op__class {op_params} := { op : op_type }
       *)
      add_typeclass (add_suffix_l op_name "class") true
-                   (op_ctx_to_params op_ctx)
+                   (fctx_params op_ctx)
                    [(op_name, op_type, false)] ;
      interp_spec_def_entries spec_name (op_ctx_cons_decl op_name op_ctx)
                          ax_fields entries'
@@ -893,11 +944,11 @@ let rec interp_spec_def_entries spec_name op_ctx ax_fields entries =
                         IntroIdentifier (located_elem op_name), None)
      in
 (*
-     let params = op_ctx_to_params op_ctx @ old_params in
+     let params = fctx_params op_ctx @ old_params in
  *)
-     let params = op_ctx_to_params op_ctx in
+     let params = fctx_params op_ctx in
      let op_def_id = add_suffix_l op_name "def" in
-     add_definition op_name (op_ctx_to_params op_ctx) op_type_opt op_body ;
+     add_definition op_name (fctx_params op_ctx) op_type_opt op_body ;
      add_typeclass (add_suffix_l op_name "class") true params
                    [(op_def_id, op_type, false)] ;
      interp_spec_def_entries spec_name (op_ctx_cons_defn op_name op_ctx)
