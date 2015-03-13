@@ -479,6 +479,11 @@ let subst_spec subst spec =
   { spec_op_ctx = subst_op_ctx subst spec.spec_op_ctx;
     spec_axioms = List.map (subst_id subst) spec.spec_axioms }
 
+(* Build the identity substitution for an op_ctx *)
+let subst_from_op_ctx op_ctx =
+  List.map (fun elem -> (op_ctx_elem_id elem, op_ctx_elem_id elem,
+                         op_ctx_elem_is_def elem)) op_ctx
+
 (* A name translation specifies a name substitution, e.g., with patterns *)
 type name_translation_elem =
   (* Map a single name to another *)
@@ -672,18 +677,29 @@ let apply_morphism_ax_subst morph ax_subst =
 
 (* An import morphism is a morphism where the interpretation function
    is determined by an axiom substitution with a list of intermediate
-   morphism applications. Also, the source is given by name and the
-   target is the current spec, so is left implicit *)
+   morphism applications. Also, an import morphism can add definitions
+   to ops that were undefined in the base spec. The source of an
+   import morphism is always given by name, while the target of an
+   import morphism is is left implicit as it is always the current spec. *)
 type import_morphism = {
   imorph_source : spec_locref;
   imorph_op_subst : name_subst;
+  imorph_defs : (Id.t * name_subst * Constrexpr.constr_expr) list;
   imorph_ax_subst : ax_subst
 }
+
+(* Apply a name substitution to the defs of an import morphism *)
+let subst_imorph_defs subst defs =
+  List.map (fun (id,subst,body) ->
+            (subst_id subst id,
+             subst_name_subst morph.morph_subst subst, body))
+           defs
 
 (* Apply a name substitution to an import morphism *)
 let subst_import_morph subst imorph =
   { imorph with
     imorph_op_subst = subst_name_subst subst imorph.imorph_op_subst;
+    imorph_defs = subst_imorph_defs subst imorph.imorph_defs;
     imorph_ax_subst = subst_ax_subst subst imorph.imorph_ax_subst }
 
 (* Apply a morphism to an import morphism *)
@@ -691,9 +707,42 @@ let apply_morphism_imorph morph imorph =
   { imorph with
     imorph_op_subst =
       subst_name_subst morph.morph_subst imorph.imorph_op_subst;
+    imorph_defs = subst_imorph_defs morph.morph_subst imorph.imorph_defs;
     imorph_ax_subst =
       apply_morphism_ax_subst morph imorph.imorph_ax_subst
   }
+
+(* For each (name,body) pair in a list of definitions, change name to
+   be defined in spec and also form the triple (name,op_ctx,body)
+   where op_ctx is the op_ctx prefix before name in spec *)
+let rec add_spec_defs loc spec defs =
+  let rec add_def op_ctx id body =
+    let add_elem elem (op_ctx_ret, form) = (elem :: op_ctx_ret, form) in
+    (* FIXME: error messages *)
+    match op_ctx with
+    | [] -> raise loc (Failure "Op not defined in spec")
+    | (OpCtx_Decl id') as elem :: op_ctx' ->
+       if id = id' then
+         (OpCtx_Defn id' :: op_ctx',
+          (id, op_ctx', body))
+       else
+         add_elem elem (add_def op_ctx' id body)
+    | (OpCtx_Defn id') as elem :: op_ctx' ->
+       if id = id' then
+         raise loc (Failure "Op already defined in spec")
+       else
+         add_elem elem (add_def op_ctx' id body)
+  in
+  let rec add_defs_op_ctx op_ctx defs =
+    match defs with
+    | [] -> op_ctx
+    | (id,body) :: defs' ->
+       let add_form form (op_ctx_ret, forms) = (op_ctx_ret, form :: forms) in
+       let (op_ctx',form) = add_def op_ctx id body in
+       add_form form (add_defs_op_ctx op_ctx' defs')
+  in
+  let (op_ctx', forms) = add_defs_op_ctx spec.spec_op_ctx defs in
+  ({ spec with spec_op_ctx = op_ctx' }, forms)
 
 (* Spec terms are syntactic forms for building specs from existing specs *)
 type spec_term =
@@ -738,9 +787,12 @@ let rec interp_spec_term sterm : spec * import_morphism =
       apply_morphism_imorph morph imorph)
   | SpecAddDefs (sterm', defs) ->
      let (spec, imorph) = interp_spec_term sterm' in
-     (* FIXME: check that defs exist and are not defined in spec *)
-     anomaly ~loc:(spec_term_loc sterm)
-             (str "Adding defs to a spec not (yet) supported")
+     let (new_spec, new_defs) = add_spec_defs spec defs in
+     (new_spec,
+      {imorph with
+        imorph_defs = (List.map (fun (id,op_ctx,body) ->
+                                 (id, subst_from_op_ctx op_ctx, body))
+                                new_defs) @ imorph.imorph_defs})
 
 (* Interpret a spec term and then import the resulting spec into the
    current spec *)
