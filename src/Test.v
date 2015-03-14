@@ -47,6 +47,10 @@ Check S3.foo.
 Print S3.
 Print S3.y.
 
+(*
+Class Foo {baz : S1.T__class} : Type := x : x'__class (T__param := baz).
+*)
+
 Spec S4 {
        Variable x : nat ;
        Import S3

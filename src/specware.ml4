@@ -196,6 +196,9 @@ let spec_locref_of_ref ref =
     ax_class_name = mod_name;
     spec_locref_loc = loc_of_reference ref }
 
+(* Build a spec_locref from a local identifier *)
+let spec_locref_of_id id = spec_locref_of_ref (Ident (dummy_loc, id))
+
 (* Return a qualid for the op class of a spec given a spec_locref *)
 let op_class_qualid spec_locref =
   qualid_cons spec_locref.spec_module_qualid spec_locref.op_class_name
@@ -620,6 +623,7 @@ let morph_spec_arg_id = Id.of_string "Spec"
  *** Axiom Substitutions
  ***)
 
+(*
 (* An axiom substitution shows how to prove all the axioms of a source
    spec using axioms of a target spec, either by mapping them directly
    to axioms in the target spec or by mapping them to fields in an
@@ -707,12 +711,13 @@ let apply_morphism_ax_subst morph ax_subst =
       List.map (apply_morphism_morph_appl morph morph_num) ax_subst.as_morphs
       @ [morph_appl_from_morph morph];
     as_subst = apply_morphism_ax_subst_simple morph morph_num ax_subst.as_subst }
-
+ *)
 
 (***
  *** Spec Imports and Spec Terms
  ***)
 
+(*
 (* An import morphism is a morphism where the interpretation function
    is determined by an axiom substitution with a list of intermediate
    morphism applications. The source of an import morphism is always
@@ -784,6 +789,7 @@ let rec add_spec_defs loc spec defs =
   let (op_ctx', forms) = add_defs_op_ctx spec.spec_op_ctx defs in
   ({ spec with spec_op_ctx = op_ctx' }, forms)
  *)
+ *)
 
 (* Spec terms are syntactic forms for building specs from existing
    specs; they are built from a "body" that modifies an existing,
@@ -811,6 +817,7 @@ let rec spec_term_loc st =
 
 (* Interpret a spec term into a spec plus an import morphism to that
    spec from the base spec (the SpecRef) of the spec term *)
+(*
 let rec interp_spec_term_body sterm : spec * import_morphism =
   match sterm with
   | SpecRef r ->
@@ -841,8 +848,51 @@ let rec interp_spec_term_body sterm : spec * import_morphism =
                                  (id, subst_from_op_ctx op_ctx, body))
                                 new_defs) @ imorph.imorph_defs})
  *)
+ *)
 
-(* Interpret a spec term and then import the resulting spec into the
+
+(* Global counter for making fresh local spec names *)
+let import_counter = ref 1
+
+(* Get a fresh local spec name *)
+let fresh_import_id () =
+  let n = !import_counter in
+  let _ = import_counter := n+1 in
+  Id.of_string ("import__" ^ string_of_int n)
+
+(* Interpret a spec term and import it into spec, which is assumed to
+   be the current spec (as local definitions are created) *)
+let rec import_spec_term spec (body,defs) =
+
+  (* Make a fresh, empty spec and import sterm_body into it *)
+  let import_into_fresh_spec sterm_body =
+    let spec_name = fresh_import_id () in
+    let spec =
+      within_module
+        spec_name
+        (fun () -> import_spec_term empty_spec (sterm_body, [])) in
+    (spec, spec_name)
+  in
+
+  (* FIXME HERE *)
+  let import_spec spec im_spec im_locref xlate_opt defs =
+    FIXME HERE
+  in
+
+  let rec import_aux spec body xlate_opt defs =
+    match body with
+    | SpecRef r ->
+       (try
+           let locref = spec_locref_of_ref r in
+           (lookup_spec locref, locref)
+         with Not_found ->
+           user_err_loc (spec_term_loc sterm, "_",
+                         str ("No spec named " ^ string_of_reference r)))
+    | _ -> FIXME HERE
+  in
+  import_aux spec body None defs
+
+     (* Interpret a spec term and then import the resulting spec into the
    current spec *)
 let import_spec_term spec (sterm, defs) =
   let (im_spec, imorph) = interp_spec_term_body sterm in
