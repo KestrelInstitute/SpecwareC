@@ -346,7 +346,7 @@ let subst_to_args subst =
    fields are stored later in the list; i.e., fields can only refer to
    fields later in a field context. This is to make it easy to add new
    fields as we go *)
-type glob_defn = | Defn of global_reference * name_subst
+type glob_defn = | Defn of global_reference * field_subst
 type fctx_elem = | FCtx_Elem of Id.t * glob_defn * glob_defn option
 type fctx = fctx_elem list
 
@@ -355,6 +355,11 @@ let eq_glob_defn d1 d2 =
   match (d1, d2) with
   | (Defn (r1, s1), Defn (r2, s2)) ->
      eq_gr r1 r2 && eq_subst s1 s2
+
+(* Get the fields referenced by the args of a glob_defn *)
+let glob_defn_deps d =
+  match d with
+  | Defn (_, args) -> List.map snd args
 
 (* Turn a global definition into a term *)
 let glob_defn_term d =
@@ -402,7 +407,7 @@ let rec fctx_lookup fctx f =
 (* Apply a name substitution to a definition *)
 let subst_glob_defn subst d =
   match d with
-  | Defn (r, args) -> Defn (r, subst_name_subst subst args)
+  | Defn (r, args) -> Defn (r, subst_field_subst subst args)
 
 (* Apply a name substitution to an optional definition *)
 let subst_glob_defn_opt subst d_opt =
@@ -519,7 +524,7 @@ let spec_subtract spec1 spec2 =
        if ~(check_equal_term (fctx_params spec1.spec_op_ctx)
                              (fctx_elem_type elem1)
                              (fctx_elem_type elem2)) then
-         raise loc (FieldMismatch (fctx_elem_id elem1, false))
+         Pervasives.raise (FieldMismatch (fctx_elem_id elem1, false))
 
        (* If an op is defined in both spec and source, check that
             the definitions are equal *)
@@ -528,7 +533,7 @@ let spec_subtract spec1 spec2 =
                    ~(check_equal_term (fctx_elem_def elem1)
                                       (fctx_elem_def elem2))
        then
-         raise loc (FieldMismatch (fctx_elem_id elem1, false))
+         Pervasives.raise (FieldMismatch (fctx_elem_id elem1, false))
        else ()
       )
       spec1.spec_op_ctx spec2.spec_op_ctx
@@ -543,7 +548,7 @@ let spec_subtract spec1 spec2 =
           if ~(check_equal_term (fctx_params spec1.spec_op_ctx)
                                 (fctx_elem_type elem1)
                                 (fctx_elem_type elem2)) then
-            raise loc (FieldMismatch (fctx_elem_id elem1, false))
+            Pervasives.raise (FieldMismatch (fctx_elem_id elem1, false))
 
           (* We don't care about equality of proofs, so no need to
             check definitions *)
@@ -627,6 +632,7 @@ let add_fctx_axioms spec fctx =
 
 (* Complete a spec, by creating its axiom type-class and giving it a
    global name; NOTE: this must be done *inside* the spec *)
+(* FIXME HERE: spec_name should now refer to the current module! *)
 let complete_spec spec spec_name =
   let _ = match spec.spec_name with
     | Some id -> anomaly (str "compete_spec: spec is already named!")
@@ -706,7 +712,7 @@ let rec translate_id xlate id =
        translate_id xlate' id
 
 (* Resolve a name translation into a name substitution for a spec *)
-let resolve_name_translation spec xlate : name_subst =
+let resolve_name_translation spec xlate : field_subst =
   concat_map (fun elem ->
               match translate_id xlate (fctx_elem_id elem) with
               | Some id' ->
@@ -738,7 +744,7 @@ let resolve_name_translation spec xlate : name_subst =
 type morphism = {
   morph_source : spec;
   morph_target : spec;
-  morph_subst : name_subst;
+  morph_subst : field_subst;
   morph_interp : global_reference
 }
 
@@ -779,7 +785,7 @@ exception FieldAlreadyDefined of Id.t
    applying the morphism substitution to the input spec, which removes
    any fields in its domain and replaces them with their correponding
    fields in the co-domain of the substitution. *)
-let apply_morphism loc morph spec =
+let apply_morphism morph spec =
   let spec_id = mk_morph_spec_id () in
   let (rem_spec, removed_defs) = spec_subtract spec morph.morph_source in
   let _ =
@@ -795,88 +801,35 @@ let apply_morphism loc morph spec =
        with
        | Some elem_t ->
           if fctx_elem_is_def elem_t then
-            raise loc (FieldAlreadyDefined (fctx_elem_id elem))
+            Pervasives.raise (FieldAlreadyDefined (fctx_elem_id elem))
           else ()
        | None -> ())
       removed_defs
   in
 
- FIXME HERE: use stable_reverse_topo_sort to add the new definitions
+  (* Append the target ops and then sort *)
+  let new_op_ctx =
+    stable_reverse_topo_sort fctx_elem_id Id.equal glob_defn_deps
+                             (rem_spec.spec_op_ctx
+                              @ morph.morph_target.spec_op_ctx) in
+  (* Append the target axioms (no need to sort; axioms do not depend
+     on each other) *)
+  let new_axioms = rem_spec.spec_axioms @ morph.morph_target.spec_axioms in
 
-  within_module
-    spec_id
-    (fun () ->
-     (* Start by adding all the target ops to the current spec *)
-     let spec_t_ops = add_fctx_ops empty_spec
-                                     morph.morph_target.spec_op_ctx
-       in
-
-       (* Iterate over the ops in spec, adding them if they are not in
-          source and checking compatibility with source if they are *)
-       let spec_all_ops =
-         List.fold_right
-           (fun elem spec ->
-            match fctx_lookup morph.morph_source.spec_op_ctx
-                              (fctx_elem_id elem) with
-            | None ->
-               (* Op is not in source, so add it *)
-               add_fctx_elem_op spec elem
-            | Some elem_s ->
-               (* Op is in source, so don't add it; but do check if it
-                  has the same type as in source *)
-               if ~(check_equal_term (fctx_elem_type elem)
-                                     (fctx_elem_type elem_s)) then
-                 raise loc (FieldMismatch (fctx_elem_id elem, false))
-
-               (* If op is defined in both spec and source, check that
-                  the definitions are equal *)
-               else if fctx_elem_is_def elem &&
-                         fctx_elem_is_def elem_s &&
-                           ~(check_equal_term (fctx_elem_def elem)
-                                              (fctx_elem_def elem_s))
-               then
-                 raise loc (FieldMismatch (fctx_elem_id elem, false))
-
-               (* If op is defined in spec and not in source, make
-                  sure it does not become defined in target *)
-               (* NOTE: a more permissive check would just require
-                  target.op = spec.op *)
-               else if fctx_elem_is_def elem &&
-                         ~(fctx_elem_is_def elem_s) then
-                 match fctx_lookup morph.morph_target.spec_op_ctx
-                                   (subst_id morph.morph_subst
-                                             (fctx_elem_id elem))
-                 with
-                 | Some elem_t ->
-                    if fctx_elem_is_def elem_t then
-                      raise loc (FieldAlreadyDefined (fctx_elem_id elem))
-                    else
-                      spec
-                 | None -> spec
-           )
-           spec.spec_op_ctx spec_t_ops
-       in
-
-       (* Add all the axioms in target to the current spec *)
-       let spec_t_axioms =
-         add_fctx_axioms spec_all_ops morph.morph_target.spec_axioms in
-       (* Add all the axioms in spec - source, making sure that any
-          shared axioms have the same type *)
-       let spec_all_axioms =
-         add_fctx_axioms spec_t_axioms
-                         (fctx_subtract
-                            (fun elem elem_s ->
-                             if ~(check_equal_term (fctx_elem_type elem)
-                                                   (fctx_elem_type elem_s)) then
-                               raise loc (FieldMismatch (fctx_elem_id, false))
-                             else ()
-                            )
-                            spec.spec_axioms morph.morph_source.spec_axioms)
-       in
-       let spec = complete_spec spec_all_axioms spec_id in
+  (* Now build the new spec module *)
+  let new_spec =
+    within_module
+      spec_id
+      (fun () ->
+       (* Build the spec *)
+       let spec =
+         complete_spec
+           spec_id
+           (add_fctx_axioms
+              (add_fctx_ops empty_spec new_op_ctx)
+              new_axioms) in
 
        (* FIXME HERE: add derived instances! (maybe return them as well?) *)
-
        spec
       )
   in
