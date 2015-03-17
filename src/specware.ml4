@@ -14,10 +14,10 @@ open Decl_kinds
 
 
 (***
- *** Helper functions for interacting with Coq
+ *** Helper functions
  ***)
 
-(* Useful list function: map f on a list but only keep the "Some"s *)
+(* Map f on a list but only keep the "Some"s *)
 let rec filter_map f l =
   match l with
   | [] -> []
@@ -25,6 +25,54 @@ let rec filter_map f l =
      (match f x with
       | Some y -> y :: filter_map f l'
       | None -> filter_map f l')
+
+(* Map f on a list and concatenate the results *)
+let concat_map f l =
+  List.concat (List.map f l)
+
+(* Topo sort failed because of a circularity *)
+exception TopoCircularity of int
+
+(* Stable reverse topological sort: sort l so that every element x
+   comes before its dependencies, favoring the existing ordering of l
+   where possible. The dependencies of x are all nodes y whose key,
+   given by the key function, is key_eq to a key in (deps x). *)
+let rec stable_reverse_topo_sort key key_eq deps l =
+  let arr = Array.of_list l in
+  let arr_deps = Array.make (List.length l) [] in
+  let visited = Array.make (List.length l) false in
+  let get_node_by_key_help k j =
+    if j > Array.length arr then None
+    else if key_eq k (key arr.(j)) then Some j
+    else get_node_by_key_help k (j+1) in
+  let get_node_by_key k = get_node_by_key_help k 0 in
+  (* Perform a DFS to build the transitive closure of deps *)
+  let get_node_deps path_to_i i =
+    if visited.(i) then
+      arr_deps.(i)
+    else if List.mem i path_to_i then
+      Pervasives.raise (TopoCircularity i)
+    else
+      let i_immed_deps = filter_map get_node_by_key (deps arr.(i)) in
+      let i_deps = concat_map (get_node_deps i::path_to_i) i_immed_deps in
+      visited.(i) <- true;
+      arr_deps.(i) <- i_deps;
+      i::i_deps
+  in
+  let index_arr = Array.init (List.length l) id in
+  Array.to_list
+    (Array.map (fun i -> arr.(i))
+               (Array.stable_sort
+                  (fun i j ->
+                   if List.mem j arr_deps.(i) then 1
+                   else if List.mem i arr_deps.(j) then -1
+                   else j-i)
+                  index_arr))
+
+
+(***
+ *** Helper functions for interacting with Coq
+ ***)
 
 (* Syntactic expressions for the sorts Type and Prop *)
 let type_expr = Constrexpr.CSort (Loc.dummy_loc, Misctypes.GType [])
@@ -175,19 +223,23 @@ let within_module mod_name f =
   interp (loc, VernacEndSegment mod_name);
   ret
 
-(* Check that two terms are definitionally equal, by checking that
-   eq_refl (the constructor for the equality type) has type t1 = t2 *)
+(* Check that two terms are definitionally equal relative to the given
+   parameter list, by checking that (forall params, eq_refl : t1=t2)
+   is well-typed (eq_refl is the constructor for the equality type) *)
 (* FIXME HERE: make sure this works! *)
-let check_equal_term t1 t2 =
+let check_equal_term params t1 t2 =
   try
     vernac_check_may_eval
       None None
-      (CCast (dummy_loc,
-              CApp (loc,
-                    (None, mk_reference ["Coq"; "Init"; "Logic"]
-                                        (Id.of_string "eq_refl")),
-                    [(t1, None)]),
-              mk_equality t1 t2));
+      (mkCProdN
+         dummy_loc
+         params
+         (CCast (dummy_loc,
+                 CApp (loc,
+                       (None, mk_reference ["Coq"; "Init"; "Logic"]
+                                           (Id.of_string "eq_refl")),
+                       [(t1, None)]),
+                 mk_equality t1 t2)));
     true
   with UserError _ -> false
 
@@ -436,6 +488,53 @@ let subst_spec subst spec =
 (* Create an anonymous empty spec *)
 let empty_spec = { spec_name = None; spec_op_ctx = []; spec_axioms = [] }
 
+(* The types (if flag = false) or the definitions (if flag = true) of
+   the given named field in two different spec are not equal *)
+exception FieldMismatch of Id.t * bool
+
+(* Remove all the ops and axioms in spec2 from spec1, making sure that
+   they have compatible types and definitions. Note that the return
+   value is not really a valid spec, since it could have some
+   references to ops that no longer exist in it *)
+let spec_subtract spec1 spec2 =
+  { spec_name = None;
+    spec_op_ctx =
+      fctx_subtract
+        (fun elem1 elem2 ->
+         (* Check that the types of elem1 and elem2 are equal, in the
+            context of spec1 *)
+         if ~(check_equal_term (fctx_params spec1.spec_op_ctx)
+                               (fctx_elem_type elem1)
+                               (fctx_elem_type elem2)) then
+           raise loc (FieldMismatch (fctx_elem_id elem1, false))
+
+         (* If an op is defined in both spec and source, check that
+            the definitions are equal *)
+         else if fctx_elem_is_def elem1 &&
+                   fctx_elem_is_def elem2 &&
+                     ~(check_equal_term (fctx_elem_def elem1)
+                                        (fctx_elem_def elem2))
+         then
+           raise loc (FieldMismatch (fctx_elem_id elem1, false))
+         else ()
+        )
+        spec1.spec_op_ctx spec2.spec_op_ctx;
+    spec_axioms =
+      fctx_subtract
+        (fun elem1 elem2 ->
+         (* Check that the types of elem1 and elem2 are equal, in the
+            context of spec1 *)
+         if ~(check_equal_term (fctx_params spec1.spec_op_ctx)
+                               (fctx_elem_type elem1)
+                               (fctx_elem_type elem2)) then
+           raise loc (FieldMismatch (fctx_elem_id elem1, false))
+
+         (* We don't care about equality of proofs, so no need to
+            check definitions *)
+         else ()
+        )
+        spec1.spec_axioms spec2.spec_axioms }
+
 (* FIXME: error checks (e.g., name clashes with other ops / axioms) *)
 
 (* Add a declared op to a spec, creating a type-class for it *)
@@ -645,10 +744,6 @@ let mk_morph_spec_id () =
   let _ = morphism_spec_counter := n+1 in
   Id.of_string ("morph_spec__" ^ string_of_int n)
 
-(* The types (if flag = false) or the definitions (if flag = true) of
-   the given named field in two different spec are not equal *)
-exception FieldMismatch of Id.t * bool
-
 (* An attempt to add a definition to an already-defined field *)
 exception FieldAlreadyDefined of Id.t
 
@@ -667,7 +762,7 @@ exception FieldAlreadyDefined of Id.t
    applying the morphism substitution to the input spec, which removes
    any fields in its domain and replaces them with their correponding
    fields in the co-domain of the substitution. *)
-let apply_morphism loc morph spec =
+let apply_morphism loc morph spec = FIXME HERE: use stable_reverse_topo_sort, do not create the definitions
   let spec_id = mk_morph_spec_id () in
   let new_spec =
     within_module
