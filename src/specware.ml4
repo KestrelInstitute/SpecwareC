@@ -426,17 +426,29 @@ let subst_fctx subst fctx =
 let subst_from_fctx fctx =
   List.rev_map (fun elem -> (fctx_elem_id elem, fctx_elem_id elem)) fctx
 
-(* Subtract the fields of fctx2 from fctx1; also call check_fun with
-   each pair of context elements from the two contexts that match *)
+(* Subtract the fields of fctx2 from fctx1, returning both the
+   remaining fields from fctx1 and also the list of fctx elems that
+   are defined in fctx1 but not in fctx2 (intuitively, subtracting
+   fctx2 removes these fields but maybe not their definitions...);
+   also call check_fun with each pair of context elements from the two
+   contexts that match *)
 let rec fctx_subtract check_fun fctx1 fctx2 =
-  List.filter
-    (fun elem1 ->
-     not (List.exists
-            (fun elem2 ->
-             Id.equal (fctx_elem_id elem1) (fctx_elem_id elem2) &&
-               (check_fun elem1 elem2; true))
-            fctx2))
-    fctx1
+  let def_subs = ref [] in
+  let ret_fctx =
+    List.filter
+      (fun elem1 ->
+       not (List.exists
+              (fun elem2 ->
+               Id.equal (fctx_elem_id elem1) (fctx_elem_id elem2) &&
+                 let _ = check_fun elem1 elem2 in
+                 let _ = if fctx_elem_is_def elem1
+                            && ~(fctx_elem_is_def elem2) then
+                           def_subst := elem1 :: def_subst
+                         else () in
+                 true)
+              fctx2))
+      fctx1 in
+  (ret_fctx, def_subst)
 
 (* Cons a field to a field context, where we assume the type and
    definition for the field have already been defined in the local
@@ -493,47 +505,52 @@ let empty_spec = { spec_name = None; spec_op_ctx = []; spec_axioms = [] }
 exception FieldMismatch of Id.t * bool
 
 (* Remove all the ops and axioms in spec2 from spec1, making sure that
-   they have compatible types and definitions. Note that the return
-   value is not really a valid spec, since it could have some
-   references to ops that no longer exist in it *)
+   they have compatible types and definitions. Note that the result is
+   not really a valid spec, since it could have some references to ops
+   that no longer exist in it. Return both this resulting pseudo-spec
+   as well as a list of the fctx_elems for any removed ops that were
+   defined in spec1 but not in spec2 (see fctx_subtract) *)
 let spec_subtract spec1 spec2 =
-  { spec_name = None;
-    spec_op_ctx =
-      fctx_subtract
-        (fun elem1 elem2 ->
-         (* Check that the types of elem1 and elem2 are equal, in the
+  let (new_op_ctx, removed_defs) =
+    fctx_subtract
+      (fun elem1 elem2 ->
+       (* Check that the types of elem1 and elem2 are equal, in the
             context of spec1 *)
-         if ~(check_equal_term (fctx_params spec1.spec_op_ctx)
-                               (fctx_elem_type elem1)
-                               (fctx_elem_type elem2)) then
-           raise loc (FieldMismatch (fctx_elem_id elem1, false))
+       if ~(check_equal_term (fctx_params spec1.spec_op_ctx)
+                             (fctx_elem_type elem1)
+                             (fctx_elem_type elem2)) then
+         raise loc (FieldMismatch (fctx_elem_id elem1, false))
 
-         (* If an op is defined in both spec and source, check that
+       (* If an op is defined in both spec and source, check that
             the definitions are equal *)
-         else if fctx_elem_is_def elem1 &&
-                   fctx_elem_is_def elem2 &&
-                     ~(check_equal_term (fctx_elem_def elem1)
-                                        (fctx_elem_def elem2))
-         then
-           raise loc (FieldMismatch (fctx_elem_id elem1, false))
-         else ()
-        )
-        spec1.spec_op_ctx spec2.spec_op_ctx;
-    spec_axioms =
-      fctx_subtract
-        (fun elem1 elem2 ->
-         (* Check that the types of elem1 and elem2 are equal, in the
+       else if fctx_elem_is_def elem1 &&
+                 fctx_elem_is_def elem2 &&
+                   ~(check_equal_term (fctx_elem_def elem1)
+                                      (fctx_elem_def elem2))
+       then
+         raise loc (FieldMismatch (fctx_elem_id elem1, false))
+       else ()
+      )
+      spec1.spec_op_ctx spec2.spec_op_ctx
+  in
+  ({ spec_name = None;
+     spec_op_ctx = new_op_ctx;
+     spec_axioms =
+       fctx_subtract
+         (fun elem1 elem2 ->
+          (* Check that the types of elem1 and elem2 are equal, in the
             context of spec1 *)
-         if ~(check_equal_term (fctx_params spec1.spec_op_ctx)
-                               (fctx_elem_type elem1)
-                               (fctx_elem_type elem2)) then
-           raise loc (FieldMismatch (fctx_elem_id elem1, false))
+          if ~(check_equal_term (fctx_params spec1.spec_op_ctx)
+                                (fctx_elem_type elem1)
+                                (fctx_elem_type elem2)) then
+            raise loc (FieldMismatch (fctx_elem_id elem1, false))
 
-         (* We don't care about equality of proofs, so no need to
+          (* We don't care about equality of proofs, so no need to
             check definitions *)
-         else ()
-        )
-        spec1.spec_axioms spec2.spec_axioms }
+          else ()
+         )
+         spec1.spec_axioms spec2.spec_axioms },
+   removed_defs)
 
 (* FIXME: error checks (e.g., name clashes with other ops / axioms) *)
 
@@ -747,29 +764,50 @@ let mk_morph_spec_id () =
 (* An attempt to add a definition to an already-defined field *)
 exception FieldAlreadyDefined of Id.t
 
-(* Apply morphism to spec, yielding (target ++ subst (spec - source));
+(* Apply morphism to spec, yielding (subst (spec - source) ++ target);
    i.e., remove from spec any ops and axioms listed in the source of
    the morphism, apply the morphism substitution to the result, and
-   then prepend the ops and axioms listed in the target spec.
-   Prepending is because the result of the substitution may refer to
-   ops in target. The resulting spec is built in a new module (whose
-   name comes from mk_morph_spec_id), and derived instances are added
-   of the source and target specs of the morphism in this new spec.
-   The new spec object is then returned, along with a local reference
-   to it.
+   then add back in the ops and axioms listed in the target spec. The
+   op_ctx in the result are topologically sorted so that it is valid,
+   i.e., so that no op refers to a later one. The resulting spec is
+   built in a new module (whose name comes from mk_morph_spec_id), and
+   derived instances are added of the source and target specs of the
+   morphism in this new spec. The new spec object is then returned,
+   along with a local reference to it.
 
    Another way to think about morphism application is that we are
    applying the morphism substitution to the input spec, which removes
    any fields in its domain and replaces them with their correponding
    fields in the co-domain of the substitution. *)
-let apply_morphism loc morph spec = FIXME HERE: use stable_reverse_topo_sort, do not create the definitions
+let apply_morphism loc morph spec =
   let spec_id = mk_morph_spec_id () in
-  let new_spec =
-    within_module
-      spec_id
-      (fun () ->
-       (* Start by adding all the target ops to the current spec *)
-       let spec_t_ops = add_fctx_ops empty_spec
+  let (rem_spec, removed_defs) = spec_subtract spec morph.morph_source in
+  let _ =
+    (* If an op is defined in spec and not in source, make sure it
+       does not become defined in target *)
+    (* NOTE: a more permissive check would instead just require
+       target.op = spec.op *)
+    List.iter
+      (fun elem ->
+       match fctx_lookup morph.morph_target.spec_op_ctx
+                         (subst_id morph.morph_subst
+                                   (fctx_elem_id elem))
+       with
+       | Some elem_t ->
+          if fctx_elem_is_def elem_t then
+            raise loc (FieldAlreadyDefined (fctx_elem_id elem))
+          else ()
+       | None -> ())
+      removed_defs
+  in
+
+ FIXME HERE: use stable_reverse_topo_sort to add the new definitions
+
+  within_module
+    spec_id
+    (fun () ->
+     (* Start by adding all the target ops to the current spec *)
+     let spec_t_ops = add_fctx_ops empty_spec
                                      morph.morph_target.spec_op_ctx
        in
 
