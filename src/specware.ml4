@@ -254,6 +254,9 @@ let check_equal_term params t1 t2 =
 (* A local reference to a spec is a qualid pointing to its module *)
 type spec_locref = qualid
 
+(* Build a spec_locref from a local identifier *)
+let spec_locref_of_id id = qualid_of_id id
+
 (* Return a qualid that points to field fname in spec locref *)
 let field_in_spec locref fname =
   qualid_cons locref fname
@@ -630,23 +633,16 @@ let add_fctx_axioms spec fctx =
                    add_axiom spec (fctx_elem_id elem) (fctx_elem_type elem))
                   fctx spec
 
-(* Complete a spec, by creating its axiom type-class and giving it a
-   global name; NOTE: this must be done *inside* the spec *)
-(* FIXME HERE: spec_name should now refer to the current module! *)
+(* Complete a spec, by creating its axiom type-class. No more axioms
+   can be added to a spec once it has been completed. *)
 let complete_spec spec spec_name =
-  let _ = match spec.spec_name with
-    | Some id -> anomaly (str "compete_spec: spec is already named!")
-    | None -> ()
-  in
   add_typeclass spec_name false
                 (fctx_params spec.spec_op_ctx)
                 (List.rev_map
                    (fun ax_name ->
                     (ax_name, mk_var (dummy_loc, axiom_type_id ax_name), false))
                    ax_fields);
-  { spec with
-    spec_name =
-      Some (lookup_spec_globref (qualid_of_ident spec_name))}
+  spec
 
 
 (***
@@ -656,17 +652,21 @@ let complete_spec spec spec_name =
 (* The global table of registered specs, by spec global ref *)
 let spec_table = ref (MPmap.empty)
 
-(* Register a spec in the spec_table *)
-let register_global_spec spec =
-  let spec_name = match spec.spec_name with
-    | Some n -> n
-    | None -> anomaly (str "register_global_spec: anonymous spec!")
+(* Register a spec in the spec_table; this makes a spec named. NOTE:
+   this is normally called *outside* the spec's module *)
+let register_global_spec spec spec_locref =
+  let _ = match spec.spec_name with
+    | Some n -> anomaly (str "register_global_spec: spec already named!")
+    | None -> ()
   in
+  let spec_name = lookup_spec_globref spec_locref in
+  let named_spec = { spec with spec_name = Some spec_name } in
   (*
   Format.eprintf "\nregister_global_spec: ind (name = %s, id = %i)\n"
                  (MutInd.to_string ind) i
    *)
-  spec_table := MPmap.add spec_name spec !spec_table
+  spec_table := MPmap.add spec_name named_spec !spec_table;
+  named_spec
 
 (* Look up a spec and its spec_globref from a local spec reference *)
 let lookup_spec_and_globref locref =
@@ -675,6 +675,12 @@ let lookup_spec_and_globref locref =
 
 (* Look up a spec from a local spec reference *)
 let lookup_spec locref = fst (lookup_spec_and_globref locref)
+
+(* Build a new spec in a new module called spec_id, calling builder
+   inside that new module to build the spec. *)
+let within_named_spec spec_id builder =
+  let spec = within_module (dummy_loc, spec_id) builder in
+  register_global_spec spec (spec_locref_of_id spec_id)
 
 
 (***
@@ -818,7 +824,7 @@ let apply_morphism morph spec =
 
   (* Now build the new spec module *)
   let new_spec =
-    within_module
+    within_named_spec
       spec_id
       (fun () ->
        (* Build the spec *)
@@ -833,7 +839,6 @@ let apply_morphism morph spec =
        spec
       )
   in
-  let _ = register_global_spec new_spec in
   (new_spec, qualid_of_ident spec_id)
 
 
