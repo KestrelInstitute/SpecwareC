@@ -291,6 +291,9 @@ let field_in_global_spec globref fname =
 (* A field substitution is a finite mapping on field names *)
 type field_subst = (Id.t * Id.t) list
 
+(* Make the identity substitution on the given fields *)
+let mk_id_subst fields = List.map (fun id -> (id,id)) fields
+
 (* Equality on field substitutions *)
 (* FIXME: can the orders be different? *)
 let rec eq_subst s1 s2 =
@@ -422,7 +425,7 @@ let subst_glob_defn_opt subst d_opt =
 let subst_fctx_elem subst elem =
   match elem with
   | FCtx_Elem (id, tp, d) ->
-     FCtx_elem (subst_id subst id, subst_glob_defn subst tp,
+     FCtx_Elem (subst_id subst id, subst_glob_defn subst tp,
                 subst_glob_defn_opt subst d)
 
 (* Apply a name substitution to an fctx *)
@@ -562,6 +565,46 @@ let spec_subtract spec1 spec2 =
          )
          spec1.spec_axioms spec2.spec_axioms },
    removed_defs)
+
+(* Named definitions *)
+type named_def = Id.t * constr_expr option * constr_expr
+
+(* Counter for building fresh definition names in add_spec_def *)
+(* FIXME: unify these fresh names with apply_morphism *)
+let def_name_counter = ref 1
+
+(* Change a declared op to a defined op for a spec that is not the
+   current spec; this generates a new definition with a fresh,
+   generated name to the current module *)
+let add_spec_def spec (id,tp_opt,body) =
+  let tp =
+    match tp_opt with
+    | Some tp -> tp
+    | None -> CHole (loc, None, IntroIdentifier op_id, None)
+  in
+  let def_n = !def_name_counter in
+  let _ = def_name_counter := def_n + 1 in
+  let def_id = Id.of_string ("local_def__" ^ string_of_int n) in
+  let tp_id = Id.of_string ("local_def__" ^ string_of_int n ^ "__type") in
+  let rec helper op_ctx =
+    match op_ctx with
+    | [] -> raise Not_found
+    | elem :: op_ctx' ->
+       if Id.equal id (fctx_elem_id elem) then
+         if fctx_elem_id_def elem then
+           Pervasives.raise (FieldDefNotAllowed id)
+         else
+           let _ = add_definition def_id (fctx_params op_ctx') (Some tp) body in
+           let _ =
+             if tp_opt = None then
+               add_definition tp_id (fctx_params op_ctx') (Some type_expr)
+             else () in
+           FCtx_Elem (id, Nametab.locate (qualid_of_id tp_id),
+                      Some (Nametab.locate (qualid_of_id def_id)))
+
+(* FIXME HERE: think about only adding defs in the current spec... *)
+let add_spec_defs spec defs =
+  List.fold_left add_spec_def spec defs
 
 
 (***
@@ -764,6 +807,26 @@ let resolve_name_translation spec xlate : field_subst =
 
 
 (***
+ *** Spec Instances
+ ***)
+
+(* Represents an instance of inst_spec in the current spec *)
+type spec_instance = {
+  inst_spec : spec_locref;
+  inst_op_subst : field_subst;
+  inst_ax_subst : field_subts
+}
+
+(* Substitute into a spec_instance *)
+let subst_spec_inst subst inst =
+  { inst with
+    inst_op_subst = subst_field_subst subst inst.inst_op_subst;
+    inst_ax_subst = subst_field_subst subst inst.inst_ax_subst }
+
+(* FIXME HERE: write add_instance *)
+
+
+(***
  *** Spec Morphisms
  ***)
 
@@ -869,9 +932,7 @@ let apply_morphism morph spec =
  ***)
 
 (* Spec terms are syntactic forms for building specs from existing
-   specs; they are built from a "body" that modifies an existing,
-   named spec via name translations and morphisms, along with a list
-   of definitions that are supplied for declared ops in the spec *)
+   specs *)
 type spec_term =
   (* A reference by name to an existing spec *)
   | SpecRef of reference
@@ -882,7 +943,7 @@ type spec_term =
   (* Adding definitions to ops in a spec *)
   | SpecAddDefs of spec_term * (Id.t * Constrexpr.constr_expr) list
 
-(* Get the source location of a spec_term_body *)
+(* Get the source location of a spec_term *)
 let rec spec_term_loc st =
   match st with
   | SpecRef r -> loc_of_reference r
@@ -890,95 +951,38 @@ let rec spec_term_loc st =
   | SpecSubst (st', _) -> spec_term_loc st'
   | SpecAddDefs (st', _) -> spec_term_loc st'
 
-(* Interpret a spec term into a spec plus an import morphism to that
-   spec from the base spec (the SpecRef) of the spec term *)
-(*
-let rec interp_spec_term_body sterm : spec * import_morphism =
+(* Interpret a spec term into a spec plus an instance in this returned
+   spec of the outer-most spec reference or morphism application *)
+let rec interp_spec_term sterm : spec * spec_instance =
   match sterm with
   | SpecRef r ->
      (try
          let locref = spec_locref_of_ref r in
          (lookup_spec locref,
-          {imorph_source = locref; imorph_op_subst = [];
-           imorph_ax_subst = empty_ax_subst })
+          make_id_instance locref spec)
        with Not_found ->
          user_err_loc (spec_term_loc sterm, "_",
                        str ("No spec named " ^ string_of_reference r)))
   | SpecXlate (sterm', xlate) ->
-     let (spec, imorph) = interp_spec_term_body sterm' in
+     let (spec, inst) = interp_spec_term sterm' in
      let subst = resolve_name_translation spec xlate in
-     (subst_spec subst spec, subst_import_morph subst imorph)
+     (subst_spec subst spec, subst_spec_inst subst inst)
   | SpecSubst (sterm', morph_ref) ->
-     let (spec, imorph) = interp_spec_term_body sterm' in
+     let (spec, inst) = interp_spec_term sterm' in
      let morph = lookup_morphsim (located_elem morph_ref) in
-     (apply_morphism (located_loc morph_ref) morph spec,
-      apply_morphism_imorph morph imorph)
-(*
+     (* FIXME HERE: figure out what to do with inst! *)
+     let (new_spec, new_locref) = apply_morphism morph spec in
+     (new_spec, make_id_instance new_locref new_spec)
   | SpecAddDefs (sterm', defs) ->
-     let (spec, imorph) = interp_spec_term sterm' in
-     let (new_spec, new_defs) = add_spec_defs spec defs in
-     (new_spec,
-      {imorph with
-        imorph_defs = (List.map (fun (id,op_ctx,body) ->
-                                 (id, subst_from_op_ctx op_ctx, body))
-                                new_defs) @ imorph.imorph_defs})
- *)
- *)
-
-
-(* Import a spec at the given locref while applying the given optional
-   name translation and adding the given definitions *)
-let import_spec_with_changes spec im_spec im_ref xlate_opt defs =
-  
-
-(* Global counter for making fresh local spec names *)
-let import_counter = ref 1
-
-(* Get a fresh local spec name *)
-let fresh_import_id () =
-  let n = !import_counter in
-  let _ = import_counter := n+1 in
-  Id.of_string ("import__" ^ string_of_int n)
+     let (spec, inst) = interp_spec_term sterm' in
+     (add_spec_defs spec defs, inst)
 
 (* Interpret a spec term and import it into spec, which is assumed to
    be the current spec (as local definitions are created) *)
-let rec import_spec_term spec (body,defs) =
-
-  (* Make a fresh, empty spec and import sterm_body into it *)
-  let import_into_fresh_spec sterm_body =
-    let spec_name = fresh_import_id () in
-    let spec =
-      within_module
-        spec_name
-        (fun () -> import_spec_term empty_spec (sterm_body, [])) in
-    (spec, spec_name)
-  in
-
-  (* FIXME HERE *)
-  let import_spec spec im_spec im_locref xlate_opt defs =
-    FIXME HERE
-  in
-
-  let rec import_aux spec body xlate_opt defs =
-    match body with
-    | SpecRef r ->
-       (try
-           let locref = spec_locref_of_ref r in
-           (lookup_spec locref, locref)
-         with Not_found ->
-           user_err_loc (spec_term_loc sterm, "_",
-                         str ("No spec named " ^ string_of_reference r)))
-    | _ -> FIXME HERE
-  in
-  import_aux spec body None defs
-
-     (* Interpret a spec term and then import the resulting spec into the
-   current spec *)
-let import_spec_term spec (sterm, defs) =
-  let (im_spec, imorph) = interp_spec_term_body sterm in
-  
-
-  FIXME HERE
+let import_spec_term spec st =
+  let (im_spec, inst) = interp_spec_term st in
+  (* FIXME HERE: figure out what to do with inst! *)
+  import_spec spec im_spec
 
 
 (***
@@ -1001,27 +1005,6 @@ type spec_def_entry =
 (***
  *** Interpreting specs into type-classes
  ***)
-
-(* Interpret a spec term (which for now is just a name) into a spec
-   and a local reference to that spec *)
-(* FIXME HERE: should be import_spec_term *)
-let rec interp_spec_term sterm : spec * spec_locref =
-  match sterm with
-  | SpecRef ref ->
-     (try
-         let locref = spec_locref_of_ref ref in
-         (lookup_spec locref, locref)
-       with Not_found ->
-            raise (spec_term_loc sterm)
-                  (Failure ("No spec named " ^ string_of_reference ref)))
-  | SpecXlate (sterm', nmap) ->
-     raise (spec_term_loc sterm) (Failure "interp_spec_term")
-  (* A spec substitution, where the morphism must be named *)
-  | SpecSubst (sterm', morph_name) ->
-     raise (spec_term_loc sterm) (Failure "interp_spec_term")
-  (* Adding definitions to ops in a spec *)
-  | SpecAddDefs (sterm', defs) ->
-     raise (spec_term_loc sterm) (Failure "interp_spec_term")
 
 (* Interpret a list of spec_entries into a spec object, installing a
    series of typeclasses and definitions into the current Coq
