@@ -500,6 +500,13 @@ type spec = {
   spec_axioms : fctx
 }
 
+(* The types (if flag = false) or the definitions (if flag = true) of
+   the given named field in two different specs are not equal *)
+exception FieldMismatch of Id.t * bool
+
+(* Attempt to define the given field when it is not allowed *)
+exception FieldDefNotAllowed of Id.t
+
 (* Apply a name substitution to a spec *)
 let subst_spec subst spec =
   { spec_op_ctx = subst_fctx subst spec.spec_op_ctx;
@@ -507,10 +514,6 @@ let subst_spec subst spec =
 
 (* Create an anonymous empty spec *)
 let empty_spec = { spec_name = None; spec_op_ctx = []; spec_axioms = [] }
-
-(* The types (if flag = false) or the definitions (if flag = true) of
-   the given named field in two different spec are not equal *)
-exception FieldMismatch of Id.t * bool
 
 (* Remove all the ops and axioms in spec2 from spec1, making sure that
    they have compatible types and definitions. Note that the result is
@@ -559,6 +562,13 @@ let spec_subtract spec1 spec2 =
          )
          spec1.spec_axioms spec2.spec_axioms },
    removed_defs)
+
+
+(***
+ *** Building up the current spec
+ ***)
+
+(* FIXME: add current_spec global variable *)
 
 (* FIXME: error checks (e.g., name clashes with other ops / axioms) *)
 
@@ -643,6 +653,20 @@ let complete_spec spec spec_name =
                     (ax_name, mk_var (dummy_loc, axiom_type_id ax_name), false))
                    ax_fields);
   spec
+
+(* Import a spec into the current spec *)
+let import_spec spec im_spec =
+  (* Remove any ops/axioms in spec from im_spec *)
+  let (real_im_spec, im_new_defs) = spec_subtract im_spec spec in
+  (* im_spec cannot define any existing ops in spec *)
+  let _ =
+    match im_new_defs with
+    | [] -> ()
+    | elem :: _ -> Pervasives.raise (FieldDefNotAllowed (fctx_elem_id elem))
+  in
+  (add_fctx_axioms
+     (add_fctx_ops spec real_im_spec.spec_op_ctx)
+     real_im_spec.spec_axioms)
 
 
 (***
@@ -773,9 +797,6 @@ let mk_morph_spec_id () =
   let _ = morphism_spec_counter := n+1 in
   Id.of_string ("morph_spec__" ^ string_of_int n)
 
-(* An attempt to add a definition to an already-defined field *)
-exception FieldAlreadyDefined of Id.t
-
 (* Apply morphism to spec, yielding (subst (spec - source) ++ target);
    i.e., remove from spec any ops and axioms listed in the source of
    the morphism, apply the morphism substitution to the result, and
@@ -807,7 +828,7 @@ let apply_morphism morph spec =
        with
        | Some elem_t ->
           if fctx_elem_is_def elem_t then
-            Pervasives.raise (FieldAlreadyDefined (fctx_elem_id elem))
+            Pervasives.raise (FieldDefNotAllowed (fctx_elem_id elem))
           else ()
        | None -> ())
       removed_defs
@@ -828,6 +849,7 @@ let apply_morphism morph spec =
       spec_id
       (fun () ->
        (* Build the spec *)
+       (* FIXME: use import_spec *)
        let spec =
          complete_spec
            spec_id
@@ -843,182 +865,14 @@ let apply_morphism morph spec =
 
 
 (***
- *** Axiom Substitutions
+ *** Spec Terms
  ***)
-
-(*
-(* An axiom substitution shows how to prove all the axioms of a source
-   spec using axioms of a target spec, either by mapping them directly
-   to axioms in the target spec or by mapping them to fields in an
-   intermediate spec whose axioms are in turn mapped to the target *)
-type ax_proof =
-  | AxPf_Direct of Id.t (* Prove an axiom directly by another axiom *)
-  | AxPf_Morph of int * Id.t (* Prove via a named axiom in the nth
-                                morphism application (see below) *)
-type simple_ax_subst = (Id.t * ax_proof) list
-
-(* Represents the application of a named morphism whose ops and axioms
-   are mapped to the target spec *)
-type morph_appl =
-    global_reference * name_subst * simple_ax_subst
-
-(* A full axiom substitution contains the mappings and the morphism
-   applications that are used in those mappings; note that as_morphs
-   is reversed, in that earlier morphism applications can refer to
-   later ones, but not vice-versa *)
-type ax_subst = {as_morphs : morph_appl list; as_subst : simple_ax_subst }
-
-(* The empty axiom substitution *)
-let empty_ax_subst = ([], [])
-
-(* Build the default morphism application from a morphism, that
-   contains the identity map for all the ops and axioms in the target
-   of the morphism (these are the args to the interpretation fun) *)
-let morph_appl_from_morph morph =
-  (morph.morph_interp,
-   List.map (fun elem -> (op_ctx_elem_id elem, op_ctx_elem_id elem,
-                          op_ctx_elem_is_def elem))
-            morph.morph_target.spec_op_ctx;
-   List.map (fun ax_id -> (ax_id, AxPf_Direct ax_id))
-            morph.morph_target.spec_axioms)
-
-(* Apply a name substitution to an ax_proof *)
-let subst_ax_proof subst pf =
-  match pf with
-  | AxPf_Direct id -> AxPf_Direct (subst_id subst id)
-  | _ -> pf (* Morphism numbers and field names in morphisms don't change *)
-
-(* Apply a name substitution to a simple_ax_subst *)
-let subst_ax_subst_simple subst ax_subst =
-  List.map (fun (id, pf) -> (id, subst_ax_proof subst pf)) ax_subst
-
-(* Apply a name substitution to a morph_appl *)
-let subst_morph_appl subst (r, op_subst, ax_subst) =
-  (r, subst_name_subst subst op_subst,
-   subst_ax_subst_simple subst ax_subst)
-
-(* Apply a name substitution to the RHS's of an axiom substitution *)
-let subst_ax_subst subst ax_subst =
-  {as_morphs = List.map (subst_morph_appl subst) ax_subst.as_morphs;
-   as_subst = subst_ax_subst_simple subst ax_subst.as_subst}
-
-(* Apply a morphism to an axiom proof, replacing any axiom on the RHS
-   in the source spec with a reference to that axiom in morph_num *)
-let apply_morphism_ax_proof morph morph_num pf =
-  match pf with
-  | AxPf_Direct id ->
-     if List.exists ((=) id) morph.morph_source.spec_axioms then
-       AxPf_Morph (morph_num, id)
-     else pf
-  | _ -> pf
-
-(* Apply a morphism to a simple axiom substitution *)
-let apply_morphism_ax_subst_simple morph morph_num ax_subst =
-  List.map (fun (id, pf) ->
-            (id, apply_morphism_ax_proof morph morph_num pf)) ax_subst
-
-(* Apply a morphism to a morphism application *)
-let apply_morphism_morph_appl morph morph_num (r, op_subst, ax_subst) =
-  (r, subst_name_subst morph.morph_subst op_subst,
-   apply_morphism_ax_subst_simple morph morph_num ax_subst)
-
-(* Apply a morphism to an axiom substitution *)
-let apply_morphism_ax_subst morph ax_subst =
-  (* First, get the number for the morph_apply we are going to add (it
-     is going to be the next one in the list) *)
-  let morph_num = List.length ax_subst.ax_morphs in
-  (* Now apply the morphism to the existing morphism applications and
-     the simple axiom substitutions, and then append the new morphism
-     application *)
-  { as_morphs =
-      List.map (apply_morphism_morph_appl morph morph_num) ax_subst.as_morphs
-      @ [morph_appl_from_morph morph];
-    as_subst = apply_morphism_ax_subst_simple morph morph_num ax_subst.as_subst }
- *)
-
-(***
- *** Spec Imports and Spec Terms
- ***)
-
-(*
-(* An import morphism is a morphism where the interpretation function
-   is determined by an axiom substitution with a list of intermediate
-   morphism applications. The source of an import morphism is always
-   given by name, while the target of an import morphism is is left
-   implicit as it is always the current spec. *)
-type import_morphism = {
-  imorph_source : spec_locref;
-  imorph_op_subst : name_subst;
-  (* imorph_defs : (Id.t * name_subst * Constrexpr.constr_expr) list; *)
-  imorph_ax_subst : ax_subst
-}
-
-(* Apply a name substitution to the defs of an import morphism *)
-(*
-let subst_imorph_defs subst defs =
-  List.map (fun (id,subst,body) ->
-            (subst_id subst id,
-             subst_name_subst morph.morph_subst subst, body))
-           defs
- *)
-
-(* Apply a name substitution to an import morphism *)
-let subst_import_morph subst imorph =
-  { imorph with
-    imorph_op_subst = subst_name_subst subst imorph.imorph_op_subst;
-    (* imorph_defs = subst_imorph_defs subst imorph.imorph_defs; *)
-    imorph_ax_subst = subst_ax_subst subst imorph.imorph_ax_subst }
-
-(* Apply a morphism to an import morphism *)
-let apply_morphism_imorph morph imorph =
-  { imorph with
-    imorph_op_subst =
-      subst_name_subst morph.morph_subst imorph.imorph_op_subst;
-    (* imorph_defs = subst_imorph_defs morph.morph_subst imorph.imorph_defs; *)
-    imorph_ax_subst =
-      apply_morphism_ax_subst morph imorph.imorph_ax_subst
-  }
-
-(* For each (name,body) pair in a list of definitions, change name to
-   be defined in spec and also form the triple (name,op_ctx,body)
-   where op_ctx is the op_ctx prefix before name in spec *)
-(*
-let rec add_spec_defs loc spec defs =
-  let rec add_def op_ctx id body =
-    let add_elem elem (op_ctx_ret, form) = (elem :: op_ctx_ret, form) in
-    (* FIXME: error messages *)
-    match op_ctx with
-    | [] -> raise loc (Failure "Op not defined in spec")
-    | (OpCtx_Decl id') as elem :: op_ctx' ->
-       if id = id' then
-         (OpCtx_Defn id' :: op_ctx',
-          (id, op_ctx', body))
-       else
-         add_elem elem (add_def op_ctx' id body)
-    | (OpCtx_Defn id') as elem :: op_ctx' ->
-       if id = id' then
-         raise loc (Failure "Op already defined in spec")
-       else
-         add_elem elem (add_def op_ctx' id body)
-  in
-  let rec add_defs_op_ctx op_ctx defs =
-    match defs with
-    | [] -> op_ctx
-    | (id,body) :: defs' ->
-       let add_form form (op_ctx_ret, forms) = (op_ctx_ret, form :: forms) in
-       let (op_ctx',form) = add_def op_ctx id body in
-       add_form form (add_defs_op_ctx op_ctx' defs')
-  in
-  let (op_ctx', forms) = add_defs_op_ctx spec.spec_op_ctx defs in
-  ({ spec with spec_op_ctx = op_ctx' }, forms)
- *)
- *)
 
 (* Spec terms are syntactic forms for building specs from existing
    specs; they are built from a "body" that modifies an existing,
    named spec via name translations and morphisms, along with a list
    of definitions that are supplied for declared ops in the spec *)
-type spec_term_body =
+type spec_term =
   (* A reference by name to an existing spec *)
   | SpecRef of reference
   (* A translation of the names of a spec *)
@@ -1026,17 +880,15 @@ type spec_term_body =
   (* A spec substitution, where the morphism must be named *)
   | SpecSubst of spec_term * qualid located
   (* Adding definitions to ops in a spec *)
-  (* | SpecAddDefs of spec_term * (Id.t * Constrexpr.constr_expr) list *)
+  | SpecAddDefs of spec_term * (Id.t * Constrexpr.constr_expr) list
 
-type spec_term = spec_term_body * (Id.t * Constrexpr.constr_expr) list
-
-(* Get the source location of a spec_term *)
+(* Get the source location of a spec_term_body *)
 let rec spec_term_loc st =
   match st with
   | SpecRef r -> loc_of_reference r
   | SpecXlate (st', _) -> spec_term_loc st'
   | SpecSubst (st', _) -> spec_term_loc st'
-  (* | SpecAddDefs (st', _) -> spec_term_loc st' *)
+  | SpecAddDefs (st', _) -> spec_term_loc st'
 
 (* Interpret a spec term into a spec plus an import morphism to that
    spec from the base spec (the SpecRef) of the spec term *)
