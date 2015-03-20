@@ -17,6 +17,8 @@ open Decl_kinds
  *** Helper functions
  ***)
 
+let dummy_loc = Loc.ghost
+
 (* Map f on a list but only keep the "Some"s *)
 let rec filter_map f l =
   match l with
@@ -37,7 +39,7 @@ exception TopoCircularity of int
    comes before its dependencies, favoring the existing ordering of l
    where possible. The dependencies of x are all nodes y whose key,
    given by the key function, is key_eq to a key in (deps x). *)
-let rec stable_reverse_topo_sort key key_eq deps l =
+let rec stable_reverse_topo_sort loc key key_eq deps l =
   let arr = Array.of_list l in
   let arr_deps = Array.make (List.length l) [] in
   let visited = Array.make (List.length l) false in
@@ -51,7 +53,7 @@ let rec stable_reverse_topo_sort key key_eq deps l =
     if visited.(i) then
       arr_deps.(i)
     else if List.mem i path_to_i then
-      Pervasives.raise (TopoCircularity i)
+      raise loc (TopoCircularity i)
     else
       let i_immed_deps = filter_map get_node_by_key (deps arr.(i)) in
       let i_deps = concat_map (get_node_deps i::path_to_i) i_immed_deps in
@@ -215,12 +217,41 @@ let add_typeclass class_id is_op_class params fields =
                           RecordDecl (None, List.map mk_record_field fields)),
                        []]))
 
-(* Perform some operation(s) inside a newly-defined module *)
-let within_module mod_name f =
+(* Add an instance using the given record fields *)
+let add_instance inst_name inst_tp inst_fields =
+  let loc = located_loc inst_name in
+  interp (loc, VernacInstance
+                 (false, params,
+                  (inst_name, Decl_kinds.Explicit, inst_tp),
+                  Some (true,
+                        CRecord (loc, None,
+                                 List.map (fun id -> Ident (loc, id))
+                                          inst_fields)),
+                  None))
+
+(* Begin an interactively-defined instance *)
+let begin_instance inst_name inst_tp =
+  let loc = located_loc inst_name in
+  interp (loc, VernacInstance
+                 (false, params,
+                  (inst_name, Decl_kinds.Explicit, inst_tp),
+                  None, None))
+
+(* Begin a new module *)
+let begin_module mod_name =
   let loc = located_loc mod_name in
   interp (loc, VernacDefineModule (None, mod_name, [], Check [], []));
-  let ret = f () in
+
+(* End the current module, which should have name mod_name *)
+let end_module mod_name =
+  let loc = located_loc mod_name in
   interp (loc, VernacEndSegment mod_name);
+
+(* Perform some operation(s) inside a newly-defined module *)
+let within_module mod_name f =
+  let _ = begin_module mod_name in
+  let ret = f () in
+  let _ = end_module mod_name in
   ret
 
 (* Check that two terms are definitionally equal relative to the given
@@ -479,14 +510,14 @@ let fctx_cons_local id class_p defn_p fctx =
              else None)
 
 (* Convert a single fctx_elem to an implicit class assumption *)
-let fctx_to_param fctx_elem =
+let fctx_elem_to_param fctx_elem =
   mk_implicit_assum (fctx_elem_var_id fctx_elem)
                     (mk_var (dummy_loc, fctx_elem_class_id fctx_elem))
 
 (* Convert an fctx to a list of class parameters, one for each field
    in the context (remember: fctx is reversed) *)
 let fctx_params fctx =
-  List.rev_map fctx_to_param fctx
+  List.rev_map fctx_elem_to_param fctx
 
 
 (***
@@ -524,7 +555,7 @@ let empty_spec = { spec_name = None; spec_op_ctx = []; spec_axioms = [] }
    that no longer exist in it. Return both this resulting pseudo-spec
    as well as a list of the fctx_elems for any removed ops that were
    defined in spec1 but not in spec2 (see fctx_subtract) *)
-let spec_subtract spec1 spec2 =
+let spec_subtract loc spec1 spec2 =
   let (new_op_ctx, removed_defs) =
     fctx_subtract
       (fun elem1 elem2 ->
@@ -533,7 +564,7 @@ let spec_subtract spec1 spec2 =
        if ~(check_equal_term (fctx_params spec1.spec_op_ctx)
                              (fctx_elem_type elem1)
                              (fctx_elem_type elem2)) then
-         Pervasives.raise (FieldMismatch (fctx_elem_id elem1, false))
+         raise loc (FieldMismatch (fctx_elem_id elem1, false))
 
        (* If an op is defined in both spec and source, check that
             the definitions are equal *)
@@ -542,7 +573,7 @@ let spec_subtract spec1 spec2 =
                    ~(check_equal_term (fctx_elem_def elem1)
                                       (fctx_elem_def elem2))
        then
-         Pervasives.raise (FieldMismatch (fctx_elem_id elem1, false))
+         raise loc (FieldMismatch (fctx_elem_id elem1, false))
        else ()
       )
       spec1.spec_op_ctx spec2.spec_op_ctx
@@ -557,7 +588,7 @@ let spec_subtract spec1 spec2 =
           if ~(check_equal_term (fctx_params spec1.spec_op_ctx)
                                 (fctx_elem_type elem1)
                                 (fctx_elem_type elem2)) then
-            Pervasives.raise (FieldMismatch (fctx_elem_id elem1, false))
+            raise loc (FieldMismatch (fctx_elem_id elem1, false))
 
           (* We don't care about equality of proofs, so no need to
             check definitions *)
@@ -576,7 +607,8 @@ let def_name_counter = ref 1
 (* Change a declared op to a defined op for a spec that is not the
    current spec; this generates a new definition with a fresh,
    generated name to the current module *)
-let add_spec_def spec (id,tp_opt,body) =
+let add_spec_def spec (lid,tp_opt,body) =
+  let id = located_elem lid in
   let tp =
     match tp_opt with
     | Some tp -> tp
@@ -592,7 +624,7 @@ let add_spec_def spec (id,tp_opt,body) =
     | elem :: op_ctx' ->
        if Id.equal id (fctx_elem_id elem) then
          if fctx_elem_id_def elem then
-           Pervasives.raise (FieldDefNotAllowed id)
+           raise (located_loc lid) (FieldDefNotAllowed id)
          else
            let _ = add_definition def_id (fctx_params op_ctx') (Some tp) body in
            let _ =
@@ -605,111 +637,6 @@ let add_spec_def spec (id,tp_opt,body) =
 (* FIXME HERE: think about only adding defs in the current spec... *)
 let add_spec_defs spec defs =
   List.fold_left add_spec_def spec defs
-
-
-(***
- *** Building up the current spec
- ***)
-
-(* FIXME: add current_spec global variable *)
-
-(* FIXME: error checks (e.g., name clashes with other ops / axioms) *)
-
-(* Add a declared op to a spec, creating a type-class for it *)
-let add_declared_op spec op_name op_type =
-  let op_id = located_elem op_name in
-  let loc = localted_loc op_name in
-  add_typeclass (loc, field_class_id op_id) true
-                (fctx_params spec.spec_op_ctx) [(op_name, op_type, false)];
-  { spec with
-    spec_op_ctx = fctx_cons_local op_name true false spec.spec_op_ctx }
-
-(* Add an axiom to a spec, creating a definition for its type *)
-let add_axiom spec ax_name ax_type =
-  let ax_id = located_elem ax_name in
-  add_definition (located_loc ax_name, field_type_id ax_id)
-                 (fctx_params spec.spec_op_ctx) prop_expr ax_type;
-  { spec with
-    spec_axioms = fctx_cons ax_id false false spec.spec_axioms }
-
-(* Add a defined op to a spec, creating a type-class and def for it *)
-let add_defined_op spec op_name op_type_opt op_body =
-  let op_id = located_elem op_name in
-  let loc = located_loc op_name in
-  let op_type =
-    match op_type_opt with
-    | Some op_type -> op_type
-    | None -> CHole (loc, None, IntroIdentifier op_id, None)
-  in
-  let params = fctx_params spec.spec_op_ctx in
-  let op_var_id = add_suffix_l op_name "var" in
-
-  (* Add a definition op_name = op_body *)
-  add_definition op_name params op_type_opt op_body;
-
-  (* Add a type-class for op_name__var : op_type *)
-  add_typeclass (field_class_name op_id) true params
-                [(op_var_id, op_type, false)] ;
-
-  (* Add the new op to spec *)
-  let spec' = 
-    { spec with
-      spec_op_ctx = fctx_cons op_id true true spec.spec_op_ctx } in
-
-  (* Add an axiom "op_name = op_name__var" to the resulting spec *)
-  add_axiom
-    spec'
-    (add_suffix_l op_name "eq")
-    (mk_ident_equality op_var_id op_name)
-
-
-(* Add an op from an fctx_elem *)
-let add_fctx_elem_op spec elem =
-  if fctx_elem_is_def elem then
-    add_defined_op spec (fctx_elem_id elem)
-                   (Some (fctx_elem_type elem))
-                   (fctx_elem_defn elem)
-  else
-    add_declared_op spec (fctx_elem_id elem)
-                    (fctx_elem_type elem)
-
-(* Add all the ops from a given fctx; we fold right so each op can see
-   the ops after it in fctx, which are the ones it depends on (since
-   fctx's are stored backwards) *)
-let add_fctx_ops spec fctx =
-  List.fold_right (fun elem spec -> add_fctx_elem_op spec elem)
-                  fctx spec
-
-(* Add all the axioms from a given fctx *)
-let add_fctx_axioms spec fctx =
-  List.fold_right (fun elem spec ->
-                   add_axiom spec (fctx_elem_id elem) (fctx_elem_type elem))
-                  fctx spec
-
-(* Complete a spec, by creating its axiom type-class. No more axioms
-   can be added to a spec once it has been completed. *)
-let complete_spec spec spec_name =
-  add_typeclass spec_name false
-                (fctx_params spec.spec_op_ctx)
-                (List.rev_map
-                   (fun ax_name ->
-                    (ax_name, mk_var (dummy_loc, axiom_type_id ax_name), false))
-                   ax_fields);
-  spec
-
-(* Import a spec into the current spec *)
-let import_spec spec im_spec =
-  (* Remove any ops/axioms in spec from im_spec *)
-  let (real_im_spec, im_new_defs) = spec_subtract im_spec spec in
-  (* im_spec cannot define any existing ops in spec *)
-  let _ =
-    match im_new_defs with
-    | [] -> ()
-    | elem :: _ -> Pervasives.raise (FieldDefNotAllowed (fctx_elem_id elem))
-  in
-  (add_fctx_axioms
-     (add_fctx_ops spec real_im_spec.spec_op_ctx)
-     real_im_spec.spec_axioms)
 
 
 (***
@@ -743,10 +670,187 @@ let lookup_spec_and_globref locref =
 (* Look up a spec from a local spec reference *)
 let lookup_spec locref = fst (lookup_spec_and_globref locref)
 
+
+(***
+ *** Building up the current spec
+ ***)
+
+(* The currrent spec being defined, if one exists, along with its
+   local name *)
+let current_spec : (spec * Id.t) option ref = ref None
+
+(* There is no current spec *)
+exception NoCurrentSpec
+
+(* There is already a current spec *)
+exception IsCurrentSpec
+
+(* Incorrect name for the current spec *)
+exception WrongCurrentSpecName
+
+(* Get the current spec or throw an exception *)
+let get_current_spec loc =
+  match !current_spec with
+  | Some (spec,id) -> spec
+  | None -> raise loc NoCurrentSpec
+
+(* Update the current spec, if it exists, by applying f *)
+let set_current_spec loc f =
+  match !current_spec with
+  | Some (spec,id) ->
+     current_spec := Some (f spec, id)
+  | None -> raise loc NoCurrentSpec
+
+(* The parameters in the current spec *)
+let current_spec_params loc =
+  fctx_params (get_current_spec loc).spec_op_ctx
+
+(* FIXME: error checks (e.g., name clashes with other ops / axioms) *)
+
+(* Add a declared op to the current spec, creating a type-class for it *)
+let add_declared_op op_name op_type =
+  let op_id = located_elem op_name in
+  let loc = localted_loc op_name in
+  add_typeclass (loc, field_class_id op_id) true
+                (current_spec_params loc) [(op_name, op_type, false)];
+  update_current_spec
+    loc
+    (fun s ->
+     { s with
+       spec_op_ctx = fctx_cons_local op_name true false
+                                     !current_spec.spec_op_ctx })
+
+(* Add an axiom to the current spec, creating a definition for its type *)
+let add_axiom ax_name ax_type =
+  let ax_id = located_elem ax_name in
+  add_definition (located_loc ax_name, field_type_id ax_id)
+                 (current_spec_params loc) prop_expr ax_type;
+  update_current_spec
+    loc
+    (fun s ->
+     { s with
+       spec_axioms = fctx_cons ax_id false false
+                               !current_spec.spec_axioms })
+
+(* Add a defined op to the current spec, creating a type-class and def for it *)
+let add_defined_op op_name op_type_opt op_body =
+  let op_id = located_elem op_name in
+  let loc = located_loc op_name in
+  let op_type =
+    match op_type_opt with
+    | Some op_type -> op_type
+    | None -> CHole (loc, None, IntroIdentifier op_id, None)
+  in
+  let params = current_spec_params loc in
+  let op_var_id = add_suffix_l op_name "var" in
+
+  (* Add a definition op_name = op_body *)
+  add_definition op_name params op_type_opt op_body;
+
+  (* Add a type-class for op_name__var : op_type *)
+  add_typeclass (field_class_name op_id) true params
+                [(op_var_id, op_type, false)] ;
+
+  (* Add the new op to spec *)
+  let _ =
+    update_current_spec
+      loc
+      (fun s ->
+       { !current_spec with
+         spec_op_ctx = fctx_cons op_id true true !current_spec.spec_op_ctx }) in
+
+  (* Add an axiom "op_name = op_name__var" to the resulting spec *)
+  add_axiom
+    (add_suffix_l op_name "eq")
+    (mk_ident_equality op_var_id op_name)
+
+
+(* Add an op from an fctx_elem to the current spec *)
+let add_fctx_elem_op loc elem =
+  if fctx_elem_is_def elem then
+    add_defined_op (loc, fctx_elem_id elem)
+                   (Some (fctx_elem_type elem))
+                   (fctx_elem_defn elem)
+  else
+    add_declared_op (loc, fctx_elem_id elem)
+                    (fctx_elem_type elem)
+
+(* Add all the ops from a given fctx; we fold right so each op can see
+   the ops after it in fctx, which are the ones it depends on (since
+   fctx's are stored backwards) *)
+let add_fctx_ops loc fctx =
+  List.fold_right (fun elem () -> add_fctx_elem_op loc elem) fctx ()
+
+(* Add all the axioms from a given fctx *)
+let add_fctx_axioms loc fctx =
+  List.fold_right (fun elem () ->
+                   add_axiom (loc, fctx_elem_id elem) (fctx_elem_type elem))
+                  fctx ()
+
+(* Complete the current spec, by creating its axiom type-class. No
+   more axioms can be added to a spec once it has been completed. *)
+let complete_spec loc =
+  match !current_spec with
+  | None -> raise loc NoCurrentSpec
+  | Some (_, spec_id) ->
+     add_typeclass (loc, spec_name) false
+                   (current_spec_params ())
+                   (List.rev_map
+                      (fun ax_name ->
+                       (ax_name, mk_var (loc, axiom_type_id ax_name), false))
+                      ax_fields)
+
+(* Import a spec into the current spec *)
+let import_spec loc im_spec =
+  (* Remove any ops/axioms in spec from im_spec *)
+  let (real_im_spec, im_new_defs) = spec_subtract im_spec (get_current_spec loc) in
+  (* im_spec cannot define any existing ops in spec *)
+  let _ =
+    match im_new_defs with
+    | [] -> ()
+    | elem :: _ -> raise loc (FieldDefNotAllowed (fctx_elem_id elem))
+  in
+  add_fctx_ops real_im_spec.spec_op_ctx;
+  add_fctx_axioms real_im_spec.spec_axioms
+
+(* Start the interactive definition of a new spec *)
+let begin_new_spec spec_lid =
+  if !current_spec = None then
+    (current_spec := Some (empty_spec, located_elem spec_lid);
+     begin_module spec_lid)
+  else
+    raise (lococated_loc spec_lid) IsCurrentSpec
+
+(* Finish the interactive definition of a new spec by completing it,
+   registering it in the global table, and clearing current_spec;
+   return the newly defined spec *)
+let end_new_spec lid =
+  let loc = located_loc lid in
+  match !current_spec with
+  | Some (spec, id) ->
+     if Id.equal id (located_elem lid) then
+       (complete_spec ();
+        end_module lid;
+        register_global_spec spec (spec_locref_of_id (located_elem lid));
+        current_spec := None)
+       spec
+     else
+       raise loc WrongCurrentSpecName
+  | None -> raise loc NoCurrentSpec
+
 (* Build a new spec in a new module called spec_id, calling builder
-   inside that new module to build the spec. *)
+   inside that new module to build the spec; unlike begin_new_spec,
+   within_named spec can be nested inside another spec definition *)
 let within_named_spec spec_id builder =
-  let spec = within_module (dummy_loc, spec_id) builder in
+  let save_spec = !current_spec in
+  let _ = current_spec := Some (empty_spec, spec_id) in
+  let _ = within_module spec_id builder in
+  let spec =
+    match !current_spec with
+    | None -> anomaly (str "within_named_spec: current_spec has become empty!")
+    | Some (spec, _) -> spec
+  in
+  let _ = current_spec := save_spec in
   register_global_spec spec (spec_locref_of_id spec_id)
 
 
@@ -830,6 +934,9 @@ let subst_spec_inst subst inst =
  *** Spec Morphisms
  ***)
 
+(* Could not find a morphism from the given reference *)
+exception MorphismNotFound of reference
+
 (* A morphism contains source and target specs, a name substitution
    mapping ops from the former to the latter, and a global reference
    to an interpretation function that builds an instance of the source
@@ -838,12 +945,30 @@ type morphism = {
   morph_source : spec;
   morph_target : spec;
   morph_subst : field_subst;
-  morph_interp : global_reference
+  morph_interp : constant
 }
 
 (* The implicit argument name for the spec argument of a morphism
    interpretation function *)
-let morph_spec_arg_id = Id.of_string "Spec"
+(* let morph_spec_arg_id = Id.of_string "Spec" *)
+
+(* Global table of named morphisms *)
+let morphism_table = ref (Cmap.empty)
+
+(* Register a morphism in the morphism table *)
+let register_morphism morph =
+  morphism_table := Cmap.add morph.morph_interp morph !morphism_table
+
+(* Look up a morphism by local reference *)
+let lookup_morphism r =
+  let qualid = qualid_of_reference r in
+  try
+    match Nametab.locate with
+    | Constref c -> Cmap.find c !morphism_table
+    | _ -> raise (loc_of_reference r) (MorphismNotFound r)
+  with Not_found ->
+    raise (loc_of_reference r) (MorphismNotFound r)
+
 
 (* FIXME HERE: make a function that sets up the proof obligations for
    a morphism, and then adds it to a global morphism table when
@@ -875,7 +1000,7 @@ let mk_morph_spec_id () =
    applying the morphism substitution to the input spec, which removes
    any fields in its domain and replaces them with their correponding
    fields in the co-domain of the substitution. *)
-let apply_morphism morph spec =
+let apply_morphism loc morph spec =
   let spec_id = mk_morph_spec_id () in
   let (rem_spec, removed_defs) = spec_subtract spec morph.morph_source in
   let _ =
@@ -891,7 +1016,7 @@ let apply_morphism morph spec =
        with
        | Some elem_t ->
           if fctx_elem_is_def elem_t then
-            Pervasives.raise (FieldDefNotAllowed (fctx_elem_id elem))
+            raise loc (FieldDefNotAllowed (fctx_elem_id elem))
           else ()
        | None -> ())
       removed_defs
@@ -909,19 +1034,14 @@ let apply_morphism morph spec =
   (* Now build the new spec module *)
   let new_spec =
     within_named_spec
-      spec_id
+      (loc, spec_id)
       (fun () ->
-       (* Build the spec *)
-       (* FIXME: use import_spec *)
-       let spec =
-         complete_spec
-           spec_id
-           (add_fctx_axioms
-              (add_fctx_ops empty_spec new_op_ctx)
-              new_axioms) in
+       import_spec loc { spec_name = None;
+                         spec_op_ctx = new_op_ctx;
+                         spec_axioms = new_axioms };
+       complete_spec loc;
 
        (* FIXME HERE: add derived instances! (maybe return them as well?) *)
-       spec
       )
   in
   (new_spec, qualid_of_ident spec_id)
@@ -939,9 +1059,9 @@ type spec_term =
   (* A translation of the names of a spec *)
   | SpecXlate of spec_term * name_translation
   (* A spec substitution, where the morphism must be named *)
-  | SpecSubst of spec_term * qualid located
+  | SpecSubst of spec_term * reference
   (* Adding definitions to ops in a spec *)
-  | SpecAddDefs of spec_term * (Id.t * Constrexpr.constr_expr) list
+  | SpecAddDefs of spec_term * (lident * Constrexpr.constr_expr) list
 
 (* Get the source location of a spec_term *)
 let rec spec_term_loc st =
@@ -969,7 +1089,7 @@ let rec interp_spec_term sterm : spec * spec_instance =
      (subst_spec subst spec, subst_spec_inst subst inst)
   | SpecSubst (sterm', morph_ref) ->
      let (spec, inst) = interp_spec_term sterm' in
-     let morph = lookup_morphsim (located_elem morph_ref) in
+     let morph = lookup_morphsim morph_ref in
      (* FIXME HERE: figure out what to do with inst! *)
      let (new_spec, new_locref) = apply_morphism morph spec in
      (new_spec, make_id_instance new_locref new_spec)
@@ -977,169 +1097,105 @@ let rec interp_spec_term sterm : spec * spec_instance =
      let (spec, inst) = interp_spec_term sterm' in
      (add_spec_defs spec defs, inst)
 
-(* Interpret a spec term and import it into spec, which is assumed to
-   be the current spec (as local definitions are created) *)
-let import_spec_term spec st =
+(* Interpret a spec term and import it into the current spec *)
+let import_spec_term st =
   let (im_spec, inst) = interp_spec_term st in
   (* FIXME HERE: figure out what to do with inst! *)
-  import_spec spec im_spec
-
-
-(***
- *** The data-types for specifying specs (ha ha)
- ***)
-
-(* A spec def entry is an op, axiom, or import in a spec definition *)
-type spec_def_entry =
-  (* Declaration of an op: contains its name and type *)
-  | OpEntry of lident * Constrexpr.constr_expr
-  (* Definition of an op: contains its name, type, and value *)
-  | OpDefEntry of lident * Constrexpr.constr_expr option * Constrexpr.constr_expr
-  (* Declaration of an axiom: contains its name and type *)
-  | AxEntry of lident * Constrexpr.constr_expr
-  (* Import of another spec: contains the spec name and a list of
-    "with clauses" that define some declared ops of that spec *)
-  | ImportEntry of spec_term
-
-
-(***
- *** Interpreting specs into type-classes
- ***)
-
-(* Interpret a list of spec_entries into a spec object, installing a
-   series of typeclasses and definitions into the current Coq
-   image. Also takes in an op_ctx of the ops that have been added so
-   far and the current list of fields, in reverse order, to go into
-   the axiom typeclass *)
-let rec interp_spec_def_entries spec_name op_ctx ax_fields entries =
-  match entries with
-  | [] ->
-     (* At the end of all entries, make the final, propositional
-        type-class for all the axioms and imports, and return the spec
-        object *)
-     add_typeclass spec_name false
-                   (fctx_params op_ctx) (List.rev ax_fields) ;
-     { spec_ops = op_ctx;
-       spec_axioms = List.map (fun (lid,_,_) -> located_elem lid) ax_fields
-     }
-  | OpEntry (op_name, op_type) :: entries' ->
-(*
-  | GallinaEntry (VernacAssumption ((_, Definitional), NoInline,
-                                    [false, ([op_name], op_type)]))
-    :: entries' ->
- *)
-     (* For an op declaration, make an operational typeclass
-        Class op__class {op_params} := { op : op_type }
-      *)
-     add_typeclass (add_suffix_l op_name "class") true
-                   (fctx_params op_ctx)
-                   [(op_name, op_type, false)] ;
-     interp_spec_def_entries spec_name (op_ctx_cons_decl op_name op_ctx)
-                         ax_fields entries'
-  | OpDefEntry (op_name, op_type_opt, op_body) :: entries' ->
-(*
-  | GallinaEntry (VernacDefinition
-                    ((_, Definition), op_name,
-                     DefineBody (old_params, None, op_body, op_type_opt)))
-    :: entries' ->
- *)
-     (* For an op definition, add the forms
-
-        Definition op {op_params} : op_type := op_body
-        Class op__class {op_params} := { op__def : op_type }
-
-        and add the axiom op__eq : op__def = op
-      *)
-     let op_type =
-       match op_type_opt with
-       | Some op_type -> op_type
-       | None -> CHole (located_loc op_name, None,
-                        IntroIdentifier (located_elem op_name), None)
-     in
-(*
-     let params = fctx_params op_ctx @ old_params in
- *)
-     let params = fctx_params op_ctx in
-     let op_def_id = add_suffix_l op_name "def" in
-     add_definition op_name (fctx_params op_ctx) op_type_opt op_body ;
-     add_typeclass (add_suffix_l op_name "class") true params
-                   [(op_def_id, op_type, false)] ;
-     interp_spec_def_entries spec_name (op_ctx_cons_defn op_name op_ctx)
-                         (((add_suffix_l op_name "eq"),
-                           (mk_ident_equality op_def_id op_name),
-                           false)
-                          :: ax_fields)
-                         entries'
-  | AxEntry (ax_name, ax_type) :: entries' ->
-(*
-  | GallinaEntry (VernacAssumption ((_, Logical), NoInline,
-                                    [false, ([ax_name], ax_type)]))
-    :: entries' ->
- *)
-     (* For axioms, just make a record field for the final,
-        propositional type-class and pass it forward *)
-     interp_spec_def_entries spec_name op_ctx
-                             ((ax_name, ax_type, false) :: ax_fields)
-                             entries'
-(*
-  | GallinaEntry (gallina_cmd) :: _ ->
-     raise (located_loc spec_name) (Failure "Unhandled form in spec")
- *)
-  | ImportEntry sterm :: entries' ->
-     let (im_spec, im_spec_ref) = interp_spec_term sterm in
-     interp_spec_def_entries spec_name
-                             (op_ctx_cons_import im_spec_ref im_spec op_ctx)
-                             (((dummy_loc, im_spec_ref.ax_class_name),
-                               mk_var (dummy_loc, im_spec_ref.ax_class_name), true)
-                              :: ax_fields)
-                             entries'
-
-
-(* Top-level entrypoint to interpret a spec expression *)
-let interp_spec_def spec_name entries =
-  within_module spec_name
-                (fun () ->
-                 let spec = interp_spec_def_entries spec_name [] [] entries in
-                 register_global_spec spec_name spec)
-;;
+  import_spec im_spec
 
 
 (***
  *** Additions to the Coq parser
  ***)
 
+(* Run f, catching any exceptions and turning them into user_errors *)
+(* FIXME HERE: actually write this! *)
+let reporting_exceptions f =
+  f ()
+
 (* FIXME: get the locations of all the identifiers right! *)
 
-(* Syntactic class to parse import defs *)
-VERNAC ARGUMENT EXTEND import_defs
-  | [ ident(nm) ":=" constr(def) ";" import_defs(rest) ] -> [ (nm, def)::rest ]
-  | [ ident(nm) ":=" constr(def) ] -> [ [nm, def] ]
+(* Syntactic class to parse name translation elements *)
+VERNAC ARGUMENT EXTEND name_translation_elem
+  | [ ident(lhs) "+->" ident(rhs) ] -> [ NameXSingle (lhs,rhs) ]
+  | [ ident(lhs) "%" "+->" ident(rhs) "%" ] ->
+     [ NameXPrefix (Id.to_string lhs, Id.to_string rhs) ]
 END
 
-(* New syntactic class to parse individual spec entries *)
-VERNAC ARGUMENT EXTEND spec_def_entry
-  | [ "Variable" ident(nm) ":" constr(tp) ] -> [ OpEntry ((loc, nm), tp) ]
-  | [ "Definition" ident(nm) ":" constr(tp) ":=" constr(body) ] -> [ OpDefEntry ((loc, nm), Some tp, body) ]
-  | [ "Definition" ident(nm) ":=" constr(body) ] -> [ OpDefEntry ((loc, nm), None, body) ]
-  | [ "Axiom" ident(nm) ":" constr(tp) ] -> [ AxEntry ((loc, nm), tp) ]
-  | [ "Import" global(spec_term) ] -> [ ImportEntry (SpecRef spec_term) ]
+(* Syntactic class to parse name translations *)
+VERNAC ARGUMENT EXTEND name_translation
+  | [ name_translation_elem(elem) ";" name_translation (rest) ] -> [ elem::rest ]
+  | [ name_translation_elem(elem) ] -> [ [elem] ]
 END
 
-type spec_entries = spec_def_entry list
+(* Syntactic class to parse spec term defs *)
+type spec_term_defs = (lident * Constrexpr.constr_expr) list
+VERNAC ARGUMENT EXTEND spec_term_defs
+  | [ ident(id) ":=" constr(def) ";" import_defs(rest) ] -> [ ((loc,id), def)::rest ]
+  | [ ident(id) ":=" constr(def) ] -> [ [(loc,id), def] ]
+END
 
-(* New syntactic class to parse lists of one or more spec entries,
-   separated by semicolons *)
-VERNAC ARGUMENT EXTEND spec_entries
-  | [ spec_def_entry(entry) ";" spec_entries(rest) ] -> [ entry::rest ]
-  | [ spec_def_entry(entry) ] -> [ [entry] ]
+(* Syntactic class to parse spec terms *)
+VERNAC ARGUMENT EXTEND spec_term
+  | [ global(r) ] -> [ SpecRef r ]
+  | [ spec_term(st) "{" name_translation(xlate) "}" ] -> [ SpecXlate (st, xlate) ]
+  | [ spec_term(st) "[" global(morph_ref) "]" ] -> [ SpecSubst (st, morph_ref) ]
+  | [ spec_term(st) "with" spec_term_defs(defs) ] -> [ SpecAddDefs (st, defs) ]
 END
 
 (* Top-level syntax for specs *)
 VERNAC COMMAND EXTEND Spec
-  | [ "Spec" ident(spec_name) "{" spec_entries(entries) "}" ]
+  (* Define a spec via a spec term *)
+  | [ "Spec" ident(spec_name) ":=" spec_term(st) ]
     => [ (Vernacexpr.VtSideff [spec_name], Vernacexpr.VtLater) ]
-    -> [ interp_spec_def (dummy_loc, spec_name) entries ]
-  | [ "Spec" ident(spec_name) "{" "}" ]
+    -> [ reporting_exceptions
+           (fun () ->
+            within_named_spec (loc, spec_name)
+                              (fun () ->
+                               import_spec_term st;
+                               complete_spec ())) ]
+
+  (* Start an interactive spec definition *)
+  | [ "Spec" ident(spec_name) ]
     => [ (Vernacexpr.VtSideff [spec_name], Vernacexpr.VtLater) ]
-    -> [ interp_spec_def (dummy_loc, spec_name) [] ]
+    -> [ reporting_exceptions
+           (fun () ->
+            begin_new_spec (loc, spec_name)) ]
+
+  (* End an interactive spec definition *)
+  | [ "Spec" "End" ident(spec_name) ]
+    => [ (Vernacexpr.VtSideff [spec_name], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () ->
+            end_new_spec (loc, spec_name)) ]
+
+  (* Add a declared op *)
+  | [ "Spec" "Variable" ident(id) ":" constr(tp) ]
+    => [ (Vernacexpr.VtSideff [id], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () -> add_declared_op (loc,id) tp) ]
+
+  (* Add a defined op with a type *)
+  | [ "Spec" "Definition" ident(id) ":" constr(tp) ":=" constr(body) ]
+    => [ (Vernacexpr.VtSideff [id], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () -> add_defined_op (loc,id) (Some tp) body) ]
+  (* Add a defined op without a type *)
+  | [ "Spec" "Definition" ident(id) ":=" constr(body) ]
+    => [ (Vernacexpr.VtSideff [id], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () -> add_defined_op (loc,id) None body) ]
+
+  (* Add an axiom *)
+  | [ "Spec" "Axiom" ident(id) ":" constr(tp) ]
+    => [ (Vernacexpr.VtSideff [id], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () -> add_axiom (loc,id) tp) ]
+
+  (* Import a spec term *)
+  | [ "Spec" "Import" spec_term(st) ]
+    => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () -> import_spec_term st) ]
+
 END
