@@ -1,12 +1,33 @@
 
 Declare ML Module "specware".
 
-Spec S1 {
-       Variable T : Type ;
-       Variable x : T ;
-       Variable y : T ;
-       Definition id_T : (T -> T) := (fun x => x)
-     }.
+Spec Monoid.
+
+Spec Variable T : Type.
+Spec Variable m_zero : T.
+Spec Variable m_plus : (T -> T -> T).
+Spec Definition id_T : (T -> T) := (fun x => x).
+
+Spec Axiom m_zero_left : (forall x, m_plus m_zero x = x).
+Spec Axiom m_zero_right : (forall x, m_plus x m_zero = x).
+Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z).
+
+Spec End Monoid.
+
+Print Monoid.
+
+Module MonTest.
+
+Class T__class : Type := { T : Monoid.T__class }.
+Class m_zero__class `{T__param:T__class} : Type :=
+  { m_zero : Monoid.m_zero__class (T__param:=T__param) }.
+
+Spec Group.
+
+Spec Import Monoid.
+
+Spec End Group.
+
 
 Class foo `{S1.S1} : Type := { }.
 Set Printing All.
