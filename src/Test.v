@@ -6,7 +6,7 @@ Spec Monoid.
 Spec Variable T : Type.
 Spec Variable m_zero : T.
 Spec Variable m_plus : (T -> T -> T).
-Spec Definition id_T : (T -> T) := (fun x => x).
+(* Spec Definition id_T : (T -> T) := (fun x => x). *)
 
 Spec Axiom m_zero_left : (forall x, m_plus m_zero x = x).
 Spec Axiom m_zero_right : (forall x, m_plus x m_zero = x).
@@ -14,19 +14,29 @@ Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus 
 
 Spec End Monoid.
 
-Print Monoid.
+Module MonXlate.
 
-Module MonTest.
+Class U__class : Type := { U : Monoid.T__class }.
+Instance T__inst {U__param:U__class} : Monoid.T__class := U.
+Class m_zero__class {U__param:U__class} : Type :=
+  { m_zero : Monoid.m_zero__class (T__param:= T__inst (U__param:=U__param)) }.
+Instance m_zero__inst {U__param:U__class} {m_zero__param:m_zero__class}
+  : Monoid.m_zero__class := m_zero.
 
-Class T__class : Type := { T : Monoid.T__class }.
-Class m_zero__class `{T__param:T__class} : Type :=
-  { m_zero : Monoid.m_zero__class (T__param:=T__param) }.
+End MonXlate.
 
+
+(* FIXME: cannot import definitions *)
+(* FIXME: translation does not seem to work... *)
 Spec Group.
 
-Spec Import Monoid.
+Spec Import Monoid {m_zero +-> g_zero}.
+
+Spec Variable m_inv : (T -> T).
 
 Spec End Group.
+
+Print Group.
 
 
 Class foo `{S1.S1} : Type := { }.
