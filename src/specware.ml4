@@ -232,9 +232,7 @@ let add_typeclass class_id is_op_class params fields =
                           match fields with
                           | [] -> Constructors []
                           | [(id, tp, _)] ->
-                             Constructors [false, (id, Constrexpr_ops.mkCProdN
-                                                         (located_loc id)
-                                                         params tp)]
+                             Constructors [false, (id, tp)]
                           | _ -> raise (located_loc class_id) (Failure "add_typeclass")
                         else
                           RecordDecl (None, List.map mk_record_field fields)),
@@ -872,7 +870,7 @@ let add_defined_op op_name op_type_opt op_body =
   let _ = Format.eprintf "\nadd_defined_op: %s\n" (Id.to_string op_id) in
 
   (* Add a definition op_name = op_body *)
-  let def_defn = add_local_definition op_name op_ctx op_type_opt op_body in
+  let def_defn = add_local_definition op_name op_ctx (Some op_type) op_body in
 
   (* Add a type-class for op_name__var : op_type *)
   let tp_defn = add_local_typeclass (loc, field_class_id op_id) true
