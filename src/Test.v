@@ -6,7 +6,7 @@ Spec Monoid.
 Spec Variable T : Type.
 Spec Variable m_zero : T.
 Spec Variable m_plus : (T -> T -> T).
-(* Spec Definition id_T : (T -> T) := (fun x => x). *)
+Spec Definition id_T : (T -> T) := (fun x => x).
 
 Spec Axiom m_zero_left : (forall x, m_plus m_zero x = x).
 Spec Axiom m_zero_right : (forall x, m_plus x m_zero = x).
@@ -27,12 +27,33 @@ End MonXlate.
 
 
 (* FIXME: cannot import definitions *)
-(* FIXME: translation does not seem to work... *)
 Spec Group.
+Set Printing All.
+Print Monoid.id_T__class.
+Print Monoid.
 
-Spec Import Monoid {m_zero +-> g_zero}.
+(*
+Toplevel input, characters 27-33:
+Error:
+In environment
+T__param : T__class
+g_zero__param : @g_zero__class T__param
+g_plus__param : @g_plus__class T__param g_zero__param
+The term
+ "@Monoid.id_T (@T__inst T__param) (@g_zero T__param g_zero__param T__param)
+    (@g_plus T__param g_zero__param g_plus__param T__param g_zero__param)"
+has type
+ "forall _ : @Monoid.T (@T__inst T__param), @Monoid.T (@T__inst T__param)"
+while it is expected to have type
+ "@Monoid.id_T__class (@T__inst T__param)
+    (@g_zero T__param g_zero__param T__param)
+    (@g_plus T__param g_zero__param g_plus__param T__param g_zero__param)"
+(cannot unify "Monoid.T__class" and "@Monoid.T (@T__inst T__param)").
+*)
 
-Spec Variable m_inv : (T -> T).
+Spec Import Monoid {m_% +-> g_%}.
+
+Spec Variable g_inv : (T -> T).
 
 Spec End Group.
 
