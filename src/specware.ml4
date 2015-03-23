@@ -431,21 +431,22 @@ let subst_to_nonlocal_args subst =
  *** Field Contexts
  ***)
 
+(* FIXME: document this type! *)
+type spec_defn =
+  | Local_Defn of Id.t * Id.t list
+  | Global_Defn of global_reference * field_subst
+  | Term_Defn of constr_expr * Id.t list
+
 (* A field context specifies a list of named fields, each of which has
-   a type and an optional definition. Types and definitions are given
-   as global references to existing definitions applied to some number
-   of named arguments, the latter being given as a name substitution
-   mapping the argument names to earlier fields in the context.
+   a type and an optional definition. Fields can also be marked as
+   "ghost fields", meaning that they are actually derived from other
+   fields (e.g., equality axioms being derived from defined fields).
 
    NOTE: field contexts are stored backwards, in that the "earlier"
    fields are stored later in the list; i.e., fields can only refer to
    fields later in a field context. This is to make it easy to add new
    fields as we go *)
-type spec_defn =
-  | Local_Defn of Id.t * Id.t list
-  | Global_Defn of global_reference * field_subst
-  | Term_Defn of constr_expr * Id.t list
-type fctx_elem = | FCtx_Elem of Id.t * spec_defn * spec_defn option
+type fctx_elem = | FCtx_Elem of Id.t * bool * spec_defn * spec_defn option
 type fctx = fctx_elem list
 
 (* Get the fields referenced by the args of a spec_defn *)
@@ -471,11 +472,13 @@ let spec_defn_is_global d =
 
 (* Accessors for fctx_elems *)
 let fctx_elem_id fctx_elem =
-  match fctx_elem with FCtx_Elem (id, _, _) -> id
+  match fctx_elem with FCtx_Elem (id, _, _, _) -> id
+let fctx_elem_is_ghost fctx_elem =
+  match fctx_elem with FCtx_Elem (_, is_ghost, _, _) -> is_ghost
 let fctx_elem_type_defn fctx_elem =
-  match fctx_elem with FCtx_Elem (_, tp, _) -> tp
+  match fctx_elem with FCtx_Elem (_, _, tp, _) -> tp
 let fctx_elem_spec_defn fctx_elem =
-  match fctx_elem with FCtx_Elem (_, _, d) -> d
+  match fctx_elem with FCtx_Elem (_, _, _, d) -> d
 
 (* Get the id for the named parameter used for a field *)
 let fctx_elem_var_id elem =
@@ -539,8 +542,9 @@ let subst_spec_defn_opt subst d_opt =
 (* Apply a name substitution to an fctx_elem *)
 let subst_fctx_elem subst elem =
   match elem with
-  | FCtx_Elem (id, tp, d) ->
-     FCtx_Elem (subst_id subst id, subst_spec_defn subst tp,
+  | FCtx_Elem (id, is_ghost, tp, d) ->
+     FCtx_Elem (subst_id subst id, is_ghost,
+                subst_spec_defn subst tp,
                 subst_spec_defn_opt subst d)
 
 (* Apply a name substitution to an fctx *)
@@ -585,8 +589,8 @@ let rec fctx_subtract check_fun fctx1 fctx2 =
   (ret_fctx, !def_subs)
 
 (* Cons a field to a field context *)
-let fctx_cons id tp_defn def_defn_opt fctx =
-  FCtx_Elem (id, tp_defn, def_defn_opt) :: fctx
+let fctx_cons id is_ghost tp_defn def_defn_opt fctx =
+  FCtx_Elem (id, is_ghost, tp_defn, def_defn_opt) :: fctx
 
 (* Convert a single fctx_elem to an implicit class assumption *)
 let fctx_elem_to_param fctx_elem =
@@ -624,8 +628,8 @@ let globalize_spec_defn d =
 (* Convert the type and (optional) of an fctx_elem to be global *)
 let globalize_fctx_elem elem =
   match elem with
-  | FCtx_Elem (id, tp, defn_opt) ->
-     FCtx_Elem (id, globalize_spec_defn tp,
+  | FCtx_Elem (id, is_ghost, tp, defn_opt) ->
+     FCtx_Elem (id, is_ghost, globalize_spec_defn tp,
                 match defn_opt with
                 | None -> None
                 | Some d -> Some (globalize_spec_defn d))
@@ -738,7 +742,7 @@ let add_spec_def spec (lid,body) =
            (* Raise an exception if lid is already defined *)
            raise (located_loc lid) (FieldDefNotAllowed id)
          else
-           FCtx_Elem (id, fctx_elem_type_defn elem,
+           FCtx_Elem (id, false, fctx_elem_type_defn elem,
                       Some (mk_term_spec_defn op_ctx' body)) :: op_ctx'
        else
          elem :: add_def_to_ctx op_ctx'
@@ -840,10 +844,10 @@ let add_declared_op op_name op_type =
     loc
     (fun s ->
      { s with
-       spec_op_ctx = fctx_cons op_id tp_defn None s.spec_op_ctx })
+       spec_op_ctx = fctx_cons op_id false tp_defn None s.spec_op_ctx })
 
 (* Add an axiom to the current spec, creating a definition for its type *)
-let add_axiom ax_name ax_type =
+let add_axiom ax_name is_ghost ax_type =
   let ax_id = located_elem ax_name in
   let loc = located_loc ax_name in
   let _ = Format.eprintf "\nadd_axiom: %s\n" (Id.to_string ax_id) in
@@ -854,7 +858,7 @@ let add_axiom ax_name ax_type =
     loc
     (fun s ->
      { s with
-       spec_axioms = fctx_cons ax_id tp_defn None s.spec_axioms })
+       spec_axioms = fctx_cons ax_id is_ghost tp_defn None s.spec_axioms })
 
 (* Add a defined op to the current spec, creating a type-class and def for it *)
 let add_defined_op op_name op_type_opt op_body =
@@ -882,11 +886,11 @@ let add_defined_op op_name op_type_opt op_body =
       loc
       (fun s ->
        { s with
-         spec_op_ctx = fctx_cons op_id tp_defn (Some def_defn) s.spec_op_ctx }) in
+         spec_op_ctx = fctx_cons op_id false tp_defn (Some def_defn) s.spec_op_ctx }) in
 
   (* Add an axiom "op_name = op_name__var" to the resulting spec *)
   add_axiom
-    (add_suffix_l op_name "eq")
+    (add_suffix_l op_name "eq") true
     (mk_ident_equality op_var_id op_name)
 
 
@@ -975,7 +979,9 @@ let add_fctx_ops loc fctx =
 (* Add all the axioms from a given fctx *)
 let add_fctx_axioms loc fctx =
   List.fold_right (fun elem () ->
-                   add_axiom (loc, fctx_elem_id elem) (fctx_elem_type elem))
+                   if fctx_elem_is_ghost elem then () else
+                     add_axiom (loc, fctx_elem_id elem) false
+                               (fctx_elem_type elem))
                   fctx ()
 
 (* Import a spec into the current spec *)
@@ -1346,7 +1352,7 @@ VERNAC COMMAND EXTEND Spec
   | [ "Spec" "Axiom" ident(id) ":" constr(tp) ]
     => [ (Vernacexpr.VtSideff [id], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () -> add_axiom (dummy_loc,id) tp) ]
+           (fun () -> add_axiom (dummy_loc,id) false tp) ]
 
   (* Import a spec term *)
   | [ "Spec" "Import" spec_term(st) ]

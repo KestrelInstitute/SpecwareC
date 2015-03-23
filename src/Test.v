@@ -4,9 +4,9 @@ Declare ML Module "specware".
 Spec Monoid.
 
 Spec Variable T : Type.
+Spec Definition id_T : (T -> T) := (fun x => x).
 Spec Variable m_zero : T.
 Spec Variable m_plus : (T -> T -> T).
-Spec Definition id_T : (T -> T) := (fun x => x).
 
 Spec Axiom m_zero_left : (forall x, m_plus m_zero x = x).
 Spec Axiom m_zero_right : (forall x, m_plus x m_zero = x).
@@ -14,6 +14,9 @@ Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus 
 
 Spec End Monoid.
 
+Print Monoid.
+
+(*
 Module MonXlate.
 
 Class U__class : Type := { U : Monoid.T__class }.
@@ -24,37 +27,13 @@ Instance m_zero__inst {U__param:U__class} {m_zero__param:m_zero__class}
   : Monoid.m_zero__class := m_zero.
 
 End MonXlate.
-
-
-(* FIXME: cannot import definitions *)
-Spec Group.
-Set Printing All.
-Print Monoid.id_T__class.
-Print Monoid.
-
-(*
-Toplevel input, characters 27-33:
-Error:
-In environment
-T__param : T__class
-g_zero__param : @g_zero__class T__param
-g_plus__param : @g_plus__class T__param g_zero__param
-The term
- "@Monoid.id_T (@T__inst T__param) (@g_zero T__param g_zero__param T__param)
-    (@g_plus T__param g_zero__param g_plus__param T__param g_zero__param)"
-has type
- "forall _ : @Monoid.T (@T__inst T__param), @Monoid.T (@T__inst T__param)"
-while it is expected to have type
- "@Monoid.id_T__class (@T__inst T__param)
-    (@g_zero T__param g_zero__param T__param)
-    (@g_plus T__param g_zero__param g_plus__param T__param g_zero__param)"
-(cannot unify "Monoid.T__class" and "@Monoid.T (@T__inst T__param)").
 *)
 
+(* FIXME: this still doesn't work! *)
+Spec Group.
 Spec Import Monoid {m_% +-> g_%}.
-
 Spec Variable g_inv : (T -> T).
-
+Spec Axiom g_inv_left : (forall (x:T), g_plus x x = g_zero).
 Spec End Group.
 
 Print Group.
