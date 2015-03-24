@@ -4,76 +4,79 @@ Declare ML Module "specware".
 Spec Monoid.
 
 Spec Variable T : Type.
+(*
+Hint Extern 0 T__class => assumption : typeclass_instances.
+Hint Extern 0 T__type => fold T__class; assumption : typeclass_instances.
+Typeclasses Opaque T__class T__type T.
+*)
+(*
 Spec Definition id_T : (T -> T) := (fun x => x).
+Hint Extern 0 id_T__class => assumption.
+Typeclasses Opaque id_T__class id_T__type id_T.
+*)
 Spec Variable m_zero : T.
+(*
+Hint Extern 0 m_zero__class => assumption : typeclass_instances.
+Typeclasses Opaque m_zero__class m_zero__type m_zero.
+*)
 Spec Variable m_plus : (T -> T -> T).
+(*
+Hint Extern 0 m_plus__class => assumption : typeclass_instances.
+Typeclasses Opaque m_plus__class m_plus__type m_plus.
+*)
+Set Printing All.
+Print m_plus__type.
 
 Spec Axiom m_zero_left : (forall x, m_plus m_zero x = x).
+Print m_zero_left__type. Print m_zero__type.
 Spec Axiom m_zero_right : (forall x, m_plus x m_zero = x).
 Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z).
 
 Spec End Monoid.
 
+Module Monoid_Thms.
+Import Monoid.
+Lemma left_id_uniq `{Monoid} (x:T) :
+  (forall y, m_plus x y = y) -> x = m_zero.
+  intros left_id.
+  rewrite <- (left_id m_zero).
+  Set Printing All.
+  Print m_zero__type. Print Monoid.
+  Eval compute in m_zero_right__type.
+  Eval compute in (@T T__param).
+  unfold T. unfold m_plus. unfold m_zero.
+  rewrite (m_zero_right H).
+
+End Monoid_Thms.
+
 Print Monoid.
+Set Printing All.
+Print Monoid.m_zero_left__type.
+Print Monoid.m_zero__type.
+Print Monoid.m_zero.
+Print Monoid.m_plus__type.
 
+Check (forall `{Monoid.m_plus__class} (x:@Monoid.T T__param), Monoid.m_plus Monoid.m_zero x = x).
 
-
-Module MonImport.
-
-Class T__class : Type := T : Monoid.T__class.
-Instance T__inst {T__param:T__class} : Monoid.T__class := T.
-Class id_T__class {T__param:T__class} : Type := id_T : Monoid.id_T__class (T__param:=@T__inst T__param).
-Instance id_T__inst {T__param:T__class} {id_T__param:id_T__class} : Monoid.id_T__class (T__param:=@T__inst T__param) := id_T.
-Class g_zero__class {T__param:T__class} {id_T__param:id_T__class} : Type :=
-  g_zero : Monoid.m_zero__class (T__param:=T__inst) (id_T__param:=id_T__inst).
-Instance m_zero__inst {T__param:T__class} {id_T__param:id_T__class}
-         {g_zero__param:g_zero__class}
-: Monoid.m_zero__class (T__param:=T__inst) (id_T__param:=id_T__inst) := g_zero.
-Class g_plus__class {T__param:T__class} {id_T__param:id_T__class}
-      {g_zero__param:g_zero__class} : Type :=
-  g_plus : Monoid.m_plus__class (T__param:=T__inst) (id_T__param:=id_T__inst)
-                                (m_zero__param:=m_zero__inst).
-Instance m_plus__inst {T__param:T__class} {id_T__param:id_T__class}
-         {g_zero__param:g_zero__class} {g_plus__param:g_plus__class}
-: Monoid.m_plus__class (T__param:=T__inst) (id_T__param:=id_T__inst)
-                       (m_zero__param:=m_zero__inst) := g_plus.
+(* FIXME: get undo to work! *)
+Spec Group.
 
 Set Printing All.
-(* FIXME HERE: this is an error! *)
-Definition g_inv_left__type {T__param:T__class} {id_T__param:id_T__class}
-           {g_zero__param:g_zero__class} {g_plus__param:g_plus__class}: Prop :=
-  forall (x:T), g_plus x x = g_zero.
 
-End MonImport.
-
-(*
-Module MonXlate.
-
-Class U__class : Type := { U : Monoid.T__class }.
-Instance T__inst {U__param:U__class} : Monoid.T__class := U.
-Class m_zero__class {U__param:U__class} : Type :=
-  { m_zero : Monoid.m_zero__class (T__param:= T__inst (U__param:=U__param)) }.
-Instance m_zero__inst {U__param:U__class} {m_zero__param:m_zero__class}
-  : Monoid.m_zero__class := m_zero.
-
-End MonXlate.
-*)
-
-(* FIXME: this still doesn't work! *)
-Spec Group.
 Spec Import Monoid {m_% +-> g_%}.
 Spec Variable g_inv : (T -> T).
-Set Printing All.
-Print id_T__class.
-Print Monoid.m_zero__class.
+Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
+Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 
-(* Spec Axiom g_inv_left : (forall (x:T), g_plus x x = g_zero). *)
-Spec Axiom g_inv_left : (forall (x:@T T__param), g_plus x x = g_zero).
 Spec End Group.
 
 Print Group.
 
 
+Lemma `{Group.Group} 
+
+
+Print Monoid.
 Class foo `{S1.S1} : Type := { }.
 Set Printing All.
 Print foo. Check Build_foo.
