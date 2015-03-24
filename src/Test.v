@@ -16,6 +16,36 @@ Spec End Monoid.
 
 Print Monoid.
 
+
+
+Module MonImport.
+
+Class T__class : Type := T : Monoid.T__class.
+Instance T__inst {T__param:T__class} : Monoid.T__class := T.
+Class id_T__class {T__param:T__class} : Type := id_T : Monoid.id_T__class (T__param:=@T__inst T__param).
+Instance id_T__inst {T__param:T__class} {id_T__param:id_T__class} : Monoid.id_T__class (T__param:=@T__inst T__param) := id_T.
+Class g_zero__class {T__param:T__class} {id_T__param:id_T__class} : Type :=
+  g_zero : Monoid.m_zero__class (T__param:=T__inst) (id_T__param:=id_T__inst).
+Instance m_zero__inst {T__param:T__class} {id_T__param:id_T__class}
+         {g_zero__param:g_zero__class}
+: Monoid.m_zero__class (T__param:=T__inst) (id_T__param:=id_T__inst) := g_zero.
+Class g_plus__class {T__param:T__class} {id_T__param:id_T__class}
+      {g_zero__param:g_zero__class} : Type :=
+  g_plus : Monoid.m_plus__class (T__param:=T__inst) (id_T__param:=id_T__inst)
+                                (m_zero__param:=m_zero__inst).
+Instance m_plus__inst {T__param:T__class} {id_T__param:id_T__class}
+         {g_zero__param:g_zero__class} {g_plus__param:g_plus__class}
+: Monoid.m_plus__class (T__param:=T__inst) (id_T__param:=id_T__inst)
+                       (m_zero__param:=m_zero__inst) := g_plus.
+
+Set Printing All.
+(* FIXME HERE: this is an error! *)
+Definition g_inv_left__type {T__param:T__class} {id_T__param:id_T__class}
+           {g_zero__param:g_zero__class} {g_plus__param:g_plus__class}: Prop :=
+  forall (x:T), g_plus x x = g_zero.
+
+End MonImport.
+
 (*
 Module MonXlate.
 
@@ -33,7 +63,12 @@ End MonXlate.
 Spec Group.
 Spec Import Monoid {m_% +-> g_%}.
 Spec Variable g_inv : (T -> T).
-Spec Axiom g_inv_left : (forall (x:T), g_plus x x = g_zero).
+Set Printing All.
+Print id_T__class.
+Print Monoid.m_zero__class.
+
+(* Spec Axiom g_inv_left : (forall (x:T), g_plus x x = g_zero). *)
+Spec Axiom g_inv_left : (forall (x:@T T__param), g_plus x x = g_zero).
 Spec End Group.
 
 Print Group.
