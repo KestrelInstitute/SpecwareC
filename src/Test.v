@@ -4,66 +4,30 @@ Declare ML Module "specware".
 Spec Monoid.
 
 Spec Variable T : Type.
-(*
-Hint Extern 0 T__class => assumption : typeclass_instances.
-Hint Extern 0 T__type => fold T__class; assumption : typeclass_instances.
-Typeclasses Opaque T__class T__type T.
-*)
-(*
-Spec Definition id_T : (T -> T) := (fun x => x).
-Hint Extern 0 id_T__class => assumption.
-Typeclasses Opaque id_T__class id_T__type id_T.
-*)
 Spec Variable m_zero : T.
-(*
-Hint Extern 0 m_zero__class => assumption : typeclass_instances.
-Typeclasses Opaque m_zero__class m_zero__type m_zero.
-*)
 Spec Variable m_plus : (T -> T -> T).
-(*
-Hint Extern 0 m_plus__class => assumption : typeclass_instances.
-Typeclasses Opaque m_plus__class m_plus__type m_plus.
-*)
-Set Printing All.
-Print m_plus__type.
 
 Spec Axiom m_zero_left : (forall x, m_plus m_zero x = x).
-Print m_zero_left__type. Print m_zero__type.
 Spec Axiom m_zero_right : (forall x, m_plus x m_zero = x).
 Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z).
 
 Spec End Monoid.
 
-Module Monoid_Thms.
-Import Monoid.
-Lemma left_id_uniq `{Monoid} (x:T) :
-  (forall y, m_plus x y = y) -> x = m_zero.
-  intros left_id.
-  rewrite <- (left_id m_zero).
-  Set Printing All.
-  Print m_zero__type. Print Monoid.
-  Eval compute in m_zero_right__type.
-  Eval compute in (@T T__param).
-  unfold T. unfold m_plus. unfold m_zero.
-  rewrite (m_zero_right H).
-
-End Monoid_Thms.
-
-Print Monoid.
-Set Printing All.
-Print Monoid.m_zero_left__type.
-Print Monoid.m_zero__type.
+Print Monoid.T.
 Print Monoid.m_zero.
-Print Monoid.m_plus__type.
-
-Check (forall `{Monoid.m_plus__class} (x:@Monoid.T T__param), Monoid.m_plus Monoid.m_zero x = x).
 
 (* FIXME: get undo to work! *)
+(* FIXME: importing axioms no longer works... *)
 Spec Group.
 
 Set Printing All.
-
+Print Monoid.m_zero_left__type.
 Spec Import Monoid {m_% +-> g_%}.
+
+Print g_plus__class.
+Print T__inst.
+Check (forall x, g_plus g_zero x = x).
+Print T.
 Spec Variable g_inv : (T -> T).
 Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
 Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
