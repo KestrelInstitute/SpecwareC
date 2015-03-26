@@ -13,9 +13,6 @@ open Constrexpr
 open Misctypes
 open Decl_kinds
 
-FIXME HERE: store the term used to build types in fctxs,
-and then map the actual terms when importing / substituting
-
 
 (***
  *** Helper functions
@@ -456,7 +453,7 @@ type fctx_elem =
     { felem_id : Id.t;
       felem_is_ghost : bool;
       felem_type_defn : spec_defn;
-      felem_class_defn : spec_defn option;
+      felem_class_defn : spec_defn option; (* FIXME HERE NOW: remove class_defn *)
       felem_def_defn : spec_defn option
     }
 type fctx = fctx_elem list
@@ -475,6 +472,31 @@ let spec_defn_term d =
   | Global_Defn (r, subst) ->
      mk_global_app_named_args r (subst_to_inst_args subst)
   | Term_Defn (t, _) -> t
+
+(* Turn a global definition into a term, reducing any global def *)
+let spec_defn_term_red params d =
+  match d with
+  | Global_Defn (r, subst) ->
+     (* FIXME HERE NOW: all this is taken from interp_definition in
+        toplevel/command.ml; also look at interp/constrintern.mli *)
+     let env = Global.env () in
+     let evdref = ref (Evd.from_env env) in
+     let impls, ((env_bl, ctx), imps1) = interp_context_evars env evdref params in
+     red_term
+       (* FIXME HERE: unfold r and all __inst instances (the LHS's of
+          the subst), and then fold all RHS's of the subst *)
+       [Unfold (List.map
+                  (fun gr -> (AllOccurrences, EvalConstRef (const_of_global gr)))
+                  (gr ::
+                     List.map (fun (id_from, id_to) ->
+                               (* FIXME HERE: should this be the inst for
+                                  id_from or id_to? *)
+                               Nametab.locate (qualid_of_ident id_to)) subst));
+        Fold (List.map
+                (fun (_, id_to) -> Fold ))]
+       params
+       (mk_global_app_named_args r (subst_to_inst_args subst))
+  | _ -> spec_defn_term d
 
 (* Return true iff d is a global definition *)
 let spec_defn_is_global d =

@@ -18,6 +18,28 @@ Qed.
 
 Class U__c : Type := U : Set.
 Instance T__inst {U__p:U__c} : T__c := U__p.
+
+Eval unfold T__inst,m_zero__c,T in (forall {U__p:U__c}, m_zero__c (T__p:=T__inst)).
+(*
+Definition g_zero__t := Eval unfold T__inst,m_zero__c,T in (forall {U__p:U__c}, m_zero__c (T__p:=T__inst)).
+*)
+(*
+Definition g_zero__t {U__p:U__c} : Type := $( apply m_zero__c; unfold m_zero__c )$.
+*)
+(*
+Definition g_zero__t {U__p:U__c} := Eval fold (@U U__p) in U__p.
+*)
+(* Print g_zero__t. *)
+
+Section blah.
+Context {U__p:U__c}.
+Definition g_zero__t := Eval fold U in U__p.
+End blah.
+Print g_zero__t.
+
+Eval unfold m_zero__c,T,T__inst in (forall {U__p:U__c}, m_zero__c (T__p:=T__inst)).
+
+
 Typeclasses Transparent T__inst.
 Class g_zero__c {U__p:U__c} : Type := g_zero : T.
 Instance m_zero__inst {U__p:U__c} {g_zero__p:g_zero__c} : m_zero__c (T__p:=T__inst) := g_zero__p.
