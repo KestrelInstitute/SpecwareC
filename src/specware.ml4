@@ -344,31 +344,44 @@ let reduce_term params reds t =
     snd (fst (Redexpr.reduction_of_red_expr env r_interp) env !evdref c) in
   uninterp_term (List.fold_left apply_redexpr (interp_term t) reds)
 
-let unfold_term params unfolds t =
+(* Fold some set of variables in c into equivalent terms, by taking
+   folds_c, a list of pairs of constrs (c_from,c_to) where c_from is
+   always a variable, and replacing all subterms of c equal to some
+   c_from in folds_c with the corresponding c_to. *)
+let rec fold_constr_vars folds_c c =
+  (* apply_fold_var searches for a constr on the LHS of folds_c that
+     equals c, and replaces c by the correponding RHS if found *)
+  let rec apply_fold_var folds_c c =
+    match folds_c with
+    | [] -> c
+    | (c_from,c_to)::folds_c' ->
+       if Constr.equal c c_from then c_to else apply_fold_var folds_c' c in
+  (* Lift a folding, due to a variable binding *)
+  let lift_folding folds_c =
+    List.map (fun (c_from,c_to) ->
+              (Vars.lift 1 c_from, Vars.lift 1 c_to)) folds_c in
+  (* The main body: recursively apply folds_c to the subterms of c *)
+  match Constr.kind c with
+  | Constr.Var _ -> apply_fold_var folds_c c
+  | Constr.Rel _ -> apply_fold_var folds_c c
+  | _ -> Constr.map_with_binders lift_folding fold_constr_vars folds_c c
+
+(* Unfold the list of global references (which must all be constants,
+   i.e., not constructors or type constructors), and then apply the
+   given folds, which are given as a list of pairs (var,term) of a
+   variable to be folded into the corresponding term (which should be
+   equal). All terms are relative to the given parameters. *)
+let unfold_fold_term params unfolds folds t =
   let env = Global.env () in
   let evdref = ref Evd.empty in
   let impls, ((env, ctx), imps1) =
     Constrintern.interp_context_evars env evdref params in
   let interp_term t = fst (Constrintern.interp_constr env !evdref t) in
   let uninterp_term c = Constrextern.extern_constr true env !evdref c in
-  let unfold_redfun =
-    Tacred.unfoldn
-      (List.map (fun gr ->
-                 match gr with
-                 | ConstRef c -> (Locus.AllOccurrences, EvalConstRef c)
-                 | _ -> raise dummy_loc (Failure "unfold_fold_term"))
-                unfolds) in
-  uninterp_term (unfold_redfun env !evdref (interp_term t))
+  let t_constr = interp_term t in
 
-(* FIXME HERE: remove the following... *)
-(* Unfold the given global references (which must all be constants) and then
-   fold the given terms, all relative to the given parameters *)
-let unfold_fold_term params unfolds folds t =
-  let env = Global.env () in
-  let evdref = ref Evd.empty in
-  let impls, ((env, ctx), imps1) =
-    Constrintern.interp_context_evars env evdref params in
   (* The following block of code comes from vernac_check_may_eval *)
+  (*
   let sigma', t_constr = Constrintern.interp_open_constr env !evdref t in
   let sigma' = Evarconv.consider_remaining_unif_problems env sigma' in
   Evarconv.check_problems_are_solved env sigma';
@@ -377,6 +390,7 @@ let unfold_fold_term params unfolds folds t =
   let env_bl = Environ.push_context uctx env in
   let t_constr = nf t_constr in
   let _ = evdref := sigma' in
+   *)
 
   let unfold_redfun =
     Tacred.unfoldn
@@ -385,21 +399,19 @@ let unfold_fold_term params unfolds folds t =
                  | ConstRef c -> (Locus.AllOccurrences, EvalConstRef c)
                  | _ -> raise dummy_loc (Failure "unfold_fold_term"))
                 unfolds) in
-  let constr_unfolded = unfold_redfun env_bl !evdref t_constr in
+  let constr_unfolded = unfold_redfun env !evdref t_constr in
 
   (* This used the fold reduction, which seemed to not work right... *)
   (*
   let fold_redfun =
     Tacred.fold_commands
-      (List.map (fun t -> fst (Constrintern.interp_constr env_bl !evdref t)) folds) in
+      (List.map (fun t -> fst (Constrintern.interp_constr env !evdref t)) folds) in
   let constr_out =
-    fold_redfun env_bl !evdref constr_unfolded in
+    fold_redfun env !evdref constr_unfolded in
    *)
 
-  (* This does our own fold *)
-  let interp_term t = fst (Constrintern.interp_constr env_bl !evdref t) in
-  let uninterp_term c = Constrextern.extern_constr true env_bl !evdref c in
-  let folds_constr =
+  (* This does our own fold, defined above *)
+  let folds_c =
     List.map (fun (id,t) ->
               let res_from = interp_term (mk_var (dummy_loc, id)) in
               let res_to = interp_term t in
@@ -408,17 +420,7 @@ let unfold_fold_term params unfolds folds t =
                                (Id.to_string id)
                                pp_constr_expr (uninterp_term res_to) in
              (res_from, res_to)) folds in
-  let rec fold_var c fs =
-    match fs with
-    | [] -> c
-    | (c_from,c_to)::fs' ->
-       if Constr.equal c c_from then c_to else fold_var c fs' in
-  let rec do_my_fold c =
-    match Constr.kind c with
-    | Constr.Var _ -> fold_var c folds_constr
-    | Constr.Rel _ -> fold_var c folds_constr
-    | _ -> Constr.map do_my_fold c in
-  let constr_out = do_my_fold constr_unfolded in
+  let constr_out = fold_constr_vars folds_c constr_unfolded in
   let res = uninterp_term constr_out in
   let _ = Format.eprintf "\nunfold_fold_term: unfolded term: %a\n" pp_constr_expr
                          (uninterp_term constr_unfolded) in
@@ -748,7 +750,6 @@ let spec_defn_term_local params d =
   match d with
   | Global_Defn (r, elims, subst) ->
      let inst_globs = subst_inst_globs subst in
-     (*
      let field_folds =
        List.map (fun id ->
                  (field_var_id id,
@@ -757,24 +758,27 @@ let spec_defn_term_local params d =
                     [(field_class_id id, mk_var (dummy_loc, field_var_id id))]))
                 (subst_range subst)
      in
-     unfold_fold_term params (r::inst_globs @ elims) field_folds
-                      (mk_global_app_named_args r (subst_to_inst_args subst))
-      *)
+     let res =
+       unfold_fold_term params (r::inst_globs @ elims) field_folds
+                        (mk_global_app_named_args r (subst_to_inst_args subst))
+     in
      (*
      let f = unfold_term [] (r :: elims) (mk_global_expl r) in
      let res =
        reduce_term params 
                    (mk_app f (List.map (fun (id_from,id_to) -> mk_var (dummy_loc, id_to)) subst)) in
       *)
+     (*
      let cbv_consts =
        List.map (fun gr -> AN (Qualid (dummy_loc, qualid_of_global gr))) (r :: elims @ inst_globs) in
      let res = reduce_term params
                            [Genredexpr.Cbv
-                              {rBeta = true; rIota = false; rZeta = false; rDelta = false;
-                               rConst = cbv_consts };
+                              {rBeta = true; rIota = false; rZeta = false; rDelta = true;
+                               rConst = [] };
                             Genredexpr.Fold
-                              (* (List.map (fun (_,id_to) -> mk_var (dummy_loc, id_to)) subst) *) []]
+                              (List.map (fun (_,id_to) -> mk_var (dummy_loc, id_to)) subst)]
                            (mk_global_app_named_args r (subst_to_inst_args subst)) in
+      *)
      let _ = Format.eprintf "\nspec_defn_term_local: returning %a\n" pp_constr_expr res in
      res
   | _ -> spec_defn_term d

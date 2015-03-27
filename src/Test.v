@@ -14,7 +14,6 @@ Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus 
 Spec End Monoid.
 
 (* FIXME: get undo to work! *)
-(* FIXME: importing axioms no longer works... *)
 Spec Group.
 
 Spec Import Monoid {m_% +-> g_%}.
@@ -25,6 +24,8 @@ Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 
 Spec End Group.
 
+Set Printing All.
+Print Group.g_zero_left__type.
 
 Section Monoid_Thms.
 Import Monoid.
@@ -46,10 +47,8 @@ Context `{Group}.
 Set Printing All.
 Lemma left_inv_uniq (x x_inv:T) :
   g_plus x_inv x = g_zero -> x_inv = g_inv x.
-  unfold T.
   intro left_inv.
   rewrite <- (g_zero_right x_inv).
-  fold g_zero g_plus.
   rewrite <- (g_inv_right x).
   rewrite g_plus_assoc.
   rewrite left_inv.
