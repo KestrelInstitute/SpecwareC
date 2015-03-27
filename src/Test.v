@@ -24,6 +24,10 @@ Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 
 Spec End Group.
 
+
+(* FIXME: make a more interesting morphism... *)
+Spec Morphism MG : Monoid -> Group { m_% +-> g_% }.
+
 Set Printing All.
 Print Group.g_zero_left__type.
 

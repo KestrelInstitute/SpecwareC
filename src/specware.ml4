@@ -447,6 +447,15 @@ let spec_locref_of_id id = qualid_of_ident id
 let field_in_spec locref fname =
   qualid_cons locref fname
 
+(* Return a local reference to the axiom typeclass of a spec given by
+   a local reference *)
+let spec_typeclass_qualid locref =
+  let _,spec_name = repr_qualid locref in
+  qualid_cons locref spec_name
+
+let spec_typeclass_ref loc locref =
+  Qualid (loc, spec_typeclass_qualid locref)
+
 (* A global reference to a spec is a global reference to the spec's
    module *)
 type spec_globref = module_path
@@ -760,7 +769,13 @@ let spec_defn_term_local params d =
      in
      let res =
        unfold_fold_term params (r::inst_globs @ elims) field_folds
-                        (mk_global_app_named_args r (subst_to_inst_args subst))
+                        (mk_global_app_named_args
+                           r
+                           (* (subst_to_inst_args subst) *)
+                           (List.map (fun (id_from,id_to) ->
+                                      (field_var_id id_from,
+                                       mk_var (dummy_loc,
+                                               field_var_id id_to))) subst))
      in
      (*
      let f = unfold_term [] (r :: elims) (mk_global_expl r) in
@@ -781,7 +796,8 @@ let spec_defn_term_local params d =
       *)
      let _ = Format.eprintf "\nspec_defn_term_local: returning %a\n" pp_constr_expr res in
      res
-  | _ -> spec_defn_term d
+  | Term_Defn (t,_) -> t
+  | _ -> anomaly (str "spec_defn_term_local")
 
 (* Build a term for the type of a field that is local to the current spec (see
    spec_defn_term_local) *)
@@ -1211,15 +1227,18 @@ let rec translate_id xlate id =
          Some (Id.of_string (pre_to ^ id_suffix))
       | None -> translate_id xlate' id)
 
-(* Resolve a name translation into a name substitution for a spec *)
-let resolve_name_translation spec xlate : field_subst =
+(* Resolve a name translation into a name substitution for a spec; if
+   the total flag is set, make the returned substitution be total on
+   all fields of spec (even if it is the identity on some of them) *)
+let resolve_name_translation ?(total=false) spec xlate : field_subst =
   concat_map (fun elem ->
               let id = elem.felem_id in
-              (*
-              let _ = Format.eprintf "resolve_name_translation: mapping field %s\n"
-                                     (Id.to_string id) in
-               *)
-              match translate_id xlate id with
+              let mapped_id =
+                match translate_id xlate id with
+                | None -> if total then Some id else None
+                | Some id' -> Some id'
+              in
+              match mapped_id with
               | Some id' ->
                  (*
                  let _ = Format.eprintf "resolve_name_translation: mapped field %s to %s\n"
@@ -1289,7 +1308,7 @@ type morphism = {
 
 (* The implicit argument name for the spec argument of a morphism
    interpretation function *)
-(* let morph_spec_arg_id = Id.of_string "Spec" *)
+let morph_spec_arg_id = Id.of_string "Spec"
 
 (* Global table of named morphisms *)
 let morphism_table = ref (Cmap.empty)
@@ -1308,10 +1327,38 @@ let lookup_morphism r =
     raise (loc_of_reference r) (MorphismNotFound r)
 
 
-(* FIXME HERE: make a function that sets up the proof obligations for
-   a morphism, and then adds it to a global morphism table when
-   finished *)
-(* let start_morphism morph_name xlate *)
+(* FIXME HERE: use spec_defn_term_local (which should actually be
+   called "global" since it interprets the term outside of a spec) for
+   the types of the parameters *)
+(* Define a named morphism from the from spec to the to spec, both
+   given by reference, via the given name translation *)
+let start_morphism morph_name from_ref to_ref xlate =
+  let loc = located_loc morph_name in
+  let from_qualid = located_elem (qualid_of_reference from_ref) in
+  let to_qualid = located_elem (qualid_of_reference to_ref) in
+  let from_spec = lookup_spec from_qualid in
+  let to_spec = lookup_spec to_qualid in
+  let subst = resolve_name_translation ~total:true from_spec xlate in
+  let finish_hook gr =
+    register_morphism
+      { morph_source = from_spec;
+        morph_target = to_spec;
+        morph_subst = subst;
+        morph_interp = match gr with
+                       | ConstRef c -> c
+                       | _ -> anomaly (str "Morphism not a constant") } in
+  ignore
+    (Classes.new_instance
+       false (* (fctx_params to_spec.spec_op_ctx @
+                [mk_implicit_assum morph_spec_arg_id
+                                   (mk_ref_app_named_args
+                                      (spec_typeclass_ref loc to_qualid) [])]) *) []
+       (lname_of_lident morph_name, Explicit,
+        (mk_ref_app_named_args (spec_typeclass_ref loc from_qualid)
+                               (subst_to_args subst)))
+       None
+       ~hook:finish_hook
+       None)
 
 
 (* Counter for building fresh spec names in apply_morphism *)
@@ -1540,5 +1587,20 @@ VERNAC COMMAND EXTEND Spec
     => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
            (fun () -> import_spec_term st) ]
+END
 
+(* Top-level syntax for morphisms *)
+VERNAC COMMAND EXTEND Morphism
+  (* Define a named morphism with the given name translation *)
+  | [ "Spec" "Morphism" ident(spec_name) ":" global(s1) "->" global(s2)
+             "{" name_translation(xlate) "}" ]
+    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity, [spec_name]),
+          Vernacexpr.VtLater) ]
+    -> [ start_morphism (dummy_loc, spec_name) s1 s2 xlate ]
+
+  (* Define a named morphism with no name translation *)
+  | [ "Spec" "Morphism" ident(spec_name) ":" global(s1) "->" global(s2) ]
+    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity, [spec_name]),
+          Vernacexpr.VtLater) ]
+    -> [ start_morphism (dummy_loc, spec_name) s1 s2 [] ]
 END
