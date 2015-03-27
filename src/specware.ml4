@@ -12,7 +12,8 @@ open Vernacentries
 open Constrexpr
 open Misctypes
 open Decl_kinds
-
+open Ppconstr
+open Genredexpr
 
 (***
  *** Helper functions
@@ -92,6 +93,9 @@ let prop_expr = Constrexpr.CSort (Loc.dummy_loc, Misctypes.GProp)
 (* Pretty-print a term (a "construction") *)
 let pp_constr fmt c = Pp.pp_with fmt (Printer.pr_constr c)
 
+(* Pretty-print a term *)
+let pp_constr_expr fmt c = Pp.pp_with fmt (Richpp.pr_constr_expr c)
+
 (* Accessors for located types *)
 let located_elem (x : 'a located) = snd x
 let located_loc (x : 'a located) = fst x
@@ -133,6 +137,11 @@ let add_suffix_l lid suffix =
 
 (* Build an expression for a variable from a located identifier *)
 let mk_var id = CRef (Ident id, None)
+
+(* Build an application *)
+let mk_app f args =
+  CApp (dummy_loc, (None, f),
+        List.map (fun arg -> (arg, None)) args)
 
 (* Build an expression for a local reference applied to named implicit
    args, where the args are given as (name,value) pairs *)
@@ -185,6 +194,12 @@ let qualid_of_global gr =
 (* Build an expression for a global applied to named implicit args *)
 let mk_global_app_named_args gr args =
   mk_ref_app_named_args (Qualid (dummy_loc, qualid_of_global gr)) args
+
+(* Build an exprssion for a global with @ in front of it *)
+let mk_global_expl gr =
+  CAppExpl (dummy_loc,
+            (None, (Qualid (dummy_loc, qualid_of_global gr)), None),
+            [])
 
 (* Build the expression t1 = t2 *)
 let mk_equality t1 t2 =
@@ -313,14 +328,29 @@ let check_equal_term params t1 t2 =
     true
   with UserError _ -> false
 
-(* Unfold the given global references (which must all be constants) and then
-   fold the given terms, all relative to the given parameters *)
-let unfold_fold_term params unfolds folds t =
+(* Apply a series of reductions to a term in a parameter context, by
+   interpreting the term to a constr, applying the reductions in order, and then
+   going back to a term *)
+let reduce_term params reds t =
   let env = Global.env () in
-  let evdref = ref (Evd.from_env env) in
-  let impls, ((env_bl, ctx), imps1) =
+  let evdref = ref Evd.empty in
+  let impls, ((env, ctx), imps1) =
     Constrintern.interp_context_evars env evdref params in
-  (* FIXME: check that evdref is empty...? (Maybe done by interp_constr?) *)
+  let interp_term t = fst (Constrintern.interp_constr env !evdref t) in
+  let uninterp_term c = Constrextern.extern_constr true env !evdref c in
+  let apply_redexpr c r =
+    let (evd,r_interp) = Tacinterp.interp_redexp env !evdref r in
+    let _ = evdref := evd in
+    snd (fst (Redexpr.reduction_of_red_expr env r_interp) env !evdref c) in
+  uninterp_term (List.fold_left apply_redexpr (interp_term t) reds)
+
+let unfold_term params unfolds t =
+  let env = Global.env () in
+  let evdref = ref Evd.empty in
+  let impls, ((env, ctx), imps1) =
+    Constrintern.interp_context_evars env evdref params in
+  let interp_term t = fst (Constrintern.interp_constr env !evdref t) in
+  let uninterp_term c = Constrextern.extern_constr true env !evdref c in
   let unfold_redfun =
     Tacred.unfoldn
       (List.map (fun gr ->
@@ -328,16 +358,72 @@ let unfold_fold_term params unfolds folds t =
                  | ConstRef c -> (Locus.AllOccurrences, EvalConstRef c)
                  | _ -> raise dummy_loc (Failure "unfold_fold_term"))
                 unfolds) in
+  uninterp_term (unfold_redfun env !evdref (interp_term t))
+
+(* FIXME HERE: remove the following... *)
+(* Unfold the given global references (which must all be constants) and then
+   fold the given terms, all relative to the given parameters *)
+let unfold_fold_term params unfolds folds t =
+  let env = Global.env () in
+  let evdref = ref Evd.empty in
+  let impls, ((env, ctx), imps1) =
+    Constrintern.interp_context_evars env evdref params in
+  (* The following block of code comes from vernac_check_may_eval *)
+  let sigma', t_constr = Constrintern.interp_open_constr env !evdref t in
+  let sigma' = Evarconv.consider_remaining_unif_problems env sigma' in
+  Evarconv.check_problems_are_solved env sigma';
+  let sigma',nf = Evarutil.nf_evars_and_universes sigma' in
+  let uctx = Evd.universe_context sigma' in
+  let env_bl = Environ.push_context uctx env in
+  let t_constr = nf t_constr in
+  let _ = evdref := sigma' in
+
+  let unfold_redfun =
+    Tacred.unfoldn
+      (List.map (fun gr ->
+                 match gr with
+                 | ConstRef c -> (Locus.AllOccurrences, EvalConstRef c)
+                 | _ -> raise dummy_loc (Failure "unfold_fold_term"))
+                unfolds) in
+  let constr_unfolded = unfold_redfun env_bl !evdref t_constr in
+
+  (* This used the fold reduction, which seemed to not work right... *)
+  (*
   let fold_redfun =
     Tacred.fold_commands
       (List.map (fun t -> fst (Constrintern.interp_constr env_bl !evdref t)) folds) in
   let constr_out =
-    fold_redfun
-      env_bl !evdref
-      (unfold_redfun env_bl !evdref
-                     (fst (Constrintern.interp_constr env_bl !evdref t))) in
-  Constrextern.extern_constr true env_bl !evdref constr_out
+    fold_redfun env_bl !evdref constr_unfolded in
+   *)
 
+  (* This does our own fold *)
+  let interp_term t = fst (Constrintern.interp_constr env_bl !evdref t) in
+  let uninterp_term c = Constrextern.extern_constr true env_bl !evdref c in
+  let folds_constr =
+    List.map (fun (id,t) ->
+              let res_from = interp_term (mk_var (dummy_loc, id)) in
+              let res_to = interp_term t in
+              let _ =
+                Format.eprintf "\nunfold_fold_term: unfolding %s to %a"
+                               (Id.to_string id)
+                               pp_constr_expr (uninterp_term res_to) in
+             (res_from, res_to)) folds in
+  let rec fold_var c fs =
+    match fs with
+    | [] -> c
+    | (c_from,c_to)::fs' ->
+       if Constr.equal c c_from then c_to else fold_var c fs' in
+  let rec do_my_fold c =
+    match Constr.kind c with
+    | Constr.Var _ -> fold_var c folds_constr
+    | Constr.Rel _ -> fold_var c folds_constr
+    | _ -> Constr.map do_my_fold c in
+  let constr_out = do_my_fold constr_unfolded in
+  let res = uninterp_term constr_out in
+  let _ = Format.eprintf "\nunfold_fold_term: unfolded term: %a\n" pp_constr_expr
+                         (uninterp_term constr_unfolded) in
+  let _ = Format.eprintf "\nunfold_fold_term: returning %a\n" pp_constr_expr res in
+  res
 
 (***
  *** Global and local references to specs
@@ -662,16 +748,35 @@ let spec_defn_term_local params d =
   match d with
   | Global_Defn (r, elims, subst) ->
      let inst_globs = subst_inst_globs subst in
-     let field_terms =
+     (*
+     let field_folds =
        List.map (fun id ->
-                 mk_id_app_named_args
-                   (dummy_loc, id)
-                   [(field_class_id id, mk_var (dummy_loc, field_var_id id))])
+                 (field_var_id id,
+                  mk_id_app_named_args
+                    (dummy_loc, id)
+                    [(field_class_id id, mk_var (dummy_loc, field_var_id id))]))
                 (subst_range subst)
-     (* [] *)
      in
-     unfold_fold_term params (r::inst_globs @ elims) field_terms
+     unfold_fold_term params (r::inst_globs @ elims) field_folds
                       (mk_global_app_named_args r (subst_to_inst_args subst))
+      *)
+     (*
+     let f = unfold_term [] (r :: elims) (mk_global_expl r) in
+     let res =
+       reduce_term params 
+                   (mk_app f (List.map (fun (id_from,id_to) -> mk_var (dummy_loc, id_to)) subst)) in
+      *)
+     let cbv_consts =
+       List.map (fun gr -> AN (Qualid (dummy_loc, qualid_of_global gr))) (r :: elims @ inst_globs) in
+     let res = reduce_term params
+                           [Genredexpr.Cbv
+                              {rBeta = true; rIota = false; rZeta = false; rDelta = false;
+                               rConst = cbv_consts };
+                            Genredexpr.Fold
+                              (* (List.map (fun (_,id_to) -> mk_var (dummy_loc, id_to)) subst) *) []]
+                           (mk_global_app_named_args r (subst_to_inst_args subst)) in
+     let _ = Format.eprintf "\nspec_defn_term_local: returning %a\n" pp_constr_expr res in
+     res
   | _ -> spec_defn_term d
 
 (* Build a term for the type of a field that is local to the current spec (see
