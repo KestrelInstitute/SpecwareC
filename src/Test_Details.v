@@ -12,8 +12,6 @@ Class m_zero_right__c {T__p:T__c} {m_zero__p:m_zero__c} {m_plus__p:m_plus__c} : 
 Class m_plus_assoc__c {T__p:T__c} {m_zero__p:m_zero__c} {m_plus__p:m_plus__c} : Prop :=
   m_plus_assoc : forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z.
 
-Set Printing All.
-
 Class Monoid {T__p:T__c} {m_zero__p:m_zero__c} {m_plus__p:m_plus__c}
       {m_zero_left__p:m_zero_left__c} {m_zero_right__p:m_zero_right__c}
       {m_plus_assoc__p:m_plus_assoc__c}
@@ -28,12 +26,26 @@ Lemma left_id_uniq `{Monoid} (x:T) :
   reflexivity.
 Qed.
 
+Require Import Coq.Arith.Plus.
+
 (* FIXME HERE: how to start building an instance of Monoid without
    already having all the proofs? *)
 Require Import Coq.Program.Tactics.
-Program Instance m_nat_inst :
+Program Definition m_nat_inst__def :
   Monoid (T__p:=nat) (m_zero__p:=O) (m_plus__p:=plus)
          (m_zero_left__p:=_) (m_zero_right__p:=_) (m_plus_assoc__p:=_) := Build_Monoid _ _ _ _ _ _.
+Obligation 1.
+constructor.
+Qed.
+Obligation 2.
+unfold m_zero_right__c; intro; rewrite <- plus_n_O; reflexivity.
+Qed.
+Obligation 3.
+unfold m_plus_assoc__c; intros. rewrite plus_assoc; reflexivity.
+Qed.
+
+Instance m_nat_inst : Monoid (T__p:=nat) (m_zero__p:=O) (m_plus__p:=plus)
+                             (m_zero_left__p:=_) (m_zero_right__p:=_) (m_plus_assoc__p:=_) := m_nat_inst__def.
 
 
 (* Old way of doing things: no classes for axioms *)
