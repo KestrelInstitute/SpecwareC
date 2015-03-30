@@ -3,10 +3,49 @@ Class T__c : Type := T : Set.
 Class m_zero__c {T__p:T__c} : Type := m_zero : T.
 Class m_plus__c {T__p:T__c} {m_zero__p:m_zero__c} : Type := m_plus : T -> T -> T.
 
+Class m_zero_left__c {T__p:T__c} {m_zero__p:m_zero__c} {m_plus__p:m_plus__c} : Prop :=
+  m_zero_left : forall x, m_plus m_zero x = x.
+
+Class m_zero_right__c {T__p:T__c} {m_zero__p:m_zero__c} {m_plus__p:m_plus__c} : Prop :=
+  m_zero_right : forall x, m_plus x m_zero = x.
+
+Class m_plus_assoc__c {T__p:T__c} {m_zero__p:m_zero__c} {m_plus__p:m_plus__c} : Prop :=
+  m_plus_assoc : forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z.
+
+Set Printing All.
+
+Class Monoid {T__p:T__c} {m_zero__p:m_zero__c} {m_plus__p:m_plus__c}
+      {m_zero_left__p:m_zero_left__c} {m_zero_right__p:m_zero_right__c}
+      {m_plus_assoc__p:m_plus_assoc__c}
+: Prop :=
+  { }.
+
+Lemma left_id_uniq `{Monoid} (x:T) :
+  (forall y, m_plus x y = y) -> x = m_zero.
+  intros left_id.
+  rewrite <- (left_id m_zero).
+  rewrite m_zero_right.
+  reflexivity.
+Qed.
+
+(* FIXME HERE: how to start building an instance of Monoid without
+   already having all the proofs? *)
+Require Import Coq.Program.Tactics.
+Program Instance m_nat_inst :
+  Monoid (T__p:=nat) (m_zero__p:=O) (m_plus__p:=plus)
+         (m_zero_left__p:=_) (m_zero_right__p:=_) (m_plus_assoc__p:=_) := Build_Monoid _ _ _ _ _ _.
+
+
+(* Old way of doing things: no classes for axioms *)
+
+Class T__c : Type := T : Set.
+Class m_zero__c {T__p:T__c} : Type := m_zero : T.
+Class m_plus__c {T__p:T__c} {m_zero__p:m_zero__c} : Type := m_plus : T -> T -> T.
+
 Class Monoid {T__p:T__c} {m_zero__p:m_zero__c} {m_plus__p:m_plus__c} : Prop :=
-  { m_zero_left : forall x, m_plus m_zero x = x;
-    m_zero_right : forall x, m_plus x m_zero = x;
-    m_plus_assoc : forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z }.
+  { m_zero_left :> m_zero_left__c;
+    m_zero_right :> m_zero_right__c;
+    m_plus_assoc : m_plus_assoc__c }.
 
 Lemma left_id_uniq `{Monoid} (x:T) :
   (forall y, m_plus x y = y) -> x = m_zero.
