@@ -484,59 +484,13 @@ let field_in_global_spec globref fname =
   field_in_spec (spec_globref_to_locref globref) fname
 
 
-(***
- *** Relative Terms
- ***
- *** These are terms that are relative to a spec, and are used for both the
- *** types and the bodies of ops, the types of axioms, and the types and bodies
- *** of theorems.
- ***)
+Field Substitutions
 
-(* A local defn is a named term that is local to a spec; the type contains the
-name and also the fields in the spec on which the definition depends *)
-type local_defn = [ `Local_Defn of Id.t * Id.t list ]
+(* A field substitution is a finite mapping on field names *)
+type field_subst = (Id.t * Id.t) list
 
-(* A local term is a term that depends on local fields in a spec *)
-type local_term = [ `Local_Term of constr_expr * Id.t list ]
-
-(* A global defn is a local defn in some other, non-local spec *)
-type global_defn = [ `Global_Defn of spec_globref * Id.t * Id.t list ]
-
-(* Any relative term *)
-type rel_term = [ local_defn | local_term | global_defn ]
-
-(* Any local relative term *)
-type local_rel_term = [ local_defn | local_term ]
-
-(* Get the fields referenced by the args of a spec term *)
-let rel_term_deps t =
-  match t with
-  | `Local_Defn (_, args) -> args
-  | `Local_Term (_, args) -> args
-  | `Global_Defn (_, _, args) -> List.map snd args
-
-(* Turn a rel_term into a constr_expr that is local to the current spec *)
-let rel_term_to_local t =
-  match t with
-  | Local_Defn (id, _) -> mk_var (dummy_loc, id)
-  | Term_Defn (t, _) -> t
-
-(* Turn a local defn into a global defn *)
-let local_defn_to_global (s:spec_globref) (d:local_defn) : global_defn =
-  match d with
-  | `Local_Defn (id, args) -> `Global_Defn (s, id, args)
-
-
-
-(***
- *** Field Substitutions
- ***)
-
-(* (\* A field substitution is a finite mapping on field names *\) *)
-(* type field_subst = (Id.t * Id.t) list *)
-
-(* (\* Make the identity substitution on the given fields *\) *)
-(* let mk_id_subst fields = List.map (fun id -> (id,id)) fields *)
+(* Make the identity substitution on the given fields *)
+let mk_id_subst fields = List.map (fun id -> (id,id)) fields
 
 (* (\* Equality on field substitutions *\) *)
 (* (\* FIXME: can the orders be different? *\) *)
@@ -548,25 +502,25 @@ let local_defn_to_global (s:spec_globref) (d:local_defn) : global_defn =
 (*      Id.equal id1 id2 && Id.equal id1' id2' && eq_subst s1' s2' *)
 (*   | _ -> false *)
 
-(* (\* Apply a field substitution to a field *\) *)
-(* let rec subst_id subst id = *)
-(*   match subst with *)
-(*   | [] -> id *)
-(*   | (id_from, id_to) :: subst' -> *)
-(*      if Id.equal id_from id then id_to else subst_id subst' id *)
+(* Apply a field substitution to a field *)
+let rec subst_id subst id =
+  match subst with
+  | [] -> id
+  | (id_from, id_to) :: subst' ->
+     if Id.equal id_from id then id_to else subst_id subst' id
 
-(* (\* Apply field substitution subst to all the fields in the range of *)
-(*    another field substitution subst2 *\) *)
-(* let rec subst_field_subst subst subst2 = *)
-(*   match subst2 with *)
-(*   | [] -> [] *)
-(*   | (id_from, id_to) :: subst2' -> *)
-(*      (id_from, subst_id subst id_to) *)
-(*      :: subst_field_subst subst subst2' *)
+(* Apply field substitution subst to all the fields in the range of
+   another field substitution subst2 *)
+let rec subst_field_subst subst subst2 =
+  match subst2 with
+  | [] -> []
+  | (id_from, id_to) :: subst2' ->
+     (id_from, subst_id subst id_to)
+     :: subst_field_subst subst subst2'
 
-(* (\* Get the range of subst, as a list of identifiers *\) *)
-(* let subst_range subst = *)
-(*   List.map snd subst *)
+(* Get the range of subst, as a list of identifiers *)
+let subst_range subst =
+  List.map snd subst
 
 (* (\* Turn a name substitution into a list of (name,value) pairs, where *)
 (*    value is a term expression; omit pairs where name = value *\) *)
@@ -592,6 +546,72 @@ let local_defn_to_global (s:spec_globref) (d:local_defn) : global_defn =
 (* let subst_inst_globs subst = *)
 (*   List.map (fun (_, id_to) -> *)
 (*             Nametab.locate (qualid_of_ident (field_inst_id id_to))) subst *)
+
+
+(***
+ *** Spec-Relative Terms
+ ***
+ *** These are terms that are relative to a spec, and are used for both the
+ *** types and the bodies of ops, the types of axioms, and the types and bodies
+ *** of theorems. We include special cases for named definitions in the current
+ *** spec and for named definition in some globally-named spec.
+ ***)
+
+(* A local defn is a named term that is local to a spec; the type contains the
+name and also the fields in the spec on which the definition depends *)
+type local_defn = [ `Local_Defn of Id.t * Id.t list ]
+
+(* A local term is a term that depends on local fields in a spec *)
+type local_term = [ `Local_Term of constr_expr * Id.t list ]
+
+(* A global defn is a local defn in some other, non-local spec *)
+type global_defn = [ `Global_Defn of spec_globref * Id.t * Id.t list ]
+
+(* Any relative term *)
+type rel_term = [ local_defn | local_term | global_defn ]
+
+(* Any local relative term *)
+type local_rel_term = [ local_defn | local_term ]
+
+(* Get the fields referenced by the args of a spec term *)
+let rel_term_deps t =
+  match t with
+  | `Local_Defn (_, args) -> args
+  | `Local_Term (_, args) -> args
+  | `Global_Defn (_, _, args) -> args
+
+(* Turn a local_rel_term into a constr_expr that is local to the current spec *)
+let local_rel_term_to_term t =
+  match t with
+  | Local_Defn (id, _) -> mk_var (dummy_loc, id)
+  | Term_Defn (t, _) -> t
+
+(* Turn a local defn into a global defn *)
+let local_defn_to_global (s:spec_globref) (d:local_defn) : global_defn =
+  match d with
+  | `Local_Defn (id, args) -> `Global_Defn (s, id, args)
+
+(* Turn a global_defn d into a constr_expr relative to a context of fields
+assumed to be in scope; it is an error if d relies on a field not in scope. *)
+let global_defn_to_term ctx d =
+  match d with
+  | `Global_Defn (s, id, args) ->
+     let _ =
+       List.iter (fun arg ->
+                  if List.exists (Id.equal arg) ctx then () else
+                    anomaly (str ("global_defn_to_term: name not in context: "
+                                  ^ Id.to_string arg)))
+                 args
+     in
+     field_in_global_spec s id
+
+(* Turn a global_defn d into a constr_expr, substituting for fields. *)
+let global_defn_to_term_subst subst d =
+  match d with
+  | `Global_Defn (s, id, args) ->
+     mk_ref_app_named_args
+       (Qualid (dummy_loc, field_in_global_spec s id),
+        List.map (fn arg -> mk_var (dummy_loc, subst_id subst arg)) args)
 
 
 (***
@@ -710,13 +730,15 @@ let mk_local_defn fctx id =
 let mk_local_term fctx body =
   `Local_Term (body, List.map (fun e -> e.felem_id) fctx)
 
-(* Subtract the fields of fctx2 from fctx1, returning both the
-   remaining fields from fctx1 and also the list of fctx elems that
-   are defined in fctx1 but not in fctx2 (intuitively, subtracting
-   fctx2 removes these fields but maybe not their definitions...);
-   also call check_fun with each pair of context elements from the two
-   contexts that match *)
-let rec fctx_subtract check_fun fctx1 fctx2 =
+(* Subtract the fields of fctx2 from fctx1, returning both the remaining fields
+   from fctx1 and also the list of fctx elems that are defined in fctx1 but not
+   in fctx2 (intuitively, subtracting fctx2 removes these fields but maybe not
+   their definitions...). Also call check_fun with each pair of context elements
+   from the two contexts that match. Note that this function can be called with
+   fctxs that have different definition types. *)
+let rec fctx_subtract : 'a 'b . ('a fctx -> 'b fctx -> unit) ->
+                        'a fctx -> 'b fctx -> ('a fctx * 'b fctx_elem list) =
+  fun check_fun fctx1 fctx2 ->
   let def_subs = ref [] in
   let ret_fctx =
     List.filter
@@ -770,6 +792,123 @@ let globalize_fctx_elem elem =
 (* Convert a local fctx into a global one *)
 let globalize_fctx (fctx:local_defn fctx) = global_defn fctx
   List.map globalize_fctx_elem fctx
+
+
+(***
+ *** The internal representation of specs
+ ***)
+
+(* A spec is represented internally as having an optional global name
+   (specs without names are called "anonymous", and are only for
+   temporary calculations) and field contexts for the ops and for the
+   axioms plus local theorems. *)
+type 'a spec = {
+  spec_name : spec_globref option; (* FIXME HERE: remove spec_name *)
+  spec_op_ctx : 'a fctx;
+  spec_axioms : 'a fctx
+}
+
+(* The types (if flag = false) or the definitions (if flag = true) of
+   the given named field in two different specs are not equal *)
+exception FieldMismatch of Id.t * bool
+
+(* Attempt to define the given field when it is not allowed *)
+exception FieldDefNotAllowed of Id.t
+
+(* (\* Apply a name substitution to a spec *\) *)
+(* let subst_spec subst spec = *)
+(*   { spec_name = None; *)
+(*     spec_op_ctx = subst_fctx subst spec.spec_op_ctx; *)
+(*     spec_axioms = subst_fctx subst spec.spec_axioms } *)
+
+(* Create an anonymous empty spec; this takes a unit argument so that it can be
+called at different definition types *)
+let empty_spec () = { spec_name = None; spec_op_ctx = []; spec_axioms = [] }
+
+
+(* Remove all the ops and axioms in spec2 from spec1, making sure that
+   they have compatible types and definitions. Note that the result is
+   not really a valid spec, since it could have some references to ops
+   that no longer exist in it. Return both this resulting pseudo-spec
+   as well as a list of the fctx_elems for any removed ops that were
+   defined in spec1 but not in spec2 (see fctx_subtract) *)
+let spec_subtract : 'a 'b . Loc.t -> 'a spec -> 'b spec ->
+                    ('a spec * 'b fctx_elem list) =
+  fun loc spec1 spec2 ->
+  let (new_op_ctx, removed_defs) =
+    fctx_subtract
+      (fun elem1 elem2 ->
+       (* Check that the types of elem1 and elem2 are equal, in the
+            context of spec1 *)
+       if not (check_equal_term (fctx_params spec1.spec_op_ctx)
+                                (fctx_elem_type elem1)
+                                (fctx_elem_type elem2)) then
+         raise loc (FieldMismatch (elem1.felem_id, false))
+
+       (* If an op is defined in both spec and source, check that
+            the definitions are equal *)
+       else if fctx_elem_is_def elem1 &&
+                 fctx_elem_is_def elem2 &&
+                   not (check_equal_term (fctx_params spec1.spec_op_ctx)
+                                         (fctx_elem_defn elem1)
+                                         (fctx_elem_defn elem2))
+       then
+         raise loc (FieldMismatch (elem1.felem_id, false))
+       else ()
+      )
+      spec1.spec_op_ctx spec2.spec_op_ctx
+  in
+  let (new_axioms, removed_thms) =
+    fctx_subtract
+      (fun elem1 elem2 ->
+       (* Check that the types of elem1 and elem2 are equal, in the
+            context of spec1 *)
+       if not (check_equal_term (fctx_params spec1.spec_op_ctx)
+                                (fctx_elem_type elem1)
+                                (fctx_elem_type elem2)) then
+         raise loc (FieldMismatch (elem1.felem_id, false))
+
+       (* We don't care about equality of proofs, so no need to
+            check definitions *)
+       else ()
+      )
+      spec1.spec_axioms spec2.spec_axioms
+  in
+  ({ spec_name = None;
+     spec_op_ctx = new_op_ctx;
+     spec_axioms = new_axioms },
+   removed_defs)
+
+
+(* Change a declared op to a defined op in a spec *)
+(* FIXME: break this down into smaller functions (e.g., on fctx's) *)
+let add_spec_def spec (lid,body) =
+  let id = located_elem lid in
+  let loc = located_loc lid in
+  (* Change the declared op lid in op_ctx to be defined *)
+  let rec add_def_to_ctx op_ctx =
+    match op_ctx with
+    | [] ->
+       (* Raise an exception if lid is not found *)
+       raise loc Not_found
+    | elem :: op_ctx' ->
+       if Id.equal id elem.felem_id then
+         if fctx_elem_is_def elem then
+           (* Raise an exception if lid is already defined *)
+           raise (located_loc lid) (FieldDefNotAllowed id)
+         else
+           fctx_elem_add_def elem (mk_term_spec_defn op_ctx' body) :: op_ctx'
+       else
+         elem :: add_def_to_ctx op_ctx'
+  in
+  { spec with
+    spec_name = None;
+    spec_op_ctx = add_def_to_ctx spec.spec_op_ctx }
+
+(* Add a list of definitions of declared ops to a spec *)
+let add_spec_defs spec defs =
+  List.fold_left add_spec_def spec defs
+
 
 
 FIXME HERE: add specs, and then spec instances
@@ -844,120 +983,6 @@ let globalize_spec_defn d =
   | _ -> raise dummy_loc (Failure "globalize_spec_defn")
 
 
-
-
-(***
- *** The internal representation of specs
- ***)
-
-(* A spec is represented internally as having an optional global name
-   (specs without names are called "anonymous", and are only for
-   temporary calculations) and field contexts for the ops and for the
-   axioms plus local theorems. *)
-type spec = {
-  spec_name : spec_globref option;
-  spec_op_ctx : fctx;
-  spec_axioms : fctx
-}
-
-(* The types (if flag = false) or the definitions (if flag = true) of
-   the given named field in two different specs are not equal *)
-exception FieldMismatch of Id.t * bool
-
-(* Attempt to define the given field when it is not allowed *)
-exception FieldDefNotAllowed of Id.t
-
-(* Apply a name substitution to a spec *)
-let subst_spec subst spec =
-  { spec_name = None;
-    spec_op_ctx = subst_fctx subst spec.spec_op_ctx;
-    spec_axioms = subst_fctx subst spec.spec_axioms }
-
-(* Create an anonymous empty spec *)
-let empty_spec = { spec_name = None; spec_op_ctx = []; spec_axioms = [] }
-
-(* Remove all the ops and axioms in spec2 from spec1, making sure that
-   they have compatible types and definitions. Note that the result is
-   not really a valid spec, since it could have some references to ops
-   that no longer exist in it. Return both this resulting pseudo-spec
-   as well as a list of the fctx_elems for any removed ops that were
-   defined in spec1 but not in spec2 (see fctx_subtract) *)
-let spec_subtract loc spec1 spec2 =
-  let (new_op_ctx, removed_defs) =
-    fctx_subtract
-      (fun elem1 elem2 ->
-       (* Check that the types of elem1 and elem2 are equal, in the
-            context of spec1 *)
-       if not (check_equal_term (fctx_params spec1.spec_op_ctx)
-                                (fctx_elem_type elem1)
-                                (fctx_elem_type elem2)) then
-         raise loc (FieldMismatch (elem1.felem_id, false))
-
-       (* If an op is defined in both spec and source, check that
-            the definitions are equal *)
-       else if fctx_elem_is_def elem1 &&
-                 fctx_elem_is_def elem2 &&
-                   not (check_equal_term (fctx_params spec1.spec_op_ctx)
-                                         (fctx_elem_defn elem1)
-                                         (fctx_elem_defn elem2))
-       then
-         raise loc (FieldMismatch (elem1.felem_id, false))
-       else ()
-      )
-      spec1.spec_op_ctx spec2.spec_op_ctx
-  in
-  let (new_axioms, removed_thms) =
-    fctx_subtract
-      (fun elem1 elem2 ->
-       (* Check that the types of elem1 and elem2 are equal, in the
-            context of spec1 *)
-       if not (check_equal_term (fctx_params spec1.spec_op_ctx)
-                                (fctx_elem_type elem1)
-                                (fctx_elem_type elem2)) then
-         raise loc (FieldMismatch (elem1.felem_id, false))
-
-       (* We don't care about equality of proofs, so no need to
-            check definitions *)
-       else ()
-      )
-      spec1.spec_axioms spec2.spec_axioms
-  in
-  ({ spec_name = None;
-     spec_op_ctx = new_op_ctx;
-     spec_axioms = new_axioms },
-   removed_defs)
-
-(* Named definitions *)
-type named_def = Id.t * constr_expr
-
-(* Change a declared op to a defined op in a spec *)
-(* FIXME: break this down into smaller functions (e.g., on fctx's) *)
-let add_spec_def spec (lid,body) =
-  let id = located_elem lid in
-  let loc = located_loc lid in
-  (* Change the declared op lid in op_ctx to be defined *)
-  let rec add_def_to_ctx op_ctx =
-    match op_ctx with
-    | [] ->
-       (* Raise an exception if lid is not found *)
-       raise loc Not_found
-    | elem :: op_ctx' ->
-       if Id.equal id elem.felem_id then
-         if fctx_elem_is_def elem then
-           (* Raise an exception if lid is already defined *)
-           raise (located_loc lid) (FieldDefNotAllowed id)
-         else
-           fctx_elem_add_def elem (mk_term_spec_defn op_ctx' body) :: op_ctx'
-       else
-         elem :: add_def_to_ctx op_ctx'
-  in
-  { spec with
-    spec_name = None;
-    spec_op_ctx = add_def_to_ctx spec.spec_op_ctx }
-
-(* Add a list of definitions of declared ops to a spec *)
-let add_spec_defs spec defs =
-  List.fold_left add_spec_def spec defs
 
 
 (***
