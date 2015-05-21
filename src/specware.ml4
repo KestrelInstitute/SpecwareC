@@ -484,7 +484,9 @@ let field_in_global_spec globref fname =
   field_in_spec (spec_globref_to_locref globref) fname
 
 
-Field Substitutions
+(***
+ *** Field Substitutions
+ ***)
 
 (* A field substitution is a finite mapping on field names *)
 type field_subst = (Id.t * Id.t) list
@@ -606,6 +608,8 @@ let global_defn_to_term ctx d =
      field_in_global_spec s id
 
 (* Turn a global_defn d into a constr_expr, substituting for fields. *)
+(* FIXME HERE: this is needed for equality testing during imports, but it should
+be possible to do it without the whole concept of a field substitution... *)
 let global_defn_to_term_subst subst d =
   match d with
   | `Global_Defn (s, id, args) ->
@@ -910,8 +914,50 @@ let add_spec_defs spec defs =
   List.fold_left add_spec_def spec defs
 
 
+(***
+ *** Global registration of specs
+ ***)
 
-FIXME HERE: add specs, and then spec instances
+(* The global table of registered specs, by spec global ref *)
+let spec_table = ref (MPmap.empty)
+
+(* Register a spec in the spec_table; this makes a spec named. NOTE:
+   this is must be called *inside* the spec's module, after
+   its axiom typeclass has been created *)
+let globalize_spec spec spec_id =
+  let _ = match spec.spec_name with
+    | Some n -> anomaly (str "globalize_spec: spec already named!")
+    | None -> ()
+  in
+  let spec_name = global_modpath (Nametab.locate (qualid_of_ident spec_id)) in
+  let global_spec =
+    { spec_name = Some spec_name;
+      spec_op_ctx = globalize_fctx spec.spec_op_ctx;
+      spec_axioms = globalize_fctx spec.spec_axioms } in
+  (*
+  Format.eprintf "\nglobalize_spec: ind (name = %s, id = %i)\n"
+                 (MutInd.to_string ind) i
+   *)
+  spec_table := MPmap.add spec_name global_spec !spec_table;
+  global_spec
+
+(* Look up a spec and its spec_globref from a local spec reference *)
+let lookup_spec_and_globref locref =
+  let globref = lookup_spec_globref locref in
+  (MPmap.find globref !spec_table, globref)
+
+(* Look up a spec from a local spec reference *)
+let lookup_spec locref = fst (lookup_spec_and_globref locref)
+
+
+(***
+ *** Spec instances
+ ***)
+
+
+
+FIXME HERE NOW: define spec instances, then importing of global_defns into local_defns,
+and then importing of specs
 
 
 
@@ -983,42 +1029,6 @@ let globalize_spec_defn d =
   | _ -> raise dummy_loc (Failure "globalize_spec_defn")
 
 
-
-
-(***
- *** Global registration of specs
- ***)
-
-(* The global table of registered specs, by spec global ref *)
-let spec_table = ref (MPmap.empty)
-
-(* Register a spec in the spec_table; this makes a spec named. NOTE:
-   this is must be called *inside* the spec's module, after
-   its axiom typeclass has been created *)
-let globalize_spec spec spec_id =
-  let _ = match spec.spec_name with
-    | Some n -> anomaly (str "globalize_spec: spec already named!")
-    | None -> ()
-  in
-  let spec_name = global_modpath (Nametab.locate (qualid_of_ident spec_id)) in
-  let global_spec =
-    { spec_name = Some spec_name;
-      spec_op_ctx = globalize_fctx spec.spec_op_ctx;
-      spec_axioms = globalize_fctx spec.spec_axioms } in
-  (*
-  Format.eprintf "\nglobalize_spec: ind (name = %s, id = %i)\n"
-                 (MutInd.to_string ind) i
-   *)
-  spec_table := MPmap.add spec_name global_spec !spec_table;
-  global_spec
-
-(* Look up a spec and its spec_globref from a local spec reference *)
-let lookup_spec_and_globref locref =
-  let globref = lookup_spec_globref locref in
-  (MPmap.find globref !spec_table, globref)
-
-(* Look up a spec from a local spec reference *)
-let lookup_spec locref = fst (lookup_spec_and_globref locref)
 
 
 (***
