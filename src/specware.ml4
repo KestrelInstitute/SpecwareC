@@ -485,69 +485,47 @@ let field_in_global_spec globref fname =
 
 
 (***
- *** Field Substitutions
+ *** Field substitutions (i.e., spec morphisms)
  ***)
 
-(* A field substitution is a finite mapping on field names *)
-type field_subst = (Id.t * Id.t) list
+(* A field context substitution maps field names to field names, possibly adding
+definitions to fields *)
+type 'a fctx_subst = (Id.t * Id.t * 'a option) list
 
 (* Make the identity substitution on the given fields *)
-let mk_id_subst fields = List.map (fun id -> (id,id)) fields
-
-(* (\* Equality on field substitutions *\) *)
-(* (\* FIXME: can the orders be different? *\) *)
-(* (\* FIXME: is this needed? *\) *)
-(* let rec eq_subst s1 s2 = *)
-(*   match (s1, s2) with *)
-(*   | ([], []) -> true *)
-(*   | ((id1, id1') :: s1', (id2, id2') :: s2') -> *)
-(*      Id.equal id1 id2 && Id.equal id1' id2' && eq_subst s1' s2' *)
-(*   | _ -> false *)
+let mk_id_subst fields = List.map (fun id -> (id, id, None)) fields
 
 (* Apply a field substitution to a field *)
 let rec subst_id subst id =
   match subst with
-  | [] -> id
-  | (id_from, id_to) :: subst' ->
-     if Id.equal id_from id then id_to else subst_id subst' id
+  | [] -> (id, None)
+  | (id_from, id_to, defn_opt) :: subst' ->
+     if Id.equal id_from id then (id_to, defn_opt) else subst_id subst' id
 
-(* Apply field substitution subst to all the fields in the range of
-   another field substitution subst2 *)
-let rec subst_field_subst subst subst2 =
-  match subst2 with
-  | [] -> []
-  | (id_from, id_to) :: subst2' ->
-     (id_from, subst_id subst id_to)
-     :: subst_field_subst subst subst2'
+(* Get, recursively, all the fields in the range of a subst *)
+let subst_deps d_deps (s : 'a fctx_subst) =
+  fold_right (fun (_, id_to, d) deps -> id_to :: d_deps d @ deps) s []
 
-(* Get the range of subst, as a list of identifiers *)
-let subst_range subst =
-  List.map snd subst
+(* An attempt to define the given field when it is already defined *)
+exception FieldAlreadyDefined of Id.t
 
-(* (\* Turn a name substitution into a list of (name,value) pairs, where *)
-(*    value is a term expression; omit pairs where name = value *\) *)
-(* let subst_to_args subst = *)
-(*   filter_map *)
-(*     (fun (id_from, id_to) -> *)
-(*      if Id.equal id_from id_to then None else *)
-(*        Some (field_var_id id_from, mk_var (dummy_loc, id_to))) *)
-(*     subst *)
-
-(* (\* Turn a name substitution into a list of pairs (name,inst), where *)
-(*    inst is the instance of the class associated with the old name (the *)
-(*    lhs) created from the new name (the rhs) *\) *)
-(* let subst_to_inst_args subst = *)
-(*   List.map *)
-(*     (fun (id_from, id_to) -> *)
-(*      (field_var_id id_from, mk_var (dummy_loc, field_inst_id id_to))) *)
-(*     subst *)
-
-(* (\* Get the global references associated with all the instances mapped to by a *)
-(*    substitution; NOTE: this only works inside a spec in which the substitution *)
-(*    is well-typed *\) *)
-(* let subst_inst_globs subst = *)
-(*   List.map (fun (_, id_to) -> *)
-(*             Nametab.locate (qualid_of_ident (field_inst_id id_to))) subst *)
+(* Compose a substitution with another one; dsubst is a helper function for
+substituting into definitions *)
+let compose_substs d_subst (s2 : 'a fctx_subst) (s1 : 'a fctx_subst) : 'a fctx_subst =
+  List.map (fun (id_from, id_to, defn_opt) ->
+            let (id_to_out, defn_opt') = subst_id s2 id_to in
+            let defn_opt_out =
+              match (defn_opt, defn_opt') with
+              | (_, None) -> defn_opt
+              | (None, _) -> defn_opt'
+              | _ ->
+                 (* NOTE: this should never happen: should be caught earlier *)
+                 raise dummy_loc (FieldAlreadyDefined id_to)
+            in
+            (id_from, id_to_out, map_opt d_subst defn_opt_out)) s1
+  (* We put s2 at the end, but note that s1 can shadow mappings in s2, since
+     the s1 mapping occur first *)
+  @ s2
 
 
 (***
@@ -564,10 +542,12 @@ name and also the fields in the spec on which the definition depends *)
 type local_defn = [ `Local_Defn of Id.t * Id.t list ]
 
 (* A local term is a term that depends on local fields in a spec *)
-type local_term = [ `Local_Term of constr_expr * Id.t list ]
+type local_term = [ `Local_Term of constr_expr * Id.t list | local_defn ]
 
-(* A global defn is a local defn in some other, non-local spec *)
-type global_defn = [ `Global_Defn of spec_globref * Id.t * Id.t list ]
+(* A global defn is a local defn in some other, non-local spec, whose fields
+have possibly been mapped / substituted for *)
+type global_defn = [ `Global_Defn of spec_globref * Id.t * global_defn fctx_subst ]
+type global_subst = global_defn fctx_subst
 
 (* Any relative term *)
 type rel_term = [ local_defn | local_term | global_defn ]
@@ -576,46 +556,85 @@ type rel_term = [ local_defn | local_term | global_defn ]
 type local_rel_term = [ local_defn | local_term ]
 
 (* Get the fields referenced by the args of a spec term *)
-let rel_term_deps t =
+let rec rel_term_deps t =
   match t with
   | `Local_Defn (_, args) -> args
   | `Local_Term (_, args) -> args
-  | `Global_Defn (_, _, args) -> args
+  | `Global_Defn (_, _, subst) ->
+     subst_deps rel_term_deps subst
 
-(* Turn a local_rel_term into a constr_expr that is local to the current spec *)
-let local_rel_term_to_term t =
+(* Get the fields referenced by a global_subst *)
+let global_subst_deps (s : global_subst) =
+  subst_deps rel_term_deps subst
+
+(* Turn a local_term into a constr_expr that is local to the current spec *)
+let local_term_to_term t =
   match t with
-  | Local_Defn (id, _) -> mk_var (dummy_loc, id)
-  | Term_Defn (t, _) -> t
+  | `Local_Defn (id, _) -> mk_var (dummy_loc, id)
+  | `Term_Defn (t, _) -> t
 
 (* Turn a local defn into a global defn *)
 let local_defn_to_global (s:spec_globref) (d:local_defn) : global_defn =
   match d with
-  | `Local_Defn (id, args) -> `Global_Defn (s, id, args)
+  | `Local_Defn (id, fields) -> `Global_Defn (s, id, mk_id_subst fields)
 
-(* Turn a global_defn d into a constr_expr relative to a context of fields
-assumed to be in scope; it is an error if d relies on a field not in scope. *)
-let global_defn_to_term ctx d =
-  match d with
-  | `Global_Defn (s, id, args) ->
-     let _ =
-       List.iter (fun arg ->
-                  if List.exists (Id.equal arg) ctx then () else
-                    anomaly (str ("global_defn_to_term: name not in context: "
-                                  ^ Id.to_string arg)))
-                 args
-     in
-     field_in_global_spec s id
-
-(* Turn a global_defn d into a constr_expr, substituting for fields. *)
-(* FIXME HERE: this is needed for equality testing during imports, but it should
-be possible to do it without the whole concept of a field substitution... *)
-let global_defn_to_term_subst subst d =
+(* Versions of the below that do not perform type checks. These are the
+underlying implementations, and should not be called directly *)
+let rec global_defn_to_term_nocheck d =
   match d with
   | `Global_Defn (s, id, args) ->
      mk_ref_app_named_args
        (Qualid (dummy_loc, field_in_global_spec s id),
-        List.map (fn arg -> mk_var (dummy_loc, subst_id subst arg)) args)
+        global_subst_to_args_nocheck args)
+  with global_subst_to_args_nocheck (args:global_subst) =
+         List.map (fun (id_from, id_to, opt_def) ->
+                   (id_from,
+                    match opt_def with
+                    | Some d -> global_defn_to_term_nocheck d
+                    | None -> mk_var (dummy_loc, id_to))) args
+
+(* Turn a global_defn d into a constr_expr relative to a context of fields
+assumed to be in scope; it is an error if d relies on a field not in scope. *)
+let global_defn_to_term ctx d =
+  let _ = List.iter (fun f ->
+                     if List.exists (Id.equal f) ctx then () else
+                       anomaly (str ("global_defn_to_term: name not in context: "
+                                     ^ Id.to_string f)))
+                    (rel_term_deps d)
+  in
+  global_defn_to_term_nocheck d
+
+(* Turn a global_subst into a list of pairs (field_name, term) *)
+let global_subst_to_args ctx (args:global_subst) =
+  let _ = List.iter (fun f ->
+                     if List.exists (Id.equal f) ctx then () else
+                       anomaly (str ("global_subst_to_args: name not in context: "
+                                     ^ Id.to_string f)))
+                    (global_subst_deps args)
+  in
+  global_subst_to_args_nocheck args
+
+(* Turn any rel_term into a constr_expr *)
+let rel_term_to_term ctx (rel:rel_term) =
+  match rel with
+  | `Local_Defn _ -> local_term_to_term rel
+  | `Term_Defn _ -> local_term_to_term rel
+  | `Global_Defn (s,id,args) ->
+     global_defn_to_term ctx (`Global_Defn (s,id,args))
+
+(* Turn a rel_term into a constr_expr when we assume the rel_term is valid... *)
+let rel_term_to_term_nocheck (rel:rel_term) =
+  match rel with
+  | `Local_Defn _ -> local_term_to_term rel
+  | `Term_Defn _ -> local_term_to_term rel
+  | `Global_Defn (s,id,args) ->
+     global_defn_to_term_nocheck (`Global_Defn (s,id,args))
+
+(* Apply a substitution to a global_defn *)
+let rec subst_global_defn (subst:global_subst) (d:global_defn) : global_defn =
+  match d with
+  | `Global_Defn (s, id, args) ->
+     `Global_Defn (s, id, compose_substs (subst_global_defn subst) subst args)
 
 
 (***
@@ -641,6 +660,9 @@ type 'a fctx_elem =
     }
 type 'a fctx = 'a fctx_elem list
 
+type local_fctx = local_defn fctx
+type global_fctx = global_defn fctx
+
 (* Build the identifier used to quantify over a field as a local
    variable *)
 let field_var_id f = add_suffix f "param"
@@ -659,20 +681,10 @@ let fctx_elem_var_id elem =
   field_var_id elem.felem_id
 
 (* Return true iff an fctx_elem is defined *)
-let fctx_elem_is_def elem =
+let fctx_elem_has_def elem =
   match elem.felem_def_defn with
   | Some _ -> true
   | None -> false
-
-(* Build a term, local to the current spec, for the type of a field *)
-let fctx_elem_local_type elem =
-  rel_term_to_local elem.felem_type
-
-(* Build a term, local to the current spec, for the defn of a field *)
-let fctx_elem_local_defn elem =
-  match elem.felem_defn with
-  | Some d -> rel_term_to_local d
-  | None -> raise dummy_loc (Failure "fctx_elem_defn")
 
 (* Get the fields referenced by the args in an fctx_elem *)
 let fctx_elem_deps elem =
@@ -697,35 +709,6 @@ let rec fctx_lookup fctx f =
      else
        fctx_lookup fctx' f
 
-(* (\* Apply a name substitution to a definition *\) *)
-(* let subst_spec_defn subst d = *)
-(*   match d with *)
-(*   | Global_Defn (r, elims, args) -> *)
-(*      Global_Defn (r, elims, subst_field_subst subst args) *)
-(*   | _ -> raise dummy_loc (Failure "subst_spec_defn") *)
-
-(* (\* Apply a name substitution to an optional definition *\) *)
-(* let subst_spec_defn_opt subst d_opt = *)
-(*   match d_opt with *)
-(*   | Some d -> Some (subst_spec_defn subst d) *)
-(*   | None -> None *)
-
-(* (\* Apply a name substitution to an fctx_elem *\) *)
-(* let subst_fctx_elem subst elem = *)
-(*   { felem_id = subst_id subst elem.felem_id; *)
-(*     felem_is_ghost = elem.felem_is_ghost; *)
-(*     felem_type_defn = subst_spec_defn subst elem.felem_type_defn; *)
-(*     felem_def_defn = subst_spec_defn_opt subst elem.felem_def_defn } *)
-
-(* (\* Apply a name substitution to an fctx *\) *)
-(* let subst_fctx subst fctx = *)
-(*   List.map (subst_fctx_elem subst) fctx *)
-
-(* (\* Build the identity substitution for the fields in an fctx *)
-(*    (remembering that field contexts are stored backwards) *\) *)
-(* let subst_from_fctx fctx = *)
-(*   List.rev_map (fun elem -> (elem.felem_id, elem.felem_id)) fctx *)
-
 (* Build a local_defn from an id and the current fctx *)
 let mk_local_defn fctx id =
   `Local_Defn (id, List.map (fun e -> e.felem_id) fctx)
@@ -734,41 +717,16 @@ let mk_local_defn fctx id =
 let mk_local_term fctx body =
   `Local_Term (body, List.map (fun e -> e.felem_id) fctx)
 
-(* Subtract the fields of fctx2 from fctx1, returning both the remaining fields
-   from fctx1 and also the list of fctx elems that are defined in fctx1 but not
-   in fctx2 (intuitively, subtracting fctx2 removes these fields but maybe not
-   their definitions...). Also call check_fun with each pair of context elements
-   from the two contexts that match. Note that this function can be called with
-   fctxs that have different definition types. *)
-let rec fctx_subtract : 'a 'b . ('a fctx -> 'b fctx -> unit) ->
-                        'a fctx -> 'b fctx -> ('a fctx * 'b fctx_elem list) =
-  fun check_fun fctx1 fctx2 ->
-  let def_subs = ref [] in
-  let ret_fctx =
-    List.filter
-      (fun elem1 ->
-       not (List.exists
-              (fun elem2 ->
-               Id.equal elem1.felem_id elem2.felem_id &&
-                 let _ = check_fun elem1 elem2 in
-                 let _ = if fctx_elem_is_def elem1
-                            && not (fctx_elem_is_def elem2) then
-                           def_subs := elem1 :: !def_subs
-                         else () in
-                 true)
-              fctx2))
-      fctx1 in
-  (ret_fctx, !def_subs)
-
 (* Cons a field to a field context *)
 let fctx_cons id is_ghost tp defn_opt fctx =
   { felem_id = id; felem_is_ghost = is_ghost;
     felem_type = tp; felem_defn = defn_opt } :: fctx
 
-(* Convert a single fctx_elem to an implicit class assumption *)
-let fctx_elem_to_param fctx_elem =
-  mk_implicit_assum (fctx_elem_var_id fctx_elem)
-                    (fctx_elem_local_type fctx_elem)
+(* Convert a single fctx_elem to an implicit class assumption; we use the
+nocheck function here because we assume fctx's are always well-formed *)
+let fctx_elem_to_param elem =
+  mk_implicit_assum (fctx_elem_var_id elem)
+                    (rel_term_to_term_nocheck elem.felem_type)
 
 (* Convert an fctx to a list of class parameters, one for each field
    in the context (remember: fctx is reversed) *)
@@ -777,25 +735,175 @@ let fctx_params fctx =
 
 (* Add a definition to the current module / spec, relative to the
    given fctx, and return a local_defn for the new definition *)
+(* FIXME HERE: pare down the dependencies to only those actually used! *)
 let add_local_definition id fctx type_opt body =
   let _ = add_definition id (fctx_params fctx) type_opt body in
   mk_local_defn fctx (located_elem id)
 
 (* Add a type class to the current module / spec, relative to the
-   given fctx, and return a local spec_defn for the new definition *)
+   given fctx, and return a local_defn for the new type class *)
 let add_local_typeclass id is_op_class fctx fields =
   let _ = add_typeclass id is_op_class (fctx_params fctx) fields in
   mk_local_defn fctx (located_elem id)
 
 (* Convert the type and (optional) of a local fctx_elem to be global *)
-let globalize_fctx_elem elem =
+let globalize_fctx_elem (s:spec_globref) elem =
   { elem with
-    felem_type_defn = local_defn_to_global elem.felem_type;
-    felem_def_defn = map_opt local_defn_to_global elem.felem_defn }
+    felem_type = local_defn_to_global s elem.felem_type;
+    felem_defn = map_opt (local_defn_to_global s) elem.felem_defn }
 
 (* Convert a local fctx into a global one *)
-let globalize_fctx (fctx:local_defn fctx) = global_defn fctx
-  List.map globalize_fctx_elem fctx
+let globalize_fctx (s:spec_globref) (fctx:local_defn fctx) = global_defn fctx
+  List.map (globalize_fctx_elem s) fctx
+
+(* Check the equality of two global_defns *)
+let check_equal_global_defn fctx d1 d2 =
+  let names = List.map (fun elem -> elem.felem_id) fctx in
+  check_equal_term (fctx_params fctx)
+                   (global_defn_to_term names d1)
+                   (global_defn_to_term names d2)
+
+
+(* Either the types (if flag = false) or the definitions (if flag = true) of the
+same field are different in two contexts that are supposed to be compatible *)
+exception FieldMismatch of Id.t * bool
+
+(* Combine two global_fctxs, merging any fields that they share. Also check that
+the two fctxs are compatible, meaning that any shared fields have the same types
+and definitions; raise FieldMismatch if not. *)
+let combine_global_fctxs loc (fctx1:global_fctx) (fctx2:global_fctx) =
+  (* First, build a list of all the field names and their dependencies *)
+  let names_and_deps =
+    (List.map (fun elem1 ->
+               (elem1.felem_id,
+                match fctx_lookup fctx2 elem1.felem_id with
+                | Some elem2 -> fctx_elem_deps elem1 @ fctx_elem_deps elem2
+                | None -> fctx_elem_deps elem1)))
+    @ (fliter_map (fun elem2 -> match fctx_lookup fctx1 elem2.felem_id with
+                                | None -> Some (elem2.felem_id, fctx_elem_deps elem2)
+                                | Some _ -> None) fctx2)
+  in
+  (* Next, sort the names *)
+  (* FIXME: catch the TopoCircularity exception! *)
+  let sorted_names_and_deps =
+    stable_reverse_topo_sort loc fst Id.equal snd names_and_deps
+  in
+  (* Now build up the context to return starting at the right, because fctxs are
+  stored in reverse order (inner-most bindings last) *)
+  List.fold_right
+    (fun (f, _) fctx ->
+     match (fctx_lookup fctx1 f, fctx_lookup fctx2 f) with
+     | (Some elem1, None) -> elem1
+     | (None, Some elem2) -> elem2
+     | (Some elem1, Some elem2) ->
+        (* NOTE: We just sorted the names, so the global_defn_to_term checks
+        should not possibly fail... *)
+        let _ = if not (check_equal_global_defn fctx elem1.felem_type
+                                                elem2.felem_type) then
+                  raise loc (FieldMismatch (f, false)) else ()
+        in
+        let defn_opt =
+          (match (elem1.felem_defn, elem2.felem_defn) with
+           | (Some d1, None) -> Some d1
+           | (None, Some d2) -> Some d2
+           | (Some d1, Some d2) ->
+              let _ = if not (check_equal_global_defn fctx d1 d2) then
+                        raise loc (FieldMismatch (f, true)) else ()
+              in
+              Some d1
+           | (None, None) -> None)
+        in
+        let _ = if elem1.felem_is_ghost <> elem2.felem_is_ghost then
+                  raise loc (Failure ("combine_global_fctxs: combining ghost and non-ghost fields for field name " ^ Id.to_string f))
+                else () in
+        { felem_id = f; felem_is_ghost = elem1.felem_is_ghost;
+          felem_type = tp1; felem_defn = defn_opt }
+     | (None, None) ->
+        (* This should never happen! *)
+        raise dummy_loc (Failure "combine_global_fctxs"))
+    sorted_names_and_deps []
+
+
+(* The types (if flag = false) or the definitions (if flag = true) of two
+   fields, which are mapped to the same field by a substitution, are unequal *)
+exception FieldOverlapMismatch of Id.t * Id.t * bool
+
+(* Apply an fctx substitution to an fctx. FIXME: need to document the
+assumptions of this function... *)
+(* FIXME: handle the fact that defns could require topo sorting... *)
+let subst_fctx loc (subst:field_subst) (fctx:global_fctx) : global_fctx =
+  (* First, for each field name in fctx, find the first field name later (which
+     is really earlier) in fctx that maps to the same result, if any, and store
+     it in tp_overlap_alist. Also do the same but for elements that are both
+     defined. These lists are so we can report overlap errors. *)
+  let rec mk_overlap_alist pred elems =
+    match elems with
+    | [] -> []
+    | elem :: elems' ->
+      if pred elem then
+        (try (elem.felem_id,
+              (List.find (fun elem' ->
+                          Id.equal (fst (subst_id subst elem.felem_id))
+                                   (fst (subst_id subst elem'.felem_id)))
+                         elems').felem_id) :: mk_overlap_alist elems'
+           | Not_found -> mk_overlap_alist elems')
+      else mk_overlap_alist elems'
+  in
+  let tp_overlap_alist = mk_overlap_alist (fun _ -> true) fctx in
+  let defn_overlap_alist = mk_overlap_alist (fun elem -> elem.felem_defn <> None) fctx in
+  let overlap_lookup is_defn id_from =
+    snd (List.find (fun p -> Id.equal id_from p.1)
+                   (if is_defn then defn_overlap_alist
+                    else tp_overlap_alist))
+  in
+  let raise_overlap_error id_from is_defn =
+         raise loc (FieldOverlapMismatch
+                      (id_from, overlap_lookup is_defn id_from, is_defn))
+  in
+  (* Helper function to add a definition to an fctx elem *)
+  let add_fctx_elem_defn fctx elem id_from id_to defn =
+    match elem.felem_defn with
+    | None -> { elem with felem_defn = Some defn }
+    | Some defn' ->
+       if check_equal_global_defn fctx defn defn' then elem else
+  in
+  (* Helper function to add a definition to an fctx *)
+  let rec add_fctx_defn fctx id_from id_to defn =
+    match fctx with
+    | [] -> raise loc (Failure "subst_fctx") (* Should not happen! *)
+    | elem :: fctx' ->
+      if Id.equal elem.felem_id id_to then
+        add_fctx_elem_defn fctx' elem id_from id_to defn :: fctx'
+      else
+        elem :: add_fctx_defn fctx' id_from id_to defn
+  in
+  (* Now build up the out fctx, using the overlap lists to report any errors *)
+  List.fold_right
+    (fun elem fctx_out ->
+     let id_from = elem.felem_id in
+     let (id_to, defn_opt) = subst_id subst id_from in
+     match fctx_lookup fctx_out id_to with
+     | None ->
+        let elem' = { elem with felem_id = id_to } in
+        let elem'' =
+          match defn_opt with
+          | None -> elem'
+          | Some defn -> add_fctx_elem_defn fctx_out elem' id_from id_to defn
+        in
+        elem '' :: fctx_out
+     | Some elem' ->
+        let _ =
+          if check_equal_global_defn fctx_out elem.felem_type elem'.felem_type
+          then ()
+          else raise_overlap_error id_from false
+        in
+        (match defn_opt with
+         | None -> fctx_out
+         | Some defn -> add_fctx_defn fctx_out id_from id_to defn)
+    ) fctx []
+
+
+FIXME HERE NOW: continue updating everything past here...
 
 
 (***
@@ -932,8 +1040,8 @@ let globalize_spec spec spec_id =
   let spec_name = global_modpath (Nametab.locate (qualid_of_ident spec_id)) in
   let global_spec =
     { spec_name = Some spec_name;
-      spec_op_ctx = globalize_fctx spec.spec_op_ctx;
-      spec_axioms = globalize_fctx spec.spec_axioms } in
+      spec_op_ctx = globalize_fctx spec_name spec.spec_op_ctx;
+      spec_axioms = globalize_fctx spec_name spec.spec_axioms } in
   (*
   Format.eprintf "\nglobalize_spec: ind (name = %s, id = %i)\n"
                  (MutInd.to_string ind) i
