@@ -733,18 +733,52 @@ let fctx_elem_to_param elem =
 let fctx_params fctx =
   List.rev_map fctx_elem_to_param fctx
 
+(* Apply f to any field name shared by fctx1 and fctx2 *)
+let fctx_map_shared_fields f fctx1 fctx2 =
+  List.iter (fun elem1 ->
+             match fctx_lookup fctx2 elem1.felem_id with
+             | Some _ -> f elem1.felem_id
+             | None -> ()) fctx1
+
+(* Filter an fctx to include only the given set of fields and all the fields on
+which they recursively depend. NOTE: remember that fctxs are stored backwards,
+so that fields can only depend on those occuring *later* in the list. *)
+let filter_fctx fields fctx =
+  match fctx with
+  | [] -> []
+  | elem :: fctx' ->
+     if Id.Set.mem elem.felem_id fields then
+       elem :: filter_fctx (Id.Set.union
+                              (Id.Set.of_list (fctx_elem_deps elem)) fields)
+                           fctx'
+     else
+       filter_fctx fields fctx'
+
 (* Add a definition to the current module / spec, relative to the
    given fctx, and return a local_defn for the new definition *)
-(* FIXME HERE: pare down the dependencies to only those actually used! *)
 let add_local_definition id fctx type_opt body =
-  let _ = add_definition id (fctx_params fctx) type_opt body in
-  mk_local_defn fctx (located_elem id)
+  let free_vars =
+    match type_opt with
+    | Some tp ->
+       Id.Set.union (free_vars_of_constr_expr tp) (free_vars_of_constr_expr body)
+    | None -> free_vars_of_constr_expr body
+  in
+  let fctx_free_vars = filter_fctx free_vars fctx in
+  let _ = add_definition id (fctx_params fctx_free_vars) type_opt body in
+  mk_local_defn fctx_free_vars (located_elem id)
 
 (* Add a type class to the current module / spec, relative to the
    given fctx, and return a local_defn for the new type class *)
 let add_local_typeclass id is_op_class fctx fields =
-  let _ = add_typeclass id is_op_class (fctx_params fctx) fields in
-  mk_local_defn fctx (located_elem id)
+  let free_vars =
+    match type_opt with
+    | Some tp ->
+       Id.Set.union (free_vars_of_constr_expr tp) (free_vars_of_constr_expr body)
+    | None -> free_vars_of_constr_expr body
+  in
+  let fctx_free_vars = filter_fctx free_vars fctx in
+  let _ = add_typeclass id is_op_class (fctx_params fctx_free_vars) fields in
+  mk_local_defn fctx_free_vars (located_elem id)
 
 (* Convert the type and (optional) of a local fctx_elem to be global *)
 let globalize_fctx_elem (s:spec_globref) elem =
@@ -753,7 +787,7 @@ let globalize_fctx_elem (s:spec_globref) elem =
     felem_defn = map_opt (local_defn_to_global s) elem.felem_defn }
 
 (* Convert a local fctx into a global one *)
-let globalize_fctx (s:spec_globref) (fctx:local_defn fctx) = global_defn fctx
+let globalize_fctx (s:spec_globref) (fctx:local_fctx) = global_fctx
   List.map (globalize_fctx_elem s) fctx
 
 (* Check the equality of two global_defns *)
@@ -764,14 +798,18 @@ let check_equal_global_defn fctx d1 d2 =
                    (global_defn_to_term names d2)
 
 
+(***
+ *** Merging and substituting into global field contexts
+ ***)
+
 (* Either the types (if flag = false) or the definitions (if flag = true) of the
 same field are different in two contexts that are supposed to be compatible *)
 exception FieldMismatch of Id.t * bool
 
-(* Combine two global_fctxs, merging any fields that they share. Also check that
+(* Merge two global_fctxs, merging any fields that they share. Also check that
 the two fctxs are compatible, meaning that any shared fields have the same types
 and definitions; raise FieldMismatch if not. *)
-let combine_global_fctxs loc (fctx1:global_fctx) (fctx2:global_fctx) =
+let merge_global_fctxs loc (fctx1:global_fctx) (fctx2:global_fctx) =
   (* First, build a list of all the field names and their dependencies *)
   let names_and_deps =
     (List.map (fun elem1 ->
@@ -814,13 +852,13 @@ let combine_global_fctxs loc (fctx1:global_fctx) (fctx2:global_fctx) =
            | (None, None) -> None)
         in
         let _ = if elem1.felem_is_ghost <> elem2.felem_is_ghost then
-                  raise loc (Failure ("combine_global_fctxs: combining ghost and non-ghost fields for field name " ^ Id.to_string f))
+                  raise loc (Failure ("merge_global_fctxs: merging ghost and non-ghost fields for field name " ^ Id.to_string f))
                 else () in
         { felem_id = f; felem_is_ghost = elem1.felem_is_ghost;
           felem_type = tp1; felem_defn = defn_opt }
      | (None, None) ->
         (* This should never happen! *)
-        raise dummy_loc (Failure "combine_global_fctxs"))
+        raise dummy_loc (Failure "merge_global_fctxs"))
     sorted_names_and_deps []
 
 
@@ -828,9 +866,10 @@ let combine_global_fctxs loc (fctx1:global_fctx) (fctx2:global_fctx) =
    fields, which are mapped to the same field by a substitution, are unequal *)
 exception FieldOverlapMismatch of Id.t * Id.t * bool
 
-(* Apply an fctx substitution to an fctx. FIXME: need to document the
-assumptions of this function... *)
-(* FIXME: handle the fact that defns could require topo sorting... *)
+(* Apply an fctx substitution to an fctx, raising a FieldOverlapMismatch if two
+fields with distinct types or definitions are mapped to the same field *)
+(* FIXME HERE: handle the fact that defns could require topo sorting... *)
+(* FIXME HERE: make sure the subst domain includes the whole input context... *)
 let subst_fctx loc (subst:field_subst) (fctx:global_fctx) : global_fctx =
   (* First, for each field name in fctx, find the first field name later (which
      is really earlier) in fctx that maps to the same result, if any, and store
@@ -903,123 +942,59 @@ let subst_fctx loc (subst:field_subst) (fctx:global_fctx) : global_fctx =
     ) fctx []
 
 
-FIXME HERE NOW: continue updating everything past here...
-
-
 (***
  *** The internal representation of specs
  ***)
 
-(* A spec is represented internally as having an optional global name
-   (specs without names are called "anonymous", and are only for
-   temporary calculations) and field contexts for the ops and for the
-   axioms plus local theorems. *)
+(* A spec is represented internally as having two field contexts, one for ops
+   and types (called just the "op context") and one for axioms and theorems
+   (called the "axiom context"). The latter can depend on the former, but not
+   vice-versa. *)
 type 'a spec = {
-  spec_name : spec_globref option; (* FIXME HERE: remove spec_name *)
   spec_op_ctx : 'a fctx;
-  spec_axioms : 'a fctx
+  spec_axiom_ctx : 'a fctx
 }
 
-(* The types (if flag = false) or the definitions (if flag = true) of
-   the given named field in two different specs are not equal *)
-exception FieldMismatch of Id.t * bool
+type global_spec = global_defn spec
+type local_spec = local_defn spec
 
-(* Attempt to define the given field when it is not allowed *)
-exception FieldDefNotAllowed of Id.t
+(* Two specs were merged where the given field is an op in one spec and an axiom
+in the other *)
+exception OpAxiomMismatch of Id.t
 
-(* (\* Apply a name substitution to a spec *\) *)
-(* let subst_spec subst spec = *)
-(*   { spec_name = None; *)
-(*     spec_op_ctx = subst_fctx subst spec.spec_op_ctx; *)
-(*     spec_axioms = subst_fctx subst spec.spec_axioms } *)
+(* Merge two specs by merging their op and axiom contexts *)
+let merge_specs loc spec1 spec2 =
+  (* Check for overlap between op and axiom contexts *)
+  let _ = fctx_map_shared_fields
+            (fun id -> raise loc (OpAxiomMismatch id))
+            spec1.spec_op_ctx spec2.spec_axiom_ctx in
+  let _ = fctx_map_shared_fields
+            (fun id -> raise loc (OpAxiomMismatch id))
+            spec2.spec_op_ctx spec1.spec_axiom_ctx in
+  {spec_op_ctx = merge_global_fctxs loc spec1.spec_op_ctx spec2.spec_op_ctx;
+   spec_axiom_ctx = merge_global_fctxs loc spec1.spec_axiom_ctx spec2.spec_axiom_ctx}
 
-(* Create an anonymous empty spec; this takes a unit argument so that it can be
-called at different definition types *)
-let empty_spec () = { spec_name = None; spec_op_ctx = []; spec_axioms = [] }
+(* A substitution into a spec would map an op and an axiom to the same name *)
+exception OpAxiomOverlap of Id.t * Id.t
 
-
-(* Remove all the ops and axioms in spec2 from spec1, making sure that
-   they have compatible types and definitions. Note that the result is
-   not really a valid spec, since it could have some references to ops
-   that no longer exist in it. Return both this resulting pseudo-spec
-   as well as a list of the fctx_elems for any removed ops that were
-   defined in spec1 but not in spec2 (see fctx_subtract) *)
-let spec_subtract : 'a 'b . Loc.t -> 'a spec -> 'b spec ->
-                    ('a spec * 'b fctx_elem list) =
-  fun loc spec1 spec2 ->
-  let (new_op_ctx, removed_defs) =
-    fctx_subtract
-      (fun elem1 elem2 ->
-       (* Check that the types of elem1 and elem2 are equal, in the
-            context of spec1 *)
-       if not (check_equal_term (fctx_params spec1.spec_op_ctx)
-                                (fctx_elem_type elem1)
-                                (fctx_elem_type elem2)) then
-         raise loc (FieldMismatch (elem1.felem_id, false))
-
-       (* If an op is defined in both spec and source, check that
-            the definitions are equal *)
-       else if fctx_elem_is_def elem1 &&
-                 fctx_elem_is_def elem2 &&
-                   not (check_equal_term (fctx_params spec1.spec_op_ctx)
-                                         (fctx_elem_defn elem1)
-                                         (fctx_elem_defn elem2))
-       then
-         raise loc (FieldMismatch (elem1.felem_id, false))
-       else ()
-      )
-      spec1.spec_op_ctx spec2.spec_op_ctx
-  in
-  let (new_axioms, removed_thms) =
-    fctx_subtract
-      (fun elem1 elem2 ->
-       (* Check that the types of elem1 and elem2 are equal, in the
-            context of spec1 *)
-       if not (check_equal_term (fctx_params spec1.spec_op_ctx)
-                                (fctx_elem_type elem1)
-                                (fctx_elem_type elem2)) then
-         raise loc (FieldMismatch (elem1.felem_id, false))
-
-       (* We don't care about equality of proofs, so no need to
-            check definitions *)
-       else ()
-      )
-      spec1.spec_axioms spec2.spec_axioms
-  in
-  ({ spec_name = None;
-     spec_op_ctx = new_op_ctx;
-     spec_axioms = new_axioms },
-   removed_defs)
-
-
-(* Change a declared op to a defined op in a spec *)
-(* FIXME: break this down into smaller functions (e.g., on fctx's) *)
-let add_spec_def spec (lid,body) =
-  let id = located_elem lid in
-  let loc = located_loc lid in
-  (* Change the declared op lid in op_ctx to be defined *)
-  let rec add_def_to_ctx op_ctx =
-    match op_ctx with
-    | [] ->
-       (* Raise an exception if lid is not found *)
-       raise loc Not_found
-    | elem :: op_ctx' ->
-       if Id.equal id elem.felem_id then
-         if fctx_elem_is_def elem then
-           (* Raise an exception if lid is already defined *)
-           raise (located_loc lid) (FieldDefNotAllowed id)
-         else
-           fctx_elem_add_def elem (mk_term_spec_defn op_ctx' body) :: op_ctx'
-       else
-         elem :: add_def_to_ctx op_ctx'
-  in
-  { spec with
-    spec_name = None;
-    spec_op_ctx = add_def_to_ctx spec.spec_op_ctx }
-
-(* Add a list of definitions of declared ops to a spec *)
-let add_spec_defs spec defs =
-  List.fold_left add_spec_def spec defs
+(* Apply a substitution to a spec *)
+let subst_spec loc subst spec =
+  let spec_ret = {spec_op_ctx = subst_fctx loc subst spec.spec_op_ctx;
+                  spec_axiom_ctx = subst_fctx loc subst spec.spec_axiom_ctx} in
+  (* Check for overlap between op and axiom contexts in output spec *)
+  let _ = fctx_map_shared_fields
+            (fun id ->
+             let op_id =
+               List.find (fun elem ->
+                          Id.equal (fst (subst_id subst elem.felem_id)) id)
+                         spec.spec_op_ctx in
+             let axiom_id =
+               List.find (fun elem ->
+                          Id.equal (fst (subst_id subst elem.felem_id)) id)
+                         spec.spec_axiom_ctx in
+             raise loc (OpAxiomOverlap (op_id, axiom_id)))
+            spec_ret.spec_op_ctx spec_ret.spec_axiom_ctx in
+  spec_ret
 
 
 (***
@@ -1029,18 +1004,12 @@ let add_spec_defs spec defs =
 (* The global table of registered specs, by spec global ref *)
 let spec_table = ref (MPmap.empty)
 
-(* Register a spec in the spec_table; this makes a spec named. NOTE:
-   this is must be called *inside* the spec's module, after
-   its axiom typeclass has been created *)
-let globalize_spec spec spec_id =
-  let _ = match spec.spec_name with
-    | Some n -> anomaly (str "globalize_spec: spec already named!")
-    | None -> ()
-  in
+(* Register a spec in the spec_table. NOTE: this is must be called *inside* the
+   spec's module, after its axiom typeclass has been created *)
+let globalize_spec (spec:local_spec) spec_id =
   let spec_name = global_modpath (Nametab.locate (qualid_of_ident spec_id)) in
   let global_spec =
-    { spec_name = Some spec_name;
-      spec_op_ctx = globalize_fctx spec_name spec.spec_op_ctx;
+    { spec_op_ctx = globalize_fctx spec_name spec.spec_op_ctx;
       spec_axioms = globalize_fctx spec_name spec.spec_axioms } in
   (*
   Format.eprintf "\nglobalize_spec: ind (name = %s, id = %i)\n"
