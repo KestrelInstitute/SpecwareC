@@ -870,7 +870,7 @@ exception FieldOverlapMismatch of Id.t * Id.t * bool
 fields with distinct types or definitions are mapped to the same field *)
 (* FIXME HERE: handle the fact that defns could require topo sorting... *)
 (* FIXME HERE: make sure the subst domain includes the whole input context... *)
-let subst_fctx loc (subst:field_subst) (fctx:global_fctx) : global_fctx =
+let subst_fctx loc (subst:global_subst) (fctx:global_fctx) : global_fctx =
   (* First, for each field name in fctx, find the first field name later (which
      is really earlier) in fctx that maps to the same result, if any, and store
      it in tp_overlap_alist. Also do the same but for elements that are both
@@ -1031,12 +1031,28 @@ let lookup_spec locref = fst (lookup_spec_and_globref locref)
  *** Spec instances
  ***)
 
+(* A potential spec instance is a pair of the name of the spec that we have an
+instance of, and the subst that goes from that spec to the current spec. (The
+"current spec" is always left implicit.) This spec instance is "potential"
+because we have not made any typeclass instances for it yet. *)
+type pot_spec_instance = spec_globref * global_subst
+
+(* An actual spec instance is a potential spec instance that has typeclass
+instances associated with each mapping in the subst. The association list maps
+field names in the domain of the subst to names (in the local module) of
+typeclass instances for those fields, while the last name gives the name of a
+typeclass instance of the axiom typeclass for the given global spec. *)
+type actual_spec_instance = spec_globref * global_subst * (Id.t * Id.t) list * Id.t
+
+
 
 
 FIXME HERE NOW: define spec instances, then importing of global_defns into local_defns,
 and then importing of specs
 
 
+FIXME HERE NOW: I think the name_translation stuff has been updated correctly, but
+still need to do the spec_term section...
 
 FIXME HERE: put this code into the spec_instance stuff
 
@@ -1106,6 +1122,133 @@ let globalize_spec_defn d =
   | _ -> raise dummy_loc (Failure "globalize_spec_defn")
 
 
+(***
+ *** Name Translations
+ ***)
+
+(* A name translation specifies a field substitution, but can only be
+   resolved into a concrete field substitution by giving it a set of
+   field names to map *)
+type name_translation_elem =
+  (* Map a single name to another *)
+  | NameXSingle of Id.t * Id.t
+  (* Map all names with a given prefix to instead use a different prefix *)
+  | NameXPrefix of string * string
+
+type name_translation = name_translation_elem list
+
+(* Map an identifier using a name translation *)
+let rec translate_id xlate id =
+  match xlate with
+  | [] -> None
+  | NameXSingle (id_from, id_to) :: xlate' ->
+     if Id.equal id_from id then Some id_to else
+       translate_id xlate' id
+  | NameXPrefix (pre_from, pre_to) :: xlate' ->
+     (match match_prefix id pre_from with
+      | Some id_suffix ->
+         Some (Id.of_string (pre_to ^ id_suffix))
+      | None -> translate_id xlate' id)
+
+(* Resolve a name translation into a name substitution for a spec; if
+   the total flag is set, make the returned substitution be total on
+   all fields of spec (even if it is the identity on some of them) *)
+let resolve_name_translation ?(total=false) spec xlate : fctx_subst =
+  concat_map (fun elem ->
+              let id = elem.felem_id in
+              let mapped_id =
+                match translate_id xlate id with
+                | None -> if total then Some id else None
+                | Some id' -> Some id'
+              in
+              match mapped_id with
+              | Some id' ->
+                 (*
+                 let _ = Format.eprintf "resolve_name_translation: mapped field %s to %s\n"
+                                        (Id.to_string id) (Id.to_string id') in
+                  *)
+                 if fctx_elem_has_def elem then
+                   (* If id is a def, also map id__eq -> id'__eq *)
+                   [(id, id', None); (add_suffix id "eq", add_suffix id' "eq", None)]
+                 else
+                   [(id, id', None)]
+              | None -> [])
+             spec.spec_op_ctx
+  @ filter_map (fun elem ->
+                let id = elem.felem_id in
+                match translate_id xlate id with
+                | Some id' ->
+                   (* Filter out mappings on "__eq" axioms *)
+                   if has_suffix id "__eq" then None else
+                     Some (id, id', None)
+                | None -> None)
+               spec.spec_axiom_ctx
+
+
+(***
+ *** Spec Terms
+ ***)
+
+(* Spec terms are syntactic forms for building specs from existing
+   specs *)
+type spec_term =
+  (* A reference by name to an existing spec *)
+  | SpecRef of reference
+  (* A translation of the names of a spec *)
+  | SpecXlate of spec_term * name_translation
+  (* A spec substitution, where the morphism must be named *)
+  | SpecSubst of spec_term * reference
+  (* Adding definitions to ops in a spec *)
+  | SpecAddDefs of spec_term * (lident * Constrexpr.constr_expr) list
+
+(* Get the source location of a spec_term *)
+let rec spec_term_loc st =
+  match st with
+  | SpecRef r -> loc_of_reference r
+  | SpecXlate (st', _) -> spec_term_loc st'
+  | SpecSubst (st', _) -> spec_term_loc st'
+  | SpecAddDefs (st', _) -> spec_term_loc st'
+
+(* Interpret a spec term into a spec plus an instance in this returned
+   spec of the outer-most spec reference or morphism application *)
+let rec interp_spec_term sterm : spec * spec_instance =
+  match sterm with
+  | SpecRef r ->
+     (try
+         let locref = spec_locref_of_ref r in
+         let spec = lookup_spec locref in
+         (spec, make_id_instance locref spec)
+       with Not_found ->
+         user_err_loc (spec_term_loc sterm, "_",
+                       str ("No spec named " ^ string_of_reference r)))
+  | SpecXlate (sterm', xlate) ->
+     let (spec, inst) = interp_spec_term sterm' in
+     let subst = resolve_name_translation spec xlate in
+     (*
+     let _ =
+       List.iter (fun (id_from, id_to) ->
+                   Format.eprintf "Translating %s to %s\n"
+                                  (Id.to_string id_from)
+                                  (Id.to_string id_to)) subst in
+      *)
+     (subst_spec subst spec, subst_spec_inst subst inst)
+  | SpecSubst (sterm', morph_ref) ->
+     let (spec, inst) = interp_spec_term sterm' in
+     let loc = loc_of_reference morph_ref in
+     let morph = lookup_morphism morph_ref in
+     (* FIXME HERE: figure out what to do with inst! *)
+     let (new_spec, new_locref) = apply_morphism loc morph spec in
+     (new_spec, make_id_instance new_locref new_spec)
+  | SpecAddDefs (sterm', defs) ->
+     let (spec, inst) = interp_spec_term sterm' in
+     (add_spec_defs spec defs, inst)
+
+
+(* Interpret a spec term and import it into the current spec *)
+let import_spec_term st =
+  let (im_spec, inst) = interp_spec_term st in
+  (* FIXME HERE: figure out what to do with inst! *)
+  import_spec (spec_term_loc st) im_spec
 
 
 (***
@@ -1327,69 +1470,6 @@ let import_spec loc im_spec =
 
 
 (***
- *** Name Translations
- ***)
-
-(* A name translation specifies a field substitution, but can only be
-   resolved into a concrete field substitution by giving it a set of
-   field names to map *)
-type name_translation_elem =
-  (* Map a single name to another *)
-  | NameXSingle of Id.t * Id.t
-  (* Map all names with a given prefix to instead use a different prefix *)
-  | NameXPrefix of string * string
-
-type name_translation = name_translation_elem list
-
-(* Map an identifier using a name translation *)
-let rec translate_id xlate id =
-  match xlate with
-  | [] -> None
-  | NameXSingle (id_from, id_to) :: xlate' ->
-     if Id.equal id_from id then Some id_to else
-       translate_id xlate' id
-  | NameXPrefix (pre_from, pre_to) :: xlate' ->
-     (match match_prefix id pre_from with
-      | Some id_suffix ->
-         Some (Id.of_string (pre_to ^ id_suffix))
-      | None -> translate_id xlate' id)
-
-(* Resolve a name translation into a name substitution for a spec; if
-   the total flag is set, make the returned substitution be total on
-   all fields of spec (even if it is the identity on some of them) *)
-let resolve_name_translation ?(total=false) spec xlate : field_subst =
-  concat_map (fun elem ->
-              let id = elem.felem_id in
-              let mapped_id =
-                match translate_id xlate id with
-                | None -> if total then Some id else None
-                | Some id' -> Some id'
-              in
-              match mapped_id with
-              | Some id' ->
-                 (*
-                 let _ = Format.eprintf "resolve_name_translation: mapped field %s to %s\n"
-                                        (Id.to_string id) (Id.to_string id') in
-                  *)
-                 if fctx_elem_is_def elem then
-                   (* If id is a def, also map id__eq -> id'__eq *)
-                   [(id, id'); (add_suffix id "eq", add_suffix id' "eq")]
-                 else
-                   [(id, id')]
-              | None -> [])
-             spec.spec_op_ctx
-  @ filter_map (fun elem ->
-                let id = elem.felem_id in
-                match translate_id xlate id with
-                | Some id' ->
-                   (* Filter out mappings on "__eq" axioms *)
-                   if has_suffix id "__eq" then None else
-                     Some (id, id')
-                | None -> None)
-               spec.spec_axioms
-
-
-(***
  *** Spec Instances
  ***)
 
@@ -1555,71 +1635,6 @@ let apply_morphism loc morph spec =
       )
   in
   (new_spec, qualid_of_ident spec_id)
-
-
-(***
- *** Spec Terms
- ***)
-
-(* Spec terms are syntactic forms for building specs from existing
-   specs *)
-type spec_term =
-  (* A reference by name to an existing spec *)
-  | SpecRef of reference
-  (* A translation of the names of a spec *)
-  | SpecXlate of spec_term * name_translation
-  (* A spec substitution, where the morphism must be named *)
-  | SpecSubst of spec_term * reference
-  (* Adding definitions to ops in a spec *)
-  | SpecAddDefs of spec_term * (lident * Constrexpr.constr_expr) list
-
-(* Get the source location of a spec_term *)
-let rec spec_term_loc st =
-  match st with
-  | SpecRef r -> loc_of_reference r
-  | SpecXlate (st', _) -> spec_term_loc st'
-  | SpecSubst (st', _) -> spec_term_loc st'
-  | SpecAddDefs (st', _) -> spec_term_loc st'
-
-(* Interpret a spec term into a spec plus an instance in this returned
-   spec of the outer-most spec reference or morphism application *)
-let rec interp_spec_term sterm : spec * spec_instance =
-  match sterm with
-  | SpecRef r ->
-     (try
-         let locref = spec_locref_of_ref r in
-         let spec = lookup_spec locref in
-         (spec, make_id_instance locref spec)
-       with Not_found ->
-         user_err_loc (spec_term_loc sterm, "_",
-                       str ("No spec named " ^ string_of_reference r)))
-  | SpecXlate (sterm', xlate) ->
-     let (spec, inst) = interp_spec_term sterm' in
-     let subst = resolve_name_translation spec xlate in
-     (*
-     let _ =
-       List.iter (fun (id_from, id_to) ->
-                   Format.eprintf "Translating %s to %s\n"
-                                  (Id.to_string id_from)
-                                  (Id.to_string id_to)) subst in
-      *)
-     (subst_spec subst spec, subst_spec_inst subst inst)
-  | SpecSubst (sterm', morph_ref) ->
-     let (spec, inst) = interp_spec_term sterm' in
-     let loc = loc_of_reference morph_ref in
-     let morph = lookup_morphism morph_ref in
-     (* FIXME HERE: figure out what to do with inst! *)
-     let (new_spec, new_locref) = apply_morphism loc morph spec in
-     (new_spec, make_id_instance new_locref new_spec)
-  | SpecAddDefs (sterm', defs) ->
-     let (spec, inst) = interp_spec_term sterm' in
-     (add_spec_defs spec defs, inst)
-
-(* Interpret a spec term and import it into the current spec *)
-let import_spec_term st =
-  let (im_spec, inst) = interp_spec_term st in
-  (* FIXME HERE: figure out what to do with inst! *)
-  import_spec (spec_term_loc st) im_spec
 
 
 (***
