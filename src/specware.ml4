@@ -495,7 +495,8 @@ type 'a fctx_subst = (Id.t * Id.t * 'a option) list
 (* Make the identity substitution on the given fields *)
 let mk_id_subst fields = List.map (fun id -> (id, id, None)) fields
 
-(* Apply a field substitution to a field *)
+(* Apply a field substitution to a field, returning a pair of the new field name
+and the added definition for that field, if any *)
 let rec subst_id subst id =
   match subst with
   | [] -> (id, None)
@@ -522,7 +523,7 @@ let compose_substs d_subst (s2 : 'a fctx_subst) (s1 : 'a fctx_subst) : 'a fctx_s
                  (* NOTE: this should never happen: should be caught earlier *)
                  raise dummy_loc (FieldAlreadyDefined id_to)
             in
-            (id_from, id_to_out, map_opt d_subst defn_opt_out)) s1
+            (id_from, id_to_out, map_opt (d_subst s2) defn_opt_out)) s1
   (* We put s2 at the end, but note that s1 can shadow mappings in s2, since
      the s1 mapping occur first *)
   @ s2
@@ -542,7 +543,7 @@ name and also the fields in the spec on which the definition depends *)
 type local_defn = [ `Local_Defn of Id.t * Id.t list ]
 
 (* A local term is a term that depends on local fields in a spec *)
-type local_term = [ `Local_Term of constr_expr * Id.t list | local_defn ]
+type local_term = [ `Local_Term of constr_expr * Id.t list ]
 
 (* A global defn is a local defn in some other, non-local spec, whose fields
 have possibly been mapped / substituted for *)
@@ -579,7 +580,8 @@ let local_defn_to_global (s:spec_globref) (d:local_defn) : global_defn =
   | `Local_Defn (id, fields) -> `Global_Defn (s, id, mk_id_subst fields)
 
 (* Versions of the below that do not perform type checks. These are the
-underlying implementations, and should not be called directly *)
+underlying implementations, and should not be called directly unless it is
+certain that the necessary type checks will succeed. *)
 let rec global_defn_to_term_nocheck d =
   match d with
   | `Global_Defn (s, id, args) ->
@@ -634,7 +636,85 @@ let rel_term_to_term_nocheck (rel:rel_term) =
 let rec subst_global_defn (subst:global_subst) (d:global_defn) : global_defn =
   match d with
   | `Global_Defn (s, id, args) ->
-     `Global_Defn (s, id, compose_substs (subst_global_defn subst) subst args)
+     `Global_Defn (s, id, compose_substs subst_global_defn subst args)
+
+(* Compose two global substitutions *)
+let compose_global_substs s2 s1 = compose_susbsts subst_global_defn s2 s1
+
+
+(***
+ *** Instance substitutions
+ ***)
+
+(* An instance substitution is a substitution where the "definitions" are
+typeclass instances *)
+type inst_subst = constant fctx_subst
+
+(* Turn a global_defn into a term using an instance substitution to map the
+fields to typeclass instances. The typeclass instances are unfolded, and their
+accessors are folded, yielding a term that has no dependencies on the spec in
+which it was defined. *)
+let global_defn_to_term_inst_subst params isubst d =
+  match d with
+  | Global_Defn (s, id, args) ->
+     let inst_args =
+       List.map (fun (id_orig, id_new, _) ->
+                 let (id_new', inst_opt) = subst_id isubst id_orig in
+                 let inst =
+                   match inst_opt with
+                   | Some inst -> inst
+                   | None -> raise dummy_loc
+                                   (Failure ("global_defn_to_term_inst_subst: no instance for field "
+                                             ^ Id.to_string id_orig))
+                 in
+                 if Id.equal id_new id_new' then (id_orig, id_new, inst) else
+                   raise dummy_loc
+                         (Failure ("global_defn_to_term_inst_subst: field "
+                                   ^ Id.to_string id_orig
+                                   ^ " mapped to incorrect destination in instance substitution"))
+                ) args
+     in
+     let unfold_ids = id :: List.map (fun (id_from,_,_) -> id_from) inst_args in
+     let unfolds =
+       List.map (fun id -> Nametab.locate (field_in_global_spec s id))
+       @ List.map (fun (_,_,inst) -> ConstRef inst) inst_args
+     in
+     let folds =
+       List.map (fun (_,id,_) ->
+                 (field_var_id id,
+                  mk_id_app_named_args
+                    (dummy_loc, id)
+                    [(field_class_id id, mk_var (dummy_loc, field_var_id id))]))
+                (subst_range subst)
+    in
+    let res =
+      unfold_fold_term params unfolds folds
+                       (mk_global_app_named_args
+                          (Qualid (field_in_global_spec s id))
+                          (* (subst_to_inst_args subst) *)
+                           (List.map (fun (id_from,id_to,_) ->
+                                      (field_var_id id_from,
+                                       mk_var (dummy_loc,field_var_id id_to))) inst_args))
+     in
+     (*
+     let f = unfold_term [] (r :: elims) (mk_global_expl r) in
+     let res =
+       reduce_term params 
+                   (mk_app f (List.map (fun (id_from,id_to) -> mk_var (dummy_loc, id_to)) subst)) in
+      *)
+     (*
+     let cbv_consts =
+       List.map (fun gr -> AN (Qualid (dummy_loc, qualid_of_global gr))) (r :: elims @ inst_globs) in
+     let res = reduce_term params
+                           [Genredexpr.Cbv
+                              {rBeta = true; rIota = false; rZeta = false; rDelta = true;
+                               rConst = [] };
+                            Genredexpr.Fold
+                              (List.map (fun (_,id_to) -> mk_var (dummy_loc, id_to)) subst)]
+                           (mk_global_app_named_args r (subst_to_inst_args subst)) in
+      *)
+     let _ = Format.eprintf "\nspec_defn_term_local: returning %a\n" pp_constr_expr res in
+     res
 
 
 (***
@@ -727,6 +807,14 @@ nocheck function here because we assume fctx's are always well-formed *)
 let fctx_elem_to_param elem =
   mk_implicit_assum (fctx_elem_var_id elem)
                     (rel_term_to_term_nocheck elem.felem_type)
+
+(* Get a list of the fields in an fctx, optionally including ghost fields *)
+let fctx_fields ghosts? fctx =
+  if ghosts? then
+    List.map (fun elem -> elem.felem_id) fctx
+  else
+    filter_map (fun elem -> if elem.felem_is_ghost then Some elem.felem_id
+                            else None) fctx
 
 (* Convert an fctx to a list of class parameters, one for each field
    in the context (remember: fctx is reversed) *)
@@ -1028,98 +1116,112 @@ let lookup_spec locref = fst (lookup_spec_and_globref locref)
 
 
 (***
- *** Spec instances
+ *** Spec Morphisms
  ***)
 
-(* A potential spec instance is a pair of the name of the spec that we have an
-instance of, and the subst that goes from that spec to the current spec. (The
-"current spec" is always left implicit.) This spec instance is "potential"
-because we have not made any typeclass instances for it yet. *)
-type pot_spec_instance = spec_globref * global_subst
+(* A morphism is intuitively a substitution that maps from a source spec to a
+target spec. Associated with this mapping is a set of typeclass instances, in
+the context of the co-domain / target spec, of all of the typeclasses associated
+with the domain / source spec; these include one instance for every op in the
+source spec, and a single instance for all the axioms in the source spec. *)
+type morphism = {
+  morph_source : spec;
+  morph_source_ref : spec_globref;
+  morph_target : spec;
+  morph_target_ref : spec_globref;
+  morph_subst : field_subst;
+  morph_op_insts : (Id.t * constant) list;
+  morph_axiom_inst : constant
+}
 
-(* An actual spec instance is a potential spec instance that has typeclass
-instances associated with each mapping in the subst. The association list maps
-field names in the domain of the subst to names (in the local module) of
-typeclass instances for those fields, while the last name gives the name of a
-typeclass instance of the axiom typeclass for the given global spec. *)
-type actual_spec_instance = spec_globref * global_subst * (Id.t * Id.t) list * Id.t
+(* The variable name for the implicit spec argument of a morphism instance *)
+let morph_spec_arg_id = Id.of_string "Spec"
+
+(* Global table of named morphisms, indexed by the axiom typeclass instance *)
+let morphism_table = ref (Cmap.empty)
+
+(* Register a morphism in the morphism table *)
+let register_morphism morph =
+  morphism_table := Cmap.add morph.morph_axiom_inst morph !morphism_table
+
+(* Look up a morphism by reference, raising Not_found if it does not exist *)
+let lookup_morphism r =
+  match Nametab.locate (located_elem (qualid_of_reference r)) with
+  | ConstRef c -> Cmap.find c !morphism_table
+  | _ -> raise (loc_of_reference r) (MorphismNotFound r)
+
+(* Apply a morphism to a spec. This is accomplished by: merging the spec with
+the source of the morphism, which checks that all the types and definitions in
+the spec agree with the morphism; applying the substitution of the morphism; and
+then merging the target spec with the result, to add any additional fields not
+in the range of the substitution. *)
+let apply_morphism loc morph spec =
+  let spec_in = merge_specs loc spec morph.morph_source in
+  let spec_subst = subst_spec loc morph.morph_subst spec_in in
+  merge_specs loc spec_subst morph.morph_target
 
 
 
+FIXME HERE NOW: move this to a section about defining morphisms
 
-FIXME HERE NOW: define spec instances, then importing of global_defns into local_defns,
-and then importing of specs
+(* FIXME HERE: use spec_defn_term_local (which should actually be
+   called "global" since it interprets the term outside of a spec) for
+   the types of the parameters *)
+(* Define a named morphism from the from spec to the to spec, both
+   given by reference, via the given name translation *)
+let start_morphism morph_name from_ref to_ref xlate =
+  let loc = located_loc morph_name in
+  let from_qualid = located_elem (qualid_of_reference from_ref) in
+  let to_qualid = located_elem (qualid_of_reference to_ref) in
+  let from_spec = lookup_spec from_qualid in
+  let to_spec = lookup_spec to_qualid in
+  let subst = resolve_name_translation ~total:true from_spec xlate in
+  let finish_hook gr =
+    register_morphism
+      { morph_source = from_spec;
+        morph_target = to_spec;
+        morph_subst = subst;
+        morph_interp = match gr with
+                       | ConstRef c -> c
+                       | _ -> anomaly (str "Morphism not a constant") } in
+  ignore
+    (Classes.new_instance
+       false (* (fctx_params to_spec.spec_op_ctx @
+                [mk_implicit_assum morph_spec_arg_id
+                                   (mk_ref_app_named_args
+                                      (spec_typeclass_ref loc to_qualid) [])]) *) []
+       (lname_of_lident morph_name, Explicit,
+        (mk_ref_app_named_args (spec_typeclass_ref loc from_qualid)
+                               (subst_to_args subst)))
+       None
+       ~hook:finish_hook
+       None)
 
 
-FIXME HERE NOW: I think the name_translation stuff has been updated correctly, but
-still need to do the spec_term section...
+(***
+ *** Potential Morphisms
+ ***)
 
-FIXME HERE: put this code into the spec_instance stuff
+(* A potential morphism is intuitively a morphism that does not yet have a
+target spec. It thus also does not have any typeclass instances defined yet, and
+so contains just a source spec (referred to by name) and a substitution. *)
+type potential_morphism = spec_globref * global_subst
 
-(* Turn a definition into a term that is local to the current spec, by unfolding
-   global definitions and the eliminators and instances they use *)
-let spec_defn_term_local params d =
-  match d with
-  | Global_Defn (r, elims, subst) ->
-     let inst_globs = subst_inst_globs subst in
-     let field_folds =
-       List.map (fun id ->
-                 (field_var_id id,
-                  mk_id_app_named_args
-                    (dummy_loc, id)
-                    [(field_class_id id, mk_var (dummy_loc, field_var_id id))]))
-                (subst_range subst)
-     in
-     let res =
-       unfold_fold_term params (r::inst_globs @ elims) field_folds
-                        (mk_global_app_named_args
-                           r
-                           (* (subst_to_inst_args subst) *)
-                           (List.map (fun (id_from,id_to) ->
-                                      (field_var_id id_from,
-                                       mk_var (dummy_loc,
-                                               field_var_id id_to))) subst))
-     in
-     (*
-     let f = unfold_term [] (r :: elims) (mk_global_expl r) in
-     let res =
-       reduce_term params 
-                   (mk_app f (List.map (fun (id_from,id_to) -> mk_var (dummy_loc, id_to)) subst)) in
-      *)
-     (*
-     let cbv_consts =
-       List.map (fun gr -> AN (Qualid (dummy_loc, qualid_of_global gr))) (r :: elims @ inst_globs) in
-     let res = reduce_term params
-                           [Genredexpr.Cbv
-                              {rBeta = true; rIota = false; rZeta = false; rDelta = true;
-                               rConst = [] };
-                            Genredexpr.Fold
-                              (List.map (fun (_,id_to) -> mk_var (dummy_loc, id_to)) subst)]
-                           (mk_global_app_named_args r (subst_to_inst_args subst)) in
-      *)
-     let _ = Format.eprintf "\nspec_defn_term_local: returning %a\n" pp_constr_expr res in
-     res
-  | Term_Defn (t,_) -> t
-  | _ -> anomaly (str "spec_defn_term_local")
+(* Build the identity potential morphism *)
+let make_id_pot_morphism spec spec_globref =
+  (globref,
+   mk_id_subst (fctx_fields false spec.spec_op_ctx
+                @ fctx_fields false spec.spec_axiom_ctx))
 
-(* Build a term for the type of a field that is local to the current spec (see
-   spec_defn_term_local) *)
-let fctx_elem_type_local params elem =
-  spec_defn_term_local params elem.felem_type_defn
+(* Substitute into a potential morphism *)
+let subst_potential_morphism subst pinst =
+  (fst pinst, compose_global_substs subst (snd pinst))
 
-(* Convert a spec definition to be global. NOTE: must be called inside
-   the spec/module containing the definition *)
-let globalize_spec_defn d =
-  match d with
-  | Local_Defn (id, fields) ->
-     (try
-         Global_Defn (Nametab.locate (qualid_of_ident id),
-                      List.map (fun f ->
-                                Nametab.locate (qualid_of_ident f)) fields,
-                      mk_id_subst fields)
-       with Not_found ->
-         anomaly (str ("globalize_spec_defn: could not find name: " ^ Id.to_string id)))
-  | _ -> raise dummy_loc (Failure "globalize_spec_defn")
+
+FIXME HERE NOW: turn a potential morphism into an actual morphism using
+global_defn_to_term_inst_subst by building up an inst_subst and defining
+typeclass instances in the current module / spec
+
 
 
 (***
@@ -1209,20 +1311,20 @@ let rec spec_term_loc st =
   | SpecSubst (st', _) -> spec_term_loc st'
   | SpecAddDefs (st', _) -> spec_term_loc st'
 
-(* Interpret a spec term into a spec plus an instance in this returned
-   spec of the outer-most spec reference or morphism application *)
-let rec interp_spec_term sterm : spec * spec_instance =
+(* Interpret a spec term into a spec plus a list of potential morphisms to the
+returned spec. The spec term is not allowed to add definitions. *)
+let rec interp_spec_term sterm : spec * potential_morphism list =
   match sterm with
   | SpecRef r ->
      (try
          let locref = spec_locref_of_ref r in
-         let spec = lookup_spec locref in
-         (spec, make_id_instance locref spec)
+         let (spec, globref) = lookup_spec_and_globref locref in
+         (spec, make_id_pot_morphism spec globref)
        with Not_found ->
          user_err_loc (spec_term_loc sterm, "_",
                        str ("No spec named " ^ string_of_reference r)))
   | SpecXlate (sterm', xlate) ->
-     let (spec, inst) = interp_spec_term sterm' in
+     let (spec, insts) = interp_spec_term sterm' in
      let subst = resolve_name_translation spec xlate in
      (*
      let _ =
@@ -1231,24 +1333,67 @@ let rec interp_spec_term sterm : spec * spec_instance =
                                   (Id.to_string id_from)
                                   (Id.to_string id_to)) subst in
       *)
-     (subst_spec subst spec, subst_spec_inst subst inst)
+     (subst_spec subst spec,
+      List.map (subst_potential_morphism subst) insts)
   | SpecSubst (sterm', morph_ref) ->
-     let (spec, inst) = interp_spec_term sterm' in
-     let loc = loc_of_reference morph_ref in
-     let morph = lookup_morphism morph_ref in
-     (* FIXME HERE: figure out what to do with inst! *)
-     let (new_spec, new_locref) = apply_morphism loc morph spec in
-     (new_spec, make_id_instance new_locref new_spec)
+     (try
+         let (spec, insts) = interp_spec_term sterm' in
+         let loc = loc_of_reference morph_ref in
+         let morph = lookup_morphism morph_ref in
+         (apply_morphism loc morph spec,
+          make_id_pot_morphism morph.morph_target morph.morph_target_ref ::
+            List.map (subst_potential_morphism morph.morph_subst) insts)
+       with Not_found ->
+         user_err_loc (spec_term_loc sterm, "_",
+                       str ("No morphism named " ^ string_of_reference morph_ref)))
   | SpecAddDefs (sterm', defs) ->
-     let (spec, inst) = interp_spec_term sterm' in
-     (add_spec_defs spec defs, inst)
+     user_err_loc (spec_term_loc sterm, "_",
+                   str ("Definitions can only be added to specs at the top level of a spec term"))
 
 
-(* Interpret a spec term and import it into the current spec *)
-let import_spec_term st =
-  let (im_spec, inst) = interp_spec_term st in
-  (* FIXME HERE: figure out what to do with inst! *)
-  import_spec (spec_term_loc st) im_spec
+FIXME HERE NOW: write interp_spec_term_top
+
+
+(***
+ *** Spec instances
+ ***)
+
+(* An actual spec instance is a potential spec instance that has typeclass
+instances associated with each mapping in the subst. The association list maps
+field names in the domain of the subst to names (in the local module) of
+typeclass instances for those fields, while the last name gives the name of a
+typeclass instance of the axiom typeclass for the given global spec. *)
+type actual_spec_instance = spec_globref * global_subst * (Id.t * Id.t) list * Id.t
+
+
+
+FIXME HERE NOW: define spec instances, then importing of global_defns into local_defns,
+and then importing of specs
+
+
+FIXME HERE NOW: I think the name_translation stuff has been updated correctly, but
+still need to do the spec_term section...
+
+FIXME HERE: put this code into the spec_instance stuff
+
+(* Build a term for the type of a field that is local to the current spec (see
+   spec_defn_term_local) *)
+let fctx_elem_type_local params elem =
+  spec_defn_term_local params elem.felem_type_defn
+
+(* Convert a spec definition to be global. NOTE: must be called inside
+   the spec/module containing the definition *)
+let globalize_spec_defn d =
+  match d with
+  | Local_Defn (id, fields) ->
+     (try
+         Global_Defn (Nametab.locate (qualid_of_ident id),
+                      List.map (fun f ->
+                                Nametab.locate (qualid_of_ident f)) fields,
+                      mk_id_subst fields)
+       with Not_found ->
+         anomaly (str ("globalize_spec_defn: could not find name: " ^ Id.to_string id)))
+  | _ -> raise dummy_loc (Failure "globalize_spec_defn")
 
 
 (***
@@ -1493,148 +1638,6 @@ let make_id_instance locref spec =
     inst_ax_subst = subst_from_fctx spec.spec_axioms }
 
 (* FIXME HERE: write add_instance *)
-
-
-(***
- *** Spec Morphisms
- ***)
-
-(* Could not find a morphism from the given reference *)
-exception MorphismNotFound of reference
-
-(* A morphism contains source and target specs, a name substitution
-   mapping ops from the former to the latter, and a global reference
-   to an interpretation function that builds an instance of the source
-   spec's type-class from that of the target *)
-type morphism = {
-  morph_source : spec;
-  morph_target : spec;
-  morph_subst : field_subst;
-  morph_interp : constant
-}
-
-(* The implicit argument name for the spec argument of a morphism
-   interpretation function *)
-let morph_spec_arg_id = Id.of_string "Spec"
-
-(* Global table of named morphisms *)
-let morphism_table = ref (Cmap.empty)
-
-(* Register a morphism in the morphism table *)
-let register_morphism morph =
-  morphism_table := Cmap.add morph.morph_interp morph !morphism_table
-
-(* Look up a morphism by local reference *)
-let lookup_morphism r =
-  try
-    match Nametab.locate (located_elem (qualid_of_reference r)) with
-    | ConstRef c -> Cmap.find c !morphism_table
-    | _ -> raise (loc_of_reference r) (MorphismNotFound r)
-  with Not_found ->
-    raise (loc_of_reference r) (MorphismNotFound r)
-
-
-(* FIXME HERE: use spec_defn_term_local (which should actually be
-   called "global" since it interprets the term outside of a spec) for
-   the types of the parameters *)
-(* Define a named morphism from the from spec to the to spec, both
-   given by reference, via the given name translation *)
-let start_morphism morph_name from_ref to_ref xlate =
-  let loc = located_loc morph_name in
-  let from_qualid = located_elem (qualid_of_reference from_ref) in
-  let to_qualid = located_elem (qualid_of_reference to_ref) in
-  let from_spec = lookup_spec from_qualid in
-  let to_spec = lookup_spec to_qualid in
-  let subst = resolve_name_translation ~total:true from_spec xlate in
-  let finish_hook gr =
-    register_morphism
-      { morph_source = from_spec;
-        morph_target = to_spec;
-        morph_subst = subst;
-        morph_interp = match gr with
-                       | ConstRef c -> c
-                       | _ -> anomaly (str "Morphism not a constant") } in
-  ignore
-    (Classes.new_instance
-       false (* (fctx_params to_spec.spec_op_ctx @
-                [mk_implicit_assum morph_spec_arg_id
-                                   (mk_ref_app_named_args
-                                      (spec_typeclass_ref loc to_qualid) [])]) *) []
-       (lname_of_lident morph_name, Explicit,
-        (mk_ref_app_named_args (spec_typeclass_ref loc from_qualid)
-                               (subst_to_args subst)))
-       None
-       ~hook:finish_hook
-       None)
-
-
-(* Counter for building fresh spec names in apply_morphism *)
-let morphism_spec_counter = ref 1
-
-(* Build a fresh id for the result of a morphism *)
-let mk_morph_spec_id () =
-  let n = !morphism_spec_counter in
-  let _ = morphism_spec_counter := n+1 in
-  Id.of_string ("morph_spec__" ^ string_of_int n)
-
-(* Apply morphism to spec, yielding (subst (spec - source) ++ target);
-   i.e., remove from spec any ops and axioms listed in the source of
-   the morphism, apply the morphism substitution to the result, and
-   then add back in the ops and axioms listed in the target spec. The
-   op_ctx in the result are topologically sorted so that it is valid,
-   i.e., so that no op refers to a later one. The resulting spec is
-   built in a new module (whose name comes from mk_morph_spec_id), and
-   derived instances are added of the source and target specs of the
-   morphism in this new spec. The new spec object is then returned,
-   along with a local reference to it.
-
-   Another way to think about morphism application is that we are
-   applying the morphism substitution to the input spec, which removes
-   any fields in its domain and replaces them with their correponding
-   fields in the co-domain of the substitution. *)
-let apply_morphism loc morph spec =
-  let spec_id = mk_morph_spec_id () in
-  let (rem_spec, removed_defs) = spec_subtract loc spec morph.morph_source in
-  let _ =
-    (* If an op is defined in spec and not in source, make sure it
-       does not become defined in target *)
-    (* NOTE: a more permissive check would instead just require
-       target.op = spec.op *)
-    List.iter
-      (fun elem ->
-       match fctx_lookup morph.morph_target.spec_op_ctx
-                         (subst_id morph.morph_subst elem.felem_id)
-       with
-       | Some elem_t ->
-          if fctx_elem_is_def elem_t then
-            raise loc (FieldDefNotAllowed elem.felem_id)
-          else ()
-       | None -> ())
-      removed_defs
-  in
-
-  (* Append the target ops and then sort *)
-  let new_op_ctx =
-    stable_reverse_topo_sort loc (fun e -> e.felem_id) Id.equal fctx_elem_deps
-                             (rem_spec.spec_op_ctx
-                              @ morph.morph_target.spec_op_ctx) in
-  (* Append the target axioms (no need to sort; axioms do not depend
-     on each other) *)
-  let new_axioms = rem_spec.spec_axioms @ morph.morph_target.spec_axioms in
-
-  (* Now build the new spec module *)
-  let new_spec =
-    within_named_spec
-      (loc, spec_id)
-      (fun () ->
-       import_spec loc { spec_name = None;
-                         spec_op_ctx = new_op_ctx;
-                         spec_axioms = new_axioms }
-
-       (* FIXME HERE: add derived instances! (maybe return them as well?) *)
-      )
-  in
-  (new_spec, qualid_of_ident spec_id)
 
 
 (***
