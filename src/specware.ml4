@@ -250,12 +250,12 @@ let add_definition id params type_opt body =
    whether to add an operational type-class in Type (if true) or a
    normal type-class in Prop (if false), and fields is a list of
    triples (id, type, coercion_p) to be passed to mk_record_field *)
-let add_typeclass class_id is_op_class params fields =
+let add_typeclass class_id is_op_class is_prop_class params fields =
   interp
     (located_loc class_id,
      VernacInductive (false, BiFinite,
                       [((false, class_id), params,
-                        Some (if is_op_class then type_expr else prop_expr),
+                        Some (if is_prop_class then prop_expr else type_expr),
                         Class is_op_class,
                         if is_op_class then
                           match fields with
@@ -698,6 +698,9 @@ let field_class_id f = add_suffix f "class"
 (* The name of the instance associated with a field *)
 let field_inst_id f = add_suffix f "inst"
 
+(* The axiom typeclass field pointing to an instance of this axiom *)
+let field_axelem_id f = add_suffix f "axiom"
+
 (* Get the id for the named parameter used for a field *)
 let fctx_elem_var_id elem =
   field_var_id elem.felem_id
@@ -801,14 +804,15 @@ let add_local_definition id (fctx : local_fctx) type_opt body =
 
 (* Add a type class to the current module / spec, relative to the
    given fctx, and return a local_defn for the new type class *)
-let add_local_typeclass id is_op_class (fctx : local_fctx) fields =
+let add_local_typeclass id is_op_class is_prop_class (fctx : local_fctx) fields =
   let free_vars =
     List.fold_left (fun free_vars (_, tp, _) ->
                     Id.Set.union (free_vars_of_constr_expr tp) free_vars)
                    Id.Set.empty fields
   in
   let fctx_free_vars = filter_fctx free_vars fctx in
-  let _ = add_typeclass id is_op_class (fctx_params fctx_free_vars) fields in
+  let _ = add_typeclass id is_op_class is_prop_class
+                        (fctx_params fctx_free_vars) fields in
   mk_local_defn fctx_free_vars (located_elem id)
 
 (* Add an operational typeclass instance to the current module / spec *)
@@ -1311,8 +1315,8 @@ let add_declared_op op_name op_type =
 
   (* Add a type-class op_name__class : Type := op_name : op_type *)
   let tp_defn = add_local_typeclass
-                     (loc, field_class_id op_id) true (current_op_ctx loc)
-                     [(op_name, op_type, false)] in
+                     (loc, field_class_id op_id) true false
+                     (current_op_ctx loc) [(op_name, op_type, false)] in
 
   update_current_spec
     loc
@@ -1321,23 +1325,22 @@ let add_declared_op op_name op_type =
        spec_op_ctx =
          fctx_cons op_id false tp_defn None s.spec_op_ctx })
 
-(* FIXME HERE NOW: axioms should each have their own typeclass *)
 (* Add an axiom to the current spec, creating a definition for its type *)
 let add_axiom ax_name is_ghost ax_type =
   let ax_id = located_elem ax_name in
   let loc = located_loc ax_name in
   let _ = Format.eprintf "\nadd_axiom: %s\n" (Id.to_string ax_id) in
-  (* Add a definition for ax_name__type : Prop := op_type *)
-  let tp_defn = add_local_definition
-                  (loc, field_type_id ax_id)
-                  (current_op_ctx loc) (Some prop_expr) ax_type in
+  (* Add a type-class ax_name__class : Prop := ax_name : ax_type *)
+  let tp_defn = add_local_typeclass
+                  (loc, field_class_id ax_id) true true
+                  (current_op_ctx loc) [(ax_name, ax_type, false)] in
   update_current_spec
     loc
     (fun s ->
      { s with
        spec_axiom_ctx = fctx_cons ax_id is_ghost tp_defn None s.spec_axiom_ctx })
 
-(* FIXME HERE: make sure this is right... *)
+(* FIXME HERE NOW: make sure this is right: use typeclasses? *)
 let add_defined_theorem thm_name thm_type thm_body =
   let thm_id = located_elem thm_name in
   let loc = located_loc thm_name in
@@ -1352,7 +1355,8 @@ let add_defined_theorem thm_name thm_type thm_body =
     loc
     (fun s ->
      { s with
-       spec_axiom_ctx = fctx_cons thm_id false tp_defn (Some def_defn) s.spec_axiom_ctx })
+       spec_axiom_ctx = fctx_cons thm_id false tp_defn
+                                  (Some def_defn) s.spec_axiom_ctx })
 
 (* Add a defined op to the current spec, creating a type-class and def for it *)
 let add_defined_op op_name op_type_opt op_body =
@@ -1372,7 +1376,7 @@ let add_defined_op op_name op_type_opt op_body =
 
   (* Add a type-class for op_name__class : Type := op_name__var : op_type *)
   let tp_defn =
-    add_local_typeclass (loc, field_class_id op_id) true op_ctx
+    add_local_typeclass (loc, field_class_id op_id) true false op_ctx
                         [(op_var_id, op_type, false)] in
 
   (* Add the new op to spec *)
@@ -1399,13 +1403,14 @@ let complete_spec loc =
   | None -> raise loc NoCurrentSpec
   | Some (spec, spec_id) ->
      let ax_fields =
-       List.rev_map (fun elem ->
-                     ((loc, elem.felem_id),
-                      rel_term_to_term_nocheck elem.felem_type,
-                      false))
-                    (List.filter (fun elem -> elem.felem_defn = None)
-                                 spec.spec_axiom_ctx) in
-     let _ = add_typeclass (loc, spec_id) false (current_op_params loc) ax_fields in
+       List.rev_map
+         (fun elem -> ((loc, field_axelem_id elem.felem_id),
+                       mk_var (loc, elem.felem_id),
+                       true))
+         (List.filter (fun elem -> elem.felem_defn = None) spec.spec_axiom_ctx)
+     in
+     let _ = add_typeclass (loc, spec_id) false true
+                           (current_op_params loc) ax_fields in
      let spec_globref = global_modpath (Nametab.locate (qualid_of_ident spec_id)) in
      let global_spec = globalize_spec spec_globref spec in
      let _ = register_global_spec spec_globref global_spec in
