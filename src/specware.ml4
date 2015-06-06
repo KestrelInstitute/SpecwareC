@@ -164,7 +164,7 @@ let mk_qualid dir id =
 (* Cons an id onto the end of a qualid *)
 let qualid_cons qualid id =
   let (mod_path,mod_name) = repr_qualid qualid in
-  make_qualid (DirPath.make (DirPath.repr mod_path @ [mod_name])) id
+  make_qualid (DirPath.make ([mod_name] @ DirPath.repr mod_path)) id
 
 (* Build a term for a global constant, where dir lists the module path
    as a list (e.g., ["Coq"; "Init"; "Logic"]) and id is the id *)
@@ -496,9 +496,12 @@ let spec_globref_to_locref spec_globref =
   qualid_of_string (ModPath.to_string spec_globref)
 
 (* Build a reference to a field in a global spec *)
-(* FIXME: this should go to a global_reference... *)
+(* FIXME: this should not go through a locref *)
 let field_in_global_spec globref fname =
   field_in_spec (spec_globref_to_locref globref) fname
+
+let global_field_in_global_spec globref fname =
+  Nametab.locate (field_in_global_spec globref fname)
 
 
 (***
@@ -1405,7 +1408,7 @@ let complete_spec loc =
      let ax_fields =
        List.rev_map
          (fun elem -> ((loc, field_axelem_id elem.felem_id),
-                       mk_var (loc, elem.felem_id),
+                       mk_var (loc, field_class_id elem.felem_id),
                        true))
          (List.filter (fun elem -> elem.felem_defn = None) spec.spec_axiom_ctx)
      in
@@ -1572,9 +1575,12 @@ let global_defn_to_term_inst_subst loc params isubst d =
                  let inst =
                    match inst_opt with
                    | Some inst -> inst
-                   | None -> raise loc
-                                   (Failure ("global_defn_to_term_inst_subst: no instance for field "
-                                             ^ Id.to_string id_orig))
+                   | None ->
+                      raise loc
+                            (Failure ("global_defn_to_term_inst_subst: no instance for field "
+                                      ^ Id.to_string id_orig
+                                      ^ " in converting field "
+                                      ^ Id.to_string id))
                  in
                  if Id.equal id_new id_new' then (id_orig, id_new, inst) else
                    raise loc
@@ -1585,7 +1591,7 @@ let global_defn_to_term_inst_subst loc params isubst d =
      in
      let unfold_ids = id :: List.map (fun (id_from,_,_) -> id_from) inst_args in
      let unfolds =
-       List.map (fun id -> Nametab.locate (field_in_global_spec s id)) unfold_ids
+       List.map (fun id -> global_field_in_global_spec s id) unfold_ids
        @ List.map (fun (_,_,inst) -> ConstRef inst) inst_args
      in
      let folds =
@@ -1729,7 +1735,8 @@ let add_fctx_elem_inst_map loc inst_subst_map (elem : import_defn fctx_elem) is_
     import_defn_to_term_inst_map
       loc
       (if all_elems_p then current_all_params loc else current_op_params loc)
-      inst_subst_map d in
+      inst_subst_map d
+  in
   match (is_axiom, elem.felem_defn) with
   | (true, None) ->
      add_axiom (loc, elem.felem_id) elem.felem_is_ghost
@@ -1771,23 +1778,33 @@ let import_pot_morphisms loc (target_spec : import_spec)
   in
   (* We now build up inst_substs for each source spec *)
   let add_inst (elem : import_defn fctx_elem) inst_map (id_from, globref, spec) =
+    let _ = Format.eprintf "\nimport_pot_morphisms: adding instance of %s"
+                           (Id.to_string id_from)
+    in
     let inst_id = get_fresh_inst_name id_from in
     let _ = add_local_term_instance
               (loc, Name inst_id) (current_op_ctx loc)
               (rel_term_to_term_nocheck elem.felem_type)
               (mk_var (loc, elem.felem_id))
     in
-    let inst_elem = (id_from, elem.felem_id,
-                     Some (lookup_constant loc (qualid_of_ident inst_id))) in
+    let inst_const = lookup_constant loc (qualid_of_ident inst_id) in
+    let inst_elem = (id_from, elem.felem_id, Some inst_const) in
     if MPmap.mem globref inst_map then
       MPmap.add globref (inst_elem :: MPmap.find globref inst_map) inst_map
     else
       MPmap.add globref [inst_elem] inst_map
   in
+  let starting_inst_map =
+    List.fold_left (fun inst_map (globref, _) -> MPmap.add globref [] inst_map)
+                   MPmap.empty pot_ms
+  in
   let inst_subst_map =
     List.fold_right
       (fun (elem, is_axiom) inst_subst_map ->
        (* Add the element to the current spec *)
+       let _ = Format.eprintf "\nimport_pot_morphisms: adding spec element %s"
+                              (Id.to_string elem.felem_id)
+       in
        let _ = add_fctx_elem_inst_map loc inst_subst_map elem is_axiom in
        (* Now create instances for each source field that maps to elem, and add
           those instances to inst_subst_map *)
@@ -1796,7 +1813,7 @@ let import_pot_morphisms loc (target_spec : import_spec)
       )
       (List.map (fun elem -> (elem, true)) target_spec.spec_axiom_ctx @
             List.map (fun elem -> (elem, false)) target_spec.spec_op_ctx)
-      MPmap.empty
+      starting_inst_map
   in
   (* Add instances of all the axiom classes for all the source specs *)
   List.iter

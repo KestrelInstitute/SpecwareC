@@ -13,6 +13,8 @@ Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus 
 
 Spec End Monoid.
 
+Print Monoid.
+
 (* FIXME: get undo to work! *)
 Spec Group.
 
