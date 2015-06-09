@@ -763,8 +763,8 @@ let fctx_fields ghosts_p fctx =
   if ghosts_p then
     List.map (fun elem -> elem.felem_id) fctx
   else
-    filter_map (fun elem -> if elem.felem_is_ghost then Some elem.felem_id
-                            else None) fctx
+    filter_map (fun elem -> if elem.felem_is_ghost then None
+                            else Some elem.felem_id) fctx
 
 (* Convert an fctx to a list of class parameters, one for each field
    in the context (remember: fctx is reversed) *)
@@ -1026,6 +1026,10 @@ type local_spec = local_defn spec
 
 (* The empty local_spec *)
 let empty_local_spec = { spec_op_ctx = []; spec_axiom_ctx = [] }
+
+(* The number of fields in a spec (mostly for debugging purposes) *)
+let spec_length spec =
+  List.length (spec.spec_op_ctx @ spec.spec_axiom_ctx)
 
 (* Get the full fctx of a spec, including the axiom and op contexts. Remember
 that fctxs are stored backwards, so the axiom context, which depends on the op
@@ -1567,6 +1571,9 @@ fields to typeclass instances. The typeclass instances are unfolded, and their
 accessors are folded, yielding a term that has no dependencies on the spec in
 which it was defined. *)
 let global_defn_to_term_inst_subst loc params isubst d =
+  let _ = Format.eprintf "\nglobal_defn_to_term_inst_subst: arg = %a"
+                         pp_constr_expr (global_defn_to_term_nocheck d)
+  in
   match d with
   | `Global_Defn (s, id, args) ->
      let inst_args =
@@ -1774,7 +1781,9 @@ let import_pot_morphisms loc (target_spec : import_spec)
                 filter_map (fun (id_from, id_to, defn_opt) ->
                             if Id.equal id_to id then
                               Some (id_from, globref, spec)
-                            else None) subst) pot_ms_ext
+                            else
+                              None
+                           ) subst) pot_ms_ext
   in
   (* We now build up inst_substs for each source spec *)
   let add_inst (elem : import_defn fctx_elem) inst_map (id_from, globref, spec) =
