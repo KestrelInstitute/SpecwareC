@@ -97,6 +97,12 @@ let pp_constr fmt c = Pp.pp_with fmt (Printer.pr_constr c)
 (* Pretty-print a term *)
 let pp_constr_expr fmt c = Pp.pp_with fmt (Richpp.pr_constr_expr c)
 
+(* Pretty-print a vernacular command *)
+let pp_vernac fmt cmd = Pp.pp_with fmt (Ppvernac.Richpp.pr_vernac_body cmd)
+
+(* Convert a term to a string *)
+let constr_expr_to_string c = Pp.string_of_ppcmds (Richpp.pr_constr_expr c)
+
 (* Accessors for located types *)
 let located_elem (x : 'a located) = snd x
 let located_loc (x : 'a located) = fst x
@@ -251,21 +257,23 @@ let add_definition id params type_opt body =
    normal type-class in Prop (if false), and fields is a list of
    triples (id, type, coercion_p) to be passed to mk_record_field *)
 let add_typeclass class_id is_op_class is_prop_class params fields =
-  interp
-    (located_loc class_id,
-     VernacInductive (false, BiFinite,
-                      [((false, class_id), params,
-                        Some (if is_prop_class then prop_expr else type_expr),
-                        Class is_op_class,
-                        if is_op_class then
-                          match fields with
-                          | [] -> Constructors []
-                          | [(id, tp, _)] ->
-                             Constructors [false, (id, tp)]
-                          | _ -> raise (located_loc class_id) (Failure "add_typeclass")
-                        else
-                          RecordDecl (None, List.map mk_record_field fields)),
-                       []]))
+  let cmd =
+    VernacInductive (false, BiFinite,
+                     [((false, class_id), params,
+                       Some (if is_prop_class then prop_expr else type_expr),
+                       Class is_op_class,
+                       if is_op_class then
+                         match fields with
+                         | [] -> Constructors []
+                         | [(id, tp, _)] ->
+                            Constructors [false, (id, tp)]
+                         | _ -> raise (located_loc class_id) (Failure "add_typeclass")
+                       else
+                         RecordDecl (None, List.map mk_record_field fields)),
+                      []])
+  in
+  let _ = Format.eprintf "add_typeclass command:\n%a" pp_vernac cmd in
+  interp (located_loc class_id, cmd)
 
 (* Add an instance using a single term *)
 let add_term_instance inst_name inst_params inst_tp inst_body =
@@ -345,7 +353,11 @@ let reduce_term params reds t =
   let impls, ((env, ctx), imps1) =
     Constrintern.interp_context_evars env evdref params in
   let interp_term t = fst (Constrintern.interp_constr env !evdref t) in
-  let uninterp_term c = Constrextern.extern_constr true env !evdref c in
+  let uninterp_term c =
+    Constrextern.with_implicits
+      (Constrextern.with_arguments
+         (Constrextern.extern_constr true env !evdref)) c
+  in
   let apply_redexpr c r =
     let (evd,r_interp) = Tacinterp.interp_redexp env !evdref r in
     let _ = evdref := evd in
@@ -423,15 +435,19 @@ let unfold_fold_term params unfolds folds t =
     List.map (fun (id,t) ->
               let res_from = interp_term (mk_var (dummy_loc, id)) in
               let res_to = interp_term t in
+              (*
               let _ =
                 Format.eprintf "\nunfold_fold_term: unfolding %s to %a"
                                (Id.to_string id)
                                pp_constr_expr (uninterp_term res_to) in
+               *)
              (res_from, res_to)) folds in
   let constr_out = fold_constr_vars folds_c constr_unfolded in
   let res = uninterp_term constr_out in
+  (*
   let _ = Format.eprintf "\nunfold_fold_term: unfolded term: %a\n" pp_constr_expr
                          (uninterp_term constr_unfolded) in
+   *)
   let _ = Format.eprintf "\nunfold_fold_term: returning %a\n" pp_constr_expr res in
   res
 
@@ -739,6 +755,32 @@ let rec fctx_lookup : 'a . ([< rel_term ] as 'a) fctx -> Id.t -> 'a fctx_elem op
      else
        fctx_lookup fctx' f
 
+(* Print an fctx_elem to a string, for debugging purposes *)
+let fctx_elem_to_string elem : string =
+  match elem.felem_defn with
+  | None ->
+     Format.sprintf "%s : %s" (Id.to_string elem.felem_id)
+                    (constr_expr_to_string
+                       (rel_term_to_term_nocheck elem.felem_type))
+  | Some defn ->
+     Format.sprintf "%s : %s := %s" (Id.to_string elem.felem_id)
+                    (constr_expr_to_string
+                       (rel_term_to_term_nocheck elem.felem_type))
+                    (constr_expr_to_string
+                       (rel_term_to_term_nocheck defn))
+
+(* Print an fctx to a string, for debugging purposes *)
+let rec fctx_to_string ?(recursive_p=false) fctx =
+  if recursive_p then
+    match fctx with
+    | [] -> ""
+    | [elem] -> fctx_elem_to_string elem
+    | elem :: fctx' ->
+       Format.sprintf "%s, %s" (fctx_elem_to_string elem)
+                      (fctx_to_string ~recursive_p:true fctx')
+  else
+    Printf.sprintf "{%s}" (fctx_to_string ~recursive_p:true fctx)
+
 (* Build a local_defn from an id and the current fctx *)
 let mk_local_defn fctx id =
   `Local_Defn (id, List.map (fun e -> e.felem_id) fctx)
@@ -785,7 +827,9 @@ let rec filter_fctx fields fctx =
   match fctx with
   | [] -> []
   | elem :: fctx' ->
-     if Id.Set.mem elem.felem_id fields then
+     if Id.Set.mem elem.felem_id fields
+        || Id.Set.mem (field_var_id elem.felem_id) fields
+     then
        elem :: filter_fctx (Id.Set.union
                               (Id.Set.of_list (fctx_elem_deps elem)) fields)
                            fctx'
@@ -812,6 +856,13 @@ let add_local_typeclass id is_op_class is_prop_class (fctx : local_fctx) fields 
     List.fold_left (fun free_vars (_, tp, _) ->
                     Id.Set.union (free_vars_of_constr_expr tp) free_vars)
                    Id.Set.empty fields
+  in
+  let _ =
+    Format.eprintf "add_local_typeclass for id %s: free vars = %s\n"
+                   (Id.to_string (located_elem id))
+                   (Id.Set.fold (fun v str ->
+                                 Printf.sprintf "%s,%s" (Id.to_string v) str)
+                                free_vars "")
   in
   let fctx_free_vars = filter_fctx free_vars fctx in
   let _ = add_typeclass id is_op_class is_prop_class
@@ -1318,7 +1369,10 @@ let current_all_params loc =
 let add_declared_op op_name op_type =
   let op_id = located_elem op_name in
   let loc = located_loc op_name in
-  let _ = Format.eprintf "\nadd_declared_op: %s\n" (Id.to_string op_id) in
+  let _ = Format.eprintf "\nadd_declared_op: %s of type %a in context %s\n"
+                         (Id.to_string op_id) pp_constr_expr op_type
+                         (fctx_to_string (current_op_ctx loc))
+  in
 
   (* Add a type-class op_name__class : Type := op_name : op_type *)
   let tp_defn = add_local_typeclass
@@ -1635,7 +1689,6 @@ let global_defn_to_term_inst_subst loc params isubst d =
                               (List.map (fun (_,id_to) -> mk_var (loc, id_to)) subst)]
                            (mk_global_app_named_args r (subst_to_inst_args subst)) in
       *)
-     let _ = Format.eprintf "\nspec_defn_term_local: returning %a\n" pp_constr_expr res in
      res
 
 
