@@ -18,8 +18,7 @@ Print Monoid.
 (* FIXME: get undo to work! *)
 Spec Group.
 
-Spec Import Monoid.
-(* Spec Import Monoid {m_% +-> g_%}. *)
+Spec Import Monoid {m_% +-> g_%}.
 
 Spec Variable g_inv : (T -> T).
 Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).

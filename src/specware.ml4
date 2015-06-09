@@ -277,25 +277,30 @@ let add_typeclass class_id is_op_class is_prop_class params fields =
 
 (* Add an instance using a single term *)
 let add_term_instance inst_name inst_params inst_tp inst_body =
-  let loc = located_loc inst_name in
-  interp (loc, VernacInstance
-                 (false, inst_params,
-                  (inst_name, Decl_kinds.Explicit, inst_tp),
-                  Some (false, inst_body),
-                  None))
+  let cmd = VernacInstance
+              (false, inst_params,
+               (inst_name, Decl_kinds.Explicit, inst_tp),
+               Some (false, inst_body),
+               None)
+  in
+  let _ = Format.eprintf "add_term_instance command:\n%a" pp_vernac cmd in
+  interp (located_loc inst_name, cmd)
 
 
 (* Add an instance using the given record fields *)
 let add_record_instance inst_name inst_params inst_tp inst_fields =
   let loc = located_loc inst_name in
-  interp (loc, VernacInstance
-                 (false, inst_params,
-                  (inst_name, Decl_kinds.Explicit, inst_tp),
-                  Some (true,
-                        CRecord (loc, None,
-                                 List.map (fun (id,body) -> (Ident (loc, id),body))
-                                          inst_fields)),
-                  None))
+  let cmd = VernacInstance
+              (false, inst_params,
+               (inst_name, Decl_kinds.Explicit, inst_tp),
+               Some (true,
+                     CRecord (loc, None,
+                              List.map (fun (id,body) -> (Ident (loc, id),body))
+                                       inst_fields)),
+               None)
+  in
+  let _ = Format.eprintf "add_record_instance command:\n%a" pp_vernac cmd in
+  interp (loc, cmd)
 
 (* Begin an interactively-defined instance *)
 let begin_instance inst_name inst_params inst_tp =
@@ -325,7 +330,7 @@ let within_module mod_name f =
 (* Check that two terms are definitionally equal relative to the given
    parameter list, by checking that (forall params, eq_refl : t1=t2)
    is well-typed (eq_refl is the constructor for the equality type) *)
-(* FIXME HERE: make sure this works! *)
+(* FIXME: make sure this works! *)
 let check_equal_term params t1 t2 =
   try
     interp
@@ -521,6 +526,27 @@ let global_field_in_global_spec globref fname =
 
 
 (***
+ *** Identifier Suffixes
+ ***)
+
+(* Build the identifier used to quantify over a field as a local
+   variable *)
+let field_var_id f = add_suffix f "param"
+
+(* Get the identifier used locally for the type of a field *)
+let field_type_id f = add_suffix f "type"
+
+(* Get the identifier used locally for the type-class of a field *)
+let field_class_id f = add_suffix f "class"
+
+(* The name of the instance associated with a field *)
+let field_inst_id f = add_suffix f "inst"
+
+(* The axiom typeclass field pointing to an instance of this axiom *)
+let field_axelem_id f = add_suffix f "axiom"
+
+
+(***
  *** Field substitutions (i.e., spec morphisms)
  ***)
 
@@ -626,7 +652,7 @@ let rec global_defn_to_term_nocheck (d : global_defn) =
        (global_subst_to_args_nocheck args)
 and global_subst_to_args_nocheck (args:global_subst) =
   List.map (fun (id_from, id_to, opt_def) ->
-            (id_from,
+            (field_var_id id_from,
              match opt_def with
              | Some d -> global_defn_to_term_nocheck d
              | None -> mk_var (dummy_loc, id_to))) args
@@ -703,22 +729,6 @@ type 'a fctx = 'a fctx_elem list
 
 type local_fctx = local_defn fctx
 type global_fctx = global_defn fctx
-
-(* Build the identifier used to quantify over a field as a local
-   variable *)
-let field_var_id f = add_suffix f "param"
-
-(* Get the identifier used locally for the type of a field *)
-let field_type_id f = add_suffix f "type"
-
-(* Get the identifier used locally for the type-class of a field *)
-let field_class_id f = add_suffix f "class"
-
-(* The name of the instance associated with a field *)
-let field_inst_id f = add_suffix f "inst"
-
-(* The axiom typeclass field pointing to an instance of this axiom *)
-let field_axelem_id f = add_suffix f "axiom"
 
 (* Get the id for the named parameter used for a field *)
 let fctx_elem_var_id elem =
@@ -1067,6 +1077,7 @@ let subst_fctx loc (subst:global_subst) (fctx:global_fctx) : global_fctx =
    and types (called just the "op context") and one for axioms and theorems
    (called the "axiom context"). The latter can depend on the former, but not
    vice-versa. *)
+(* FIXME HERE NOW: add an optional definition element for the axiom typeclass *)
 type 'a spec = {
   spec_op_ctx : 'a fctx;
   spec_axiom_ctx : 'a fctx
@@ -1602,7 +1613,7 @@ exception DefFieldNotFound of Id.t
 global_spec to an import_spec *)
 let add_term_defs_spec defs (spec : global_spec)
     : import_spec =
-  (* FIXME HERE: throw DefFieldNotFound for fields in defs and not in spec *)
+  (* FIXME: throw DefFieldNotFound for fields in defs and not in spec *)
   { spec_op_ctx = add_term_defs_fctx defs spec.spec_op_ctx;
     spec_axiom_ctx = add_term_defs_fctx defs spec.spec_axiom_ctx }
 
@@ -1624,6 +1635,7 @@ type inst_subst = constant fctx_subst
 fields to typeclass instances. The typeclass instances are unfolded, and their
 accessors are folded, yielding a term that has no dependencies on the spec in
 which it was defined. *)
+(* FIXME HERE NOW: do my own manual unfolding and folding below *)
 let global_defn_to_term_inst_subst loc params isubst d =
   let _ = Format.eprintf "\nglobal_defn_to_term_inst_subst: arg = %a"
                          pp_constr_expr (global_defn_to_term_nocheck d)
@@ -1662,16 +1674,25 @@ let global_defn_to_term_inst_subst loc params isubst d =
                     (loc, id)
                     [(field_class_id id, mk_var (loc, field_var_id id))]))
                 (global_subst_deps args)
-    in
-    let res =
-      unfold_fold_term params unfolds folds
-                       (mk_ref_app_named_args
+     in
+     let res = mk_ref_app_named_args
                           (Qualid (loc, field_in_global_spec s id))
                           (* (subst_to_inst_args subst) *)
                            (List.map (fun (id_from,id_to,_) ->
                                       (field_var_id id_from,
+                                       mk_var (loc,field_var_id id_to))) inst_args)
+     in
+     (*
+     let res =
+       unfold_fold_term params unfolds folds
+                        (mk_ref_app_named_args
+                           (Qualid (loc, field_in_global_spec s id))
+                           (* (subst_to_inst_args subst) *)
+                           (List.map (fun (id_from,id_to,_) ->
+                                      (field_var_id id_from,
                                        mk_var (loc,field_var_id id_to))) inst_args))
      in
+      *)
      (*
      let f = unfold_term [] (r :: elims) (mk_global_expl r) in
      let res =
@@ -1839,13 +1860,14 @@ let import_pot_morphisms loc (target_spec : import_spec)
                            ) subst) pot_ms_ext
   in
   (* We now build up inst_substs for each source spec *)
-  let add_inst (elem : import_defn fctx_elem) inst_map (id_from, globref, spec) =
-    let _ = Format.eprintf "\nimport_pot_morphisms: adding instance of %s"
+  let add_inst (elem : import_defn fctx_elem) is_axiom inst_map (id_from, globref, spec) =
+    let _ = Format.eprintf "\nimport_pot_morphisms: adding instance of %s\n"
                            (Id.to_string id_from)
     in
     let inst_id = get_fresh_inst_name id_from in
+    let fctx = if is_axiom then current_all_ctx loc else current_op_ctx loc in
     let _ = add_local_term_instance
-              (loc, Name inst_id) (current_op_ctx loc)
+              (loc, Name inst_id) fctx
               (rel_term_to_term_nocheck elem.felem_type)
               (mk_var (loc, elem.felem_id))
     in
@@ -1870,7 +1892,7 @@ let import_pot_morphisms loc (target_spec : import_spec)
        let _ = add_fctx_elem_inst_map loc inst_subst_map elem is_axiom in
        (* Now create instances for each source field that maps to elem, and add
           those instances to inst_subst_map *)
-       List.fold_left (add_inst elem) inst_subst_map
+       List.fold_left (add_inst elem is_axiom) inst_subst_map
                       (find_inst_fields elem.felem_id)
       )
       (List.map (fun elem -> (elem, true)) target_spec.spec_axiom_ctx @
@@ -1883,18 +1905,18 @@ let import_pot_morphisms loc (target_spec : import_spec)
      let locref = spec_globref_to_locref globref in
      let inst_id = get_fresh_inst_name (spec_locref_basename locref) in
      add_local_record_instance
-       (loc, Name inst_id) (current_op_ctx loc)
+       (loc, Name inst_id) (current_all_ctx loc)
        (mk_ref_app_named_args
           (spec_typeclass_ref loc (spec_globref_to_locref globref))
           (List.rev_map
              (fun elem ->
               let (dest_id, _) = subst_id subst elem.felem_id in
-              (elem.felem_id, mk_var (loc, dest_id)))
+              (field_var_id elem.felem_id, mk_var (loc, dest_id)))
              source_spec.spec_op_ctx))
        (List.map
           (fun elem ->
            let (dest_id, _) = subst_id subst elem.felem_id in
-           (elem.felem_id, mk_var (loc, dest_id)))
+           (field_axelem_id elem.felem_id, mk_var (loc, dest_id)))
           source_spec.spec_axiom_ctx)
     )
     pot_ms_ext
@@ -1911,7 +1933,7 @@ let import_spec_term loc spec_term =
  ***)
 
 (* Run f, catching any exceptions and turning them into user_errors *)
-(* FIXME HERE: actually write this! *)
+(* FIXME: actually write this! *)
 let reporting_exceptions f =
   f ()
 
