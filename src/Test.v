@@ -29,10 +29,9 @@ Spec End Group.
 Print Group.
 
 (* FIXME: make a more interesting morphism... *)
-Spec Morphism MG : Monoid -> Group { m_% +-> g_% }.
+(* Spec Morphism MG : Monoid -> Group { m_% +-> g_% }. *)
 
-Set Printing All.
-Print Group.g_zero_left__type.
+Print Group.g_zero_left__class.
 
 Section Monoid_Thms.
 Import Monoid.
@@ -51,7 +50,6 @@ Section Group_Thms.
 Import Group.
 Context `{Group}.
 
-Set Printing All.
 Lemma left_inv_uniq (x x_inv:T) :
   g_plus x_inv x = g_zero -> x_inv = g_inv x.
   intro left_inv.
@@ -62,3 +60,5 @@ Lemma left_inv_uniq (x x_inv:T) :
   rewrite g_zero_left.
   reflexivity.
 Qed.
+
+End Group_Thms.

@@ -54,7 +54,7 @@ let rec stable_reverse_topo_sort loc key key_eq deps l =
   let arr_deps = Array.make (List.length l) [] in
   let visited = Array.make (List.length l) false in
   let rec get_node_by_key_help k j =
-    if j > Array.length arr then None
+    if j >= Array.length arr then None
     else if key_eq k (key arr.(j)) then Some j
     else get_node_by_key_help k (j+1) in
   let get_node_by_key k = get_node_by_key_help k 0 in
@@ -639,7 +639,9 @@ exception FieldAlreadyDefined of Id.t
 let rec subst_field_term (subst: field_subst) t =
   { t with field_term_subst = compose_substs subst t.field_term_subst }
 
-(* Compose a substitution with another one *)
+(* Compose a substitution with another one. NOTE: we assume the domain of the
+substitution includes all the fields we care about, so we do not add mappings
+from s2 to the end of s1 *)
 and compose_substs (s2 : field_subst) (s1 : field_subst) : field_subst =
   List.map (fun (id_from, id_to, defn_opt) ->
             let (id_to_out, defn_opt') = subst_id s2 id_to in
@@ -653,8 +655,10 @@ and compose_substs (s2 : field_subst) (s1 : field_subst) : field_subst =
             in
             (id_from, id_to_out, defn_opt_out)) s1
   (* Any fields not already mapped by s1 can be mapped by s2 *)
+  (*
   @ List.filter (fun (id, _, _) ->
                  not (List.exists (fun (id', _, _) -> Id.equal id id') s1)) s2
+   *)
 
 
 (***
@@ -829,6 +833,8 @@ let add_local_record_instance loc fctx id tp fields =
  *** Merging and substituting into global field contexts
  ***)
 
+(* FIXME HERE: extract common functionality from merge_fctxs and subst_fctx *)
+
 (* Either the types (if flag = false) or the definitions (if flag = true) of the
 same field are different in two contexts that are supposed to be compatible *)
 exception FieldMismatch of Id.t * bool
@@ -854,9 +860,21 @@ let merge_fctxs loc fctx1 fctx2 =
                                 | Some _ -> None) fctx2)
   in
   (* Next, sort the names *)
-  (* FIXME: catch the TopoCircularity exception! *)
   let sorted_names_and_deps =
-    stable_reverse_topo_sort loc fst Id.equal snd names_and_deps
+    try
+      stable_reverse_topo_sort loc fst Id.equal snd names_and_deps
+    with TopoCircularity i ->
+      (* FIXME: use a better exception here *)
+      raise loc (Failure ("merge_fctxs: circular dependency for field "
+                          ^ Id.to_string (fst (List.nth names_and_deps i))
+                          ^ "; field deps = "
+                          ^ String.concat
+                              ", "
+                              (List.map
+                                 (fun (id, deps) ->
+                                  Id.to_string id ^ " -> {"
+                                  ^ String.concat "," (List.map Id.to_string deps)
+                                  ^ "}") names_and_deps)))
   in
   (* Now build up the context to return starting at the right, because fctxs are
   stored in reverse order (inner-most bindings last) *)
@@ -1617,7 +1635,10 @@ let rec interp_spec_term sterm : spec * potential_morphism list =
 (* Add an fctx_elem to the current spec *)
 (* FIXME HERE NOW: test if the element already exists *)
 let import_fctx_elem loc is_axiom elem =
-  if elem.felem_is_ghost then () else
+  if elem.felem_is_ghost ||
+       List.exists (fun elem' -> Id.equal elem.felem_id elem'.felem_id)
+                   (current_full_ctx loc)
+  then () else
     match (is_axiom, elem.felem_defn) with
     | (true, None) ->
        add_axiom (loc, elem.felem_id) false
@@ -1636,6 +1657,8 @@ let import_fctx_elem loc is_axiom elem =
 (* Import a spec term into the current spec *)
 let import_spec_term loc sterm =
   let (spec, insts) = interp_spec_term sterm in
+  (* Do merge_specs to test for errors so import_fctx_elem doesn't have to *)
+  let _ = merge_specs loc spec (get_current_spec loc) in
   let _ =
     List.iter (import_fctx_elem loc false) (List.rev spec.spec_op_ctx)
   in
