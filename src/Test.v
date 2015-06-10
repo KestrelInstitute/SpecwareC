@@ -28,6 +28,24 @@ Spec End Group.
 
 Print Group.
 
+(*
+Spec DoubleMonoid.
+
+Spec Import Monoid {m_% +-> m1_%}.
+Spec Import Monoid {m_% +-> m2_%}.
+
+Spec End DoubleMonoid.
+*)
+
+
+Spec MonoidImport.
+
+Spec Variable T : Type.
+
+Spec Import Monoid.
+
+End Spec Monoid.
+
 (* FIXME: make a more interesting morphism... *)
 (* Spec Morphism MG : Monoid -> Group { m_% +-> g_% }. *)
 
@@ -49,6 +67,11 @@ End Monoid_Thms.
 Section Group_Thms.
 Import Group.
 Context `{Group}.
+
+Lemma g_left_id_uniq (x:T) :
+  (forall y, g_plus x y = y) -> x = g_zero.
+  apply left_id_uniq.
+Qed.
 
 Lemma left_inv_uniq (x x_inv:T) :
   g_plus x_inv x = g_zero -> x_inv = g_inv x.
