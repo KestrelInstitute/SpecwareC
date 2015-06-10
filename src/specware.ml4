@@ -898,6 +898,22 @@ let merge_fctxs loc fctx1 fctx2 =
    fields, which are mapped to the same field by a substitution, are unequal *)
 exception FieldOverlapMismatch of Id.t * Id.t * bool
 
+(* Apply a substitution to an fctx element *)
+let subst_fctx_elem loc fctx (subst:field_subst) elem =
+  let (new_id, defn_opt) = subst_id subst elem.felem_id in
+  let new_defn_opt =
+    match (elem.felem_defn, defn_opt) with
+    | (None, _) -> defn_opt
+    | (Some defn, None) -> Some (subst_field_term subst defn)
+    | (Some defn, Some defn') ->
+       if check_equal_field_term loc fctx (subst_field_term subst defn) defn'
+       then (Some defn')
+       else raise loc (FieldAlreadyDefined elem.felem_id)
+  in
+  { elem with felem_id = new_id;
+              felem_type = subst_field_term subst elem.felem_type;
+              felem_defn = new_defn_opt }
+
 (* Apply an fctx substitution to an fctx, raising a FieldOverlapMismatch if two
 fields with distinct types or definitions are mapped to the same field *)
 (* FIXME HERE: handle the fact that defns could require topo sorting... *)
@@ -957,26 +973,19 @@ let subst_fctx loc (subst:field_subst) (fctx:fctx) : fctx =
   (* Now build up the out fctx, using the overlap lists to report any errors *)
   List.fold_right
     (fun elem fctx_out ->
-     let id_from = elem.felem_id in
-     let (id_to, defn_opt) = subst_id subst id_from in
-     match fctx_lookup fctx_out id_to with
-     | None ->
-        let elem' = { elem with felem_id = id_to } in
-        let elem'' =
-          match defn_opt with
-          | None -> elem'
-          | Some defn -> add_fctx_elem_defn fctx_out elem' id_from id_to defn
-        in
-        elem'' :: fctx_out
+     let elem_out = subst_fctx_elem loc fctx_out subst elem in
+     match fctx_lookup fctx_out elem_out.felem_id with
+     | None -> elem_out :: fctx_out
      | Some elem' ->
         let _ =
           if check_equal_field_term loc fctx_out elem.felem_type elem'.felem_type
           then ()
-          else raise_overlap_error id_from false
+          else raise_overlap_error elem.felem_id false
         in
-        (match defn_opt with
+        (match elem.felem_defn with
          | None -> fctx_out
-         | Some defn -> add_fctx_defn fctx_out id_from id_to defn)
+         | Some defn ->
+            add_fctx_defn fctx_out elem.felem_id elem_out.felem_id defn)
     ) fctx []
 
 
@@ -1609,7 +1618,7 @@ let import_spec_term loc sterm =
     List.iter (import_fctx_elem loc false) (List.rev spec.spec_op_ctx)
   in
   let _ =
-    List.iter (import_fctx_elem loc true) (List.rev spec.spec_op_ctx)
+    List.iter (import_fctx_elem loc true) (List.rev spec.spec_axiom_ctx)
   in
   List.iter (add_potential_morphism_instances loc (current_full_ctx loc)) insts
 
