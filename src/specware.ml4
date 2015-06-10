@@ -565,6 +565,7 @@ fields easier, the fields of a field term are represented as the domain of
 a substitution into that expression. *)
 type field_term =
     { field_term_body : constr_expr;
+      field_term_init_args : Id.t list;
       field_term_subst : field_subst }
 
 (* A field substitution maps field names to field names, possibly adding
@@ -589,6 +590,7 @@ let mk_field_term fields body =
        map_constr_expr_with_binders Id.Set.add fixup_free_vars var_set expr
   in
   { field_term_body = fixup_free_vars (Id.Set.of_list fields) body;
+    field_term_init_args = fields;
     field_term_subst = mk_id_subst fields }
 
 (* Make the substitution that adds definition d to id for each (id,d) in defs *)
@@ -615,9 +617,10 @@ and field_subst_free_fields subst =
                               | None -> fs))
                  Id.Set.empty subst
 
-(* The "top-level" free fields of a field term *)
-let field_term_top_free_fields t =
-  List.map (fun (_, id_to, _) -> id_to) t.field_term_subst
+(* The argument fields of a field_term, substituted by the subst *)
+let field_term_args t =
+  List.map (fun id -> fst (subst_id t.field_term_subst id))
+           t.field_term_init_args
 
 (* Convert a field substitution to a map from Ids to constr_exprs *)
 let field_subst_to_id_map subst =
@@ -725,7 +728,7 @@ let rec fctx_to_string ?(recursive_p=false) fctx =
 
 (* Build a field_term relative to an fctx *)
 let mk_fctx_term fctx body =
-  mk_field_term (List.map (fun elem -> elem.felem_id) fctx) body
+  mk_field_term (List.rev_map (fun elem -> elem.felem_id) fctx) body
 
 (* Cons a field to a field context *)
 let fctx_cons id is_ghost tp defn_opt fctx =
@@ -1017,14 +1020,19 @@ including ghost fields if ghosts_p is true. Remember that fctxs are stored
 backwards, so the axiom context, which depends on the op context, is listed
 first. *)
 let spec_full_fctx ghosts_p spec =
-  let fctx = spec.spec_axiom_ctx @ spec.spec_axiom_ctx in
+  let fctx = spec.spec_axiom_ctx @ spec.spec_op_ctx in
   if ghosts_p then fctx else fctx_non_ghosts fctx
+
+(* Get the ids of all the ops *)
+let spec_op_ids spec =
+  List.rev_map (fun elem -> elem.felem_id) spec.spec_op_ctx
 
 (* Get the ids of all the non-defined axioms *)
 let spec_axiom_ids spec =
-  filter_map (fun elem -> if fctx_elem_has_def elem then None
-                          else Some elem.felem_id)
-             spec.spec_axiom_ctx
+  List.rev
+    (filter_map (fun elem -> if fctx_elem_has_def elem then None
+                             else Some elem.felem_id)
+                spec.spec_axiom_ctx)
 
 (* Two specs were merged where the given field is an op in one spec and an axiom
 in the other *)
@@ -1183,13 +1191,19 @@ let instance_map_empty = Id.Map.empty
 
 (* Apply a field in a global spec to the instances in an instance map *)
 let apply_field_to_inst_map loc globref id arg_fields inst_map =
-  try
-    mk_ref_app_named_args
-      (Qualid (loc, field_in_global_spec globref id))
-      (List.map (fun id ->
-                 (id, mk_var (loc, Id.Map.find id inst_map))) arg_fields)
-  with Not_found ->
-    raise loc (Failure "apply_field_to_inst_map")
+  mk_ref_app_named_args
+    (Qualid (loc, field_in_global_spec globref id))
+    (List.map
+       (fun id ->
+        let inst_id =
+          try Id.Map.find id inst_map
+          with Not_found ->
+            raise loc (Failure
+                         ("apply_field_class_to_inst_map: no binding for field "
+                          ^ Id.to_string id))
+        in
+        (field_var_id id, mk_var (loc, inst_id)))
+       arg_fields)
 
 (* Fresh names for generating instance names *)
 let inst_name_counter = ref 0
@@ -1199,13 +1213,14 @@ let get_fresh_inst_name id =
   Id.of_string (Id.to_string id ^ "__inst__" ^ string_of_int i)
 
 (* Create a typeclass instance of id_from in spec and add it to inst_map *)
-let instance_map_add loc fctx globref spec (id_from, id_to, _) inst_map =
-  let elem_from =
-    match fctx_lookup (spec_full_fctx true spec) id_from with
-    | None -> raise loc (Failure "instance_map_add")
-    | Some elem -> elem
+let instance_map_add loc fctx globref spec elem_from id_to inst_map =
+  let id_from = elem_from.felem_id in
+  let from_fields = field_term_args elem_from.felem_type in
+  let _ = Format.eprintf
+            "\ninstance_map_add: id_from = %s, from_fields = %s\n"
+            (Id.to_string id_from)
+            (String.concat ", " (List.map Id.to_string from_fields))
   in
-  let from_fields = field_term_top_free_fields elem_from.felem_type in
   let tp = apply_field_to_inst_map loc globref (field_class_id id_from)
                                    from_fields inst_map in
   let inst_id = get_fresh_inst_name id_from in
@@ -1216,8 +1231,11 @@ let instance_map_add loc fctx globref spec (id_from, id_to, _) inst_map =
 returning an instance map for those fields *)
 let add_potential_morphism_field_instances loc fctx (pot_m : potential_morphism) =
   let (globref, spec, subst) = pot_m in
-  List.fold_right (instance_map_add loc fctx globref spec)
-                  subst instance_map_empty
+  List.fold_right (fun elem inst_map ->
+                   let (id_to, _) = subst_id subst elem.felem_id in
+                   instance_map_add loc fctx globref spec elem id_to inst_map)
+                  (spec_full_fctx true spec)
+                  instance_map_empty
 
 (* Add instances for all the fields and the axiom typeclass of the domain of a
 potential morphism *)
@@ -1228,11 +1246,15 @@ let add_potential_morphism_instances loc fctx (pot_m : potential_morphism) =
     | Some id -> id
     | None -> raise loc (Failure "add_potential_morphism_instances")
   in
+  let op_ids = spec_op_ids spec in
   let axiom_ids = spec_axiom_ids spec in
-  add_local_record_instance
-    loc fctx (Name (get_fresh_inst_name axiom_class_id))
-    (apply_field_to_inst_map loc globref axiom_class_id axiom_ids inst_map)
-    (List.map (fun id -> (id, mk_var (loc, Id.Map.find id inst_map))) axiom_ids)
+  let inst_id = get_fresh_inst_name axiom_class_id in
+  add_record_instance
+    (loc, Name inst_id) (fctx_params loc fctx)
+    (apply_field_to_inst_map loc globref axiom_class_id op_ids inst_map)
+    (List.map (fun id ->
+               (field_axelem_id id,
+                mk_var (loc, Id.Map.find id inst_map))) axiom_ids)
 
 
 (***

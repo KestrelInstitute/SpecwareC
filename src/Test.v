@@ -26,6 +26,7 @@ Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 
 Spec End Group.
 
+Print Group.
 
 (* FIXME: make a more interesting morphism... *)
 Spec Morphism MG : Monoid -> Group { m_% +-> g_% }.
