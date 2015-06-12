@@ -28,23 +28,35 @@ Spec End Group.
 
 Print Group.
 
+
 (*
+Spec MonoidImport0.
+
+Spec Variable T : nat.
+
+Spec Import Monoid.
+
+Spec End MonoidImport0.
+*)
+
+Spec MonoidImport1.
+
+Spec Variable T : Type.
+Spec Variable m_zero : T.
+
+Spec Import Monoid.
+
+Spec End MonoidImport1.
+
+
 Spec DoubleMonoid.
 
 Spec Import Monoid {m_% +-> m1_%}.
 Spec Import Monoid {m_% +-> m2_%}.
 
 Spec End DoubleMonoid.
-*)
 
-
-Spec MonoidImport.
-
-Spec Variable T : Type.
-
-Spec Import Monoid.
-
-End Spec Monoid.
+Print DoubleMonoid.
 
 (* FIXME: make a more interesting morphism... *)
 (* Spec Morphism MG : Monoid -> Group { m_% +-> g_% }. *)

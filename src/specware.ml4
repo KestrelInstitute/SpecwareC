@@ -44,6 +44,47 @@ let concat_map f l =
 (* Topo sort failed because of a circularity *)
 exception TopoCircularity of int
 
+(* FIXME HERE: remove the reverse sort, or factor out the common functionality *)
+
+(* Stable forward topological sort: sort l so that every element x
+   comes after its dependencies, favoring the existing ordering of l
+   where possible. The dependencies of x are all nodes y whose key,
+   given by the key function, is key_eq to a key in (deps x). *)
+(* FIXME: use sets for deps instead of lists *)
+let rec stable_forward_topo_sort loc key key_eq deps l =
+  let arr = Array.of_list l in
+  let arr_deps = Array.make (List.length l) [] in
+  let visited = Array.make (List.length l) false in
+  let rec get_node_by_key_help k j =
+    if j >= Array.length arr then None
+    else if key_eq k (key arr.(j)) then Some j
+    else get_node_by_key_help k (j+1) in
+  let get_node_by_key k = get_node_by_key_help k 0 in
+  (* Perform a DFS to build the transitive closure of deps *)
+  let rec build_node_deps path_to_i i =
+    if visited.(i) then
+      arr_deps.(i)
+    else if List.mem i path_to_i then
+      raise loc (TopoCircularity i)
+    else
+      let i_immed_deps = filter_map get_node_by_key (deps arr.(i)) in
+      let i_deps = concat_map (build_node_deps (i::path_to_i)) i_immed_deps in
+      visited.(i) <- true;
+      arr_deps.(i) <- i_deps;
+      i::i_deps
+  in
+  let _ = for i = 0 to Array.length arr_deps - 1 do
+            ignore (build_node_deps [] i)
+          done in
+  let index_arr = Array.init (List.length l) (fun i -> i) in
+  let _ = Array.stable_sort
+            (fun i j ->
+             if List.mem j arr_deps.(i) then -1
+             else if List.mem i arr_deps.(j) then 1
+             else j-i)
+            index_arr in
+  Array.to_list (Array.map (fun i -> arr.(i)) index_arr)
+
 (* Stable reverse topological sort: sort l so that every element x
    comes before its dependencies, favoring the existing ordering of l
    where possible. The dependencies of x are all nodes y whose key,
@@ -153,16 +194,16 @@ let mk_app f args =
 
 (* Build an expression for a local reference applied to named implicit
    args, where the args are given as (name,value) pairs *)
-let mk_ref_app_named_args r args =
-  CApp (dummy_loc,
+let mk_ref_app_named_args loc r args =
+  CApp (loc,
         (None, CRef (r, None)),
         List.map (fun (id,arg) ->
                   (arg, Some (dummy_loc, ExplByName id))) args)
 
 (* Build an expression for a variable applied to named implicit args,
    where the args are given as (name,value) pairs *)
-let mk_id_app_named_args id args =
-  mk_ref_app_named_args (Ident id) args
+let mk_id_app_named_args loc id args =
+  mk_ref_app_named_args loc (Ident id) args
 
 (* Build a qualified id (NOTE: dir is *not* reversed here) *)
 let mk_qualid dir id =
@@ -201,7 +242,7 @@ let qualid_of_global gr =
 
 (* Build an expression for a global applied to named implicit args *)
 let mk_global_app_named_args gr args =
-  mk_ref_app_named_args (Qualid (dummy_loc, qualid_of_global gr)) args
+  mk_ref_app_named_args dummy_loc (Qualid (dummy_loc, qualid_of_global gr)) args
 
 (* Build an exprssion for a global with @ in front of it *)
 let mk_global_expl gr =
@@ -335,24 +376,23 @@ let within_module mod_name f =
 (* Check that two terms are definitionally equal relative to the given
    parameter list, by checking that (forall params, eq_refl : t1=t2)
    is well-typed (eq_refl is the constructor for the equality type) *)
-(* FIXME: make sure this works! *)
 let check_equal_term params t1 t2 =
-  try
-    interp
-      (dummy_loc,
-       VernacCheckMayEval
-         (None, None,
-          (Constrexpr_ops.mkCProdN
-             dummy_loc
-             params
-             (CCast (dummy_loc,
-                     CApp (dummy_loc,
-                           (None, mk_reference ["Coq"; "Init"; "Logic"]
-                                               (Id.of_string "eq_refl")),
-                           [(t1, None)]),
-                     CastConv (mk_equality t1 t2))))));
-    true
-  with UserError _ -> false
+  let cmd = VernacCheckMayEval
+              (None, None,
+               (Constrexpr_ops.mkCProdN
+                  dummy_loc
+                  params
+                  (CCast (dummy_loc,
+                          CApp (dummy_loc,
+                                (None, mk_reference ["Coq"; "Init"; "Logic"]
+                                                    (Id.of_string "eq_refl")),
+                                [(t1, None)]),
+                          CastConv (mk_equality t1 t2)))))
+  in
+  let _ = Format.eprintf "check_equal_term command:\n%a" pp_vernac cmd in
+  try interp (dummy_loc, cmd); true
+  with Type_errors.TypeError _ -> false
+     | Pretype_errors.PretypeError _ -> false
 
 (* Apply a series of reductions to a term in a parameter context, by
    interpreting the term to a constr, applying the reductions in order, and then
@@ -566,7 +606,8 @@ a substitution into that expression. *)
 type field_term =
     { field_term_body : constr_expr;
       field_term_init_args : Id.t list;
-      field_term_subst : field_subst }
+      field_term_subst : field_subst
+      (* field_term_module : ModPath.t option *) }
 
 (* A field substitution maps field names to field names, possibly adding
 definitions to fields *)
@@ -576,7 +617,7 @@ definitions to fields *)
 let mk_id_subst fields = List.map (fun id -> (id, id, None)) fields
 
 (* Make a field term from a constr_expr and a list of potential fields *)
-(* FIXME HERE NOW: don't qualify things like f__class *)
+(* FIXME: think about how to handle derived variables, e.g., f__var *)
 let mk_field_term fields body =
   (*
   let free_vars = free_vars_of_constr_expr body in
@@ -589,7 +630,11 @@ let mk_field_term fields body =
     | expr ->
        map_constr_expr_with_binders Id.Set.add fixup_free_vars var_set expr
   in
-  { field_term_body = fixup_free_vars (Id.Set.of_list fields) body;
+  let var_set =
+    List.fold_left (fun set id ->
+                    Id.Set.add id (Id.Set.add (field_var_id id) set))
+                   Id.Set.empty fields in
+  { field_term_body = fixup_free_vars var_set body;
     field_term_init_args = fields;
     field_term_subst = mk_id_subst fields }
 
@@ -670,6 +715,8 @@ and compose_substs (s2 : field_subst) (s1 : field_subst) : field_subst =
    meaning that they are actually derived from other fields (e.g., equality
    axioms being derived from defined fields).
 
+   FIXME HERE: document the difference between felem_type and felem_class
+
    NOTE: field contexts are stored backwards, in that the "earlier" fields are
    stored later in the list; i.e., fields can only refer to fields later in a
    field context. This is to make it easy to add new fields as we go *)
@@ -677,6 +724,7 @@ type fctx_elem =
     { felem_id : Id.t;
       felem_is_ghost : bool;
       felem_type : field_term;
+      felem_class : field_term;
       felem_defn : field_term option
     }
 type fctx = fctx_elem list
@@ -735,14 +783,14 @@ let mk_fctx_term fctx body =
   mk_field_term (List.rev_map (fun elem -> elem.felem_id) fctx) body
 
 (* Cons a field to a field context *)
-let fctx_cons id is_ghost tp defn_opt fctx =
+let fctx_cons id is_ghost tp cls defn_opt fctx =
   { felem_id = id; felem_is_ghost = is_ghost;
-    felem_type = tp; felem_defn = defn_opt } :: fctx
+    felem_type = tp; felem_class = cls; felem_defn = defn_opt } :: fctx
 
 (* Convert a single fctx_elem to an implicit class assumption *)
 let fctx_elem_to_param loc elem =
   mk_implicit_assum (field_var_id elem.felem_id)
-                    (mk_var (loc, field_class_id elem.felem_id))
+                    (field_term_to_expr elem.felem_class)
 
 (* Filter out only the non-ghost elements of an fctx *)
 let fctx_non_ghosts fctx =
@@ -752,6 +800,11 @@ let fctx_non_ghosts fctx =
    in the context (remember: fctx is reversed) *)
 let fctx_params loc fctx =
   List.rev_map (fctx_elem_to_param loc) fctx
+
+(* Convert an fctx to a list of implicit arguments (f:=f) *)
+let fctx_to_args loc fctx =
+  List.rev_map (fun elem -> (field_var_id elem.felem_id,
+                             mk_var (loc, field_var_id elem.felem_id))) fctx
 
 (* Check the equality of two field terms relative to fctx *)
 let check_equal_field_term loc fctx d1 d2 =
@@ -808,7 +861,10 @@ let add_local_op_typeclass loc fctx id is_prop_class tp =
   let _ = add_typeclass (loc, field_class_id id) true is_prop_class
                         (fctx_params loc fctx_free_vars)
                         [((loc, id), tp, false)] in
-  mk_fctx_term fctx_free_vars tp
+  (mk_fctx_term fctx_free_vars tp,
+   mk_fctx_term fctx_free_vars
+                (mk_id_app_named_args loc (loc, field_class_id id)
+                                      (fctx_to_args loc fctx_free_vars)))
 
 (* Add an operational typeclass instance to the current module / spec *)
 let add_local_op_instance loc fctx id tp body =
@@ -842,6 +898,8 @@ exception FieldMismatch of Id.t * bool
 (* Merge two fctxs, merging any fields that they share. Also check that the two
 fctxs are compatible, meaning that any shared fields have the same types and
 definitions; raise FieldMismatch if not. *)
+(* FIXME HERE NOW: make sure the sorting is right, and add a base_fctx for axiom
+contexts depending on op contexts *)
 let merge_fctxs loc fctx1 fctx2 =
   (* First, build a list of all the field names and their dependencies *)
   let names_and_deps =
@@ -862,7 +920,7 @@ let merge_fctxs loc fctx1 fctx2 =
   (* Next, sort the names *)
   let sorted_names_and_deps =
     try
-      stable_reverse_topo_sort loc fst Id.equal snd names_and_deps
+      stable_forward_topo_sort loc fst Id.equal snd names_and_deps
     with TopoCircularity i ->
       (* FIXME: use a better exception here *)
       raise loc (Failure ("merge_fctxs: circular dependency for field "
@@ -876,17 +934,25 @@ let merge_fctxs loc fctx1 fctx2 =
                                   ^ String.concat "," (List.map Id.to_string deps)
                                   ^ "}") names_and_deps)))
   in
+  let _ =
+    Printf.eprintf "merge_fctxs: sorted names = %s\n"
+                   (String.concat
+                      ", "
+                      (List.map (fun (id,_) -> Id.to_string id)
+                                sorted_names_and_deps))
+  in
   (* Now build up the context to return starting at the right, because fctxs are
   stored in reverse order (inner-most bindings last) *)
   List.fold_right
     (fun (f, _) fctx ->
+     let _ = Format.eprintf "@[%s@ %s@]\n"
+                            "merge_fctxs: adding id" (Id.to_string f)
+     in
      let new_elem =
        match (fctx_lookup fctx1 f, fctx_lookup fctx2 f) with
        | (Some elem1, None) -> elem1
        | (None, Some elem2) -> elem2
        | (Some elem1, Some elem2) ->
-          (* NOTE: We just sorted the names, so the global_defn_to_term checks
-        should not possibly fail... *)
           let _ = if not (check_equal_field_term loc fctx elem1.felem_type
                                                  elem2.felem_type) then
                     raise loc (FieldMismatch (f, false)) else ()
@@ -906,7 +972,8 @@ let merge_fctxs loc fctx1 fctx2 =
                     raise loc (Failure ("merge_global_fctxs: merging ghost and non-ghost fields for field name " ^ Id.to_string f))
                   else () in
           { felem_id = f; felem_is_ghost = elem1.felem_is_ghost;
-            felem_type = elem1.felem_type; felem_defn = defn_opt }
+            felem_type = elem1.felem_type; felem_class = elem1.felem_class;
+            felem_defn = defn_opt }
        | (None, None) ->
           (* This should never happen! *)
           raise dummy_loc (Failure "merge_fctxs")
@@ -933,6 +1000,7 @@ let subst_fctx_elem loc fctx (subst:field_subst) elem =
   in
   { elem with felem_id = new_id;
               felem_type = subst_field_term subst elem.felem_type;
+              felem_class = subst_field_term subst elem.felem_class;
               felem_defn = new_defn_opt }
 
 (* Apply an fctx substitution to an fctx, raising a FieldOverlapMismatch if two
@@ -1210,6 +1278,7 @@ let instance_map_empty = Id.Map.empty
 (* Apply a field in a global spec to the instances in an instance map *)
 let apply_field_to_inst_map loc globref id arg_fields inst_map =
   mk_ref_app_named_args
+    loc
     (Qualid (loc, field_in_global_spec globref id))
     (List.map
        (fun id ->
@@ -1425,7 +1494,7 @@ let add_declared_op op_name op_type =
   in
 
   (* Add a type-class op_name__class : Type := op_name : op_type *)
-  let tp_defn =
+  let (tp_defn, cls_defn) =
     add_local_op_typeclass loc (current_op_ctx loc) op_id false op_type
   in
 
@@ -1434,7 +1503,7 @@ let add_declared_op op_name op_type =
     (fun s ->
      { s with
        spec_op_ctx =
-         fctx_cons op_id false tp_defn None s.spec_op_ctx })
+         fctx_cons op_id false tp_defn cls_defn None s.spec_op_ctx })
 
 (* Add an axiom to the current spec, creating a definition for its type *)
 let add_axiom ax_name is_ghost ax_type =
@@ -1442,21 +1511,21 @@ let add_axiom ax_name is_ghost ax_type =
   let loc = located_loc ax_name in
   let _ = Format.eprintf "\nadd_axiom: %s\n" (Id.to_string ax_id) in
   (* Add a type-class ax_name__class : Prop := ax_name : ax_type *)
-  let tp_defn =
+  let (tp_defn, cls_defn) =
     add_local_op_typeclass loc (current_op_ctx loc) ax_id true ax_type
   in
   update_current_spec
     loc
     (fun s ->
      { s with
-       spec_axiom_ctx = fctx_cons ax_id is_ghost tp_defn None s.spec_axiom_ctx })
+       spec_axiom_ctx = fctx_cons ax_id is_ghost tp_defn cls_defn None s.spec_axiom_ctx })
 
 (* FIXME HERE: make sure this is right: use typeclasses? *)
 let add_defined_theorem thm_name thm_type thm_body =
   let thm_id = located_elem thm_name in
   let loc = located_loc thm_name in
-  let tp_defn = add_local_op_typeclass loc (current_op_ctx loc)
-                                       thm_id true thm_type
+  let (tp_defn, cls_defn) =
+    add_local_op_typeclass loc (current_op_ctx loc) thm_id true thm_type
   in
   let def_defn =
     add_local_definition loc (current_full_ctx loc) thm_id
@@ -1466,7 +1535,7 @@ let add_defined_theorem thm_name thm_type thm_body =
     loc
     (fun s ->
      { s with
-       spec_axiom_ctx = fctx_cons thm_id false tp_defn
+       spec_axiom_ctx = fctx_cons thm_id false tp_defn cls_defn
                                   (Some def_defn) s.spec_axiom_ctx })
 
 (* Add a defined op to the current spec, creating a type-class and def for it *)
@@ -1486,7 +1555,7 @@ let add_defined_op op_name op_type_opt op_body =
   let def_defn = add_local_definition loc op_ctx op_id (Some op_type) op_body in
 
   (* Add a type-class for op_name__class : Type := op_name__var : op_type *)
-  let tp_defn =
+  let (tp_defn, cls_defn) =
     add_local_op_typeclass loc op_ctx op_id false op_type in
 
   (* Add the new op to spec *)
@@ -1496,7 +1565,7 @@ let add_defined_op op_name op_type_opt op_body =
       (fun s ->
        { s with
          spec_op_ctx =
-           fctx_cons op_id false tp_defn (Some def_defn) s.spec_op_ctx }) in
+           fctx_cons op_id false tp_defn cls_defn (Some def_defn) s.spec_op_ctx }) in
 
   (* Add an axiom "op_name = op_name__var" to the resulting spec *)
   add_axiom
@@ -1633,7 +1702,6 @@ let rec interp_spec_term sterm : spec * potential_morphism list =
       List.map (subst_potential_morphism subst) insts)
 
 (* Add an fctx_elem to the current spec *)
-(* FIXME HERE NOW: test if the element already exists *)
 let import_fctx_elem loc is_axiom elem =
   if elem.felem_is_ghost ||
        List.exists (fun elem' -> Id.equal elem.felem_id elem'.felem_id)
