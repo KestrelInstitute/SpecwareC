@@ -142,6 +142,14 @@ let pp_constr_expr fmt c = Pp.pp_with fmt (Richpp.pr_constr_expr c)
 (* Pretty-print a vernacular command *)
 let pp_vernac fmt cmd = Pp.pp_with fmt (Ppvernac.Richpp.pr_vernac_body cmd)
 
+(* Pretty-print a type error *)
+let pp_type_error env fmt e =
+  Pp.pp_with fmt (Himsg.explain_type_error env Evd.empty e)
+
+(* Pretty-print a pretyping error *)
+let pp_pretype_error env evd fmt e =
+  Pp.pp_with fmt (Himsg.explain_pretype_error env evd e)
+
 (* Convert a term to a string *)
 let constr_expr_to_string c = Pp.string_of_ppcmds (Richpp.pr_constr_expr c)
 
@@ -318,7 +326,7 @@ let add_typeclass class_id is_op_class is_prop_class params fields =
                          RecordDecl (None, List.map mk_record_field fields)),
                       []])
   in
-  let _ = Format.eprintf "add_typeclass command:\n%a" pp_vernac cmd in
+  let _ = Format.eprintf "@[add_typeclass command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc class_id, cmd)
 
 (* Add an instance of an operational typeclass *)
@@ -329,7 +337,7 @@ let add_op_instance inst_name inst_params inst_tp inst_body =
                Some (false, inst_body),
                None)
   in
-  let _ = Format.eprintf "add_op_instance command:\n%a" pp_vernac cmd in
+  let _ = Format.eprintf "@[add_op_instance command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc inst_name, cmd)
 
 
@@ -345,7 +353,7 @@ let add_record_instance inst_name inst_params inst_tp inst_fields =
                                        inst_fields)),
                None)
   in
-  let _ = Format.eprintf "add_record_instance command:\n%a" pp_vernac cmd in
+  let _ = Format.eprintf "@[add_record_instance command:@ %a@]\n" pp_vernac cmd in
   interp (loc, cmd)
 
 (* Begin an interactively-defined instance *)
@@ -379,7 +387,7 @@ let within_module mod_name f =
 let check_equal_term params t1 t2 =
   let cmd = VernacCheckMayEval
               (None, None,
-               (Constrexpr_ops.mkCProdN
+               (Constrexpr_ops.mkCLambdaN
                   dummy_loc
                   params
                   (CCast (dummy_loc,
@@ -389,10 +397,14 @@ let check_equal_term params t1 t2 =
                                 [(t1, None)]),
                           CastConv (mk_equality t1 t2)))))
   in
-  let _ = Format.eprintf "check_equal_term command:\n%a" pp_vernac cmd in
+  let _ = Format.eprintf "@[check_equal_term command:@ %a@]\n" pp_vernac cmd in
   try interp (dummy_loc, cmd); true
-  with Type_errors.TypeError _ -> false
-     | Pretype_errors.PretypeError _ -> false
+  with Type_errors.TypeError (env, err) ->
+       let _ = Format.eprintf "@[check_equal_term:@ %a@]\n" (pp_type_error env) err in
+       false
+     | Pretype_errors.PretypeError (env, evd, err) ->
+       let _ = Format.eprintf "@[check_equal_term:@ %a@]\n" (pp_pretype_error env evd) err in
+       false
 
 (* Apply a series of reductions to a term in a parameter context, by
    interpreting the term to a constr, applying the reductions in order, and then
@@ -498,7 +510,7 @@ let unfold_fold_term params unfolds folds t =
   let _ = Format.eprintf "\nunfold_fold_term: unfolded term: %a\n" pp_constr_expr
                          (uninterp_term constr_unfolded) in
    *)
-  let _ = Format.eprintf "\nunfold_fold_term: returning %a\n" pp_constr_expr res in
+  let _ = Format.eprintf "@[unfold_fold_term: returning@ %a@]\n" pp_constr_expr res in
   res
 
 (***
@@ -1304,7 +1316,7 @@ let instance_map_add loc fctx globref spec elem_from id_to inst_map =
   let id_from = elem_from.felem_id in
   let from_fields = field_term_args elem_from.felem_type in
   let _ = Format.eprintf
-            "\ninstance_map_add: id_from = %s, from_fields = %s\n"
+            "instance_map_add: id_from = %s, from_fields = %s\n"
             (Id.to_string id_from)
             (String.concat ", " (List.map Id.to_string from_fields))
   in
