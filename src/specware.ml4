@@ -16,6 +16,20 @@ open Ppconstr
 open Genredexpr
 open Topconstr
 
+
+(***
+ *** Debugging support
+ ***)
+
+let debug = ref true
+
+let debug_printf args =
+  if !debug then
+    Format.eprintf args
+  else
+    Format.ifprintf Format.std_formatter args
+
+
 (***
  *** Helper functions
  ***)
@@ -326,7 +340,7 @@ let add_typeclass class_id is_op_class is_prop_class params fields =
                          RecordDecl (None, List.map mk_record_field fields)),
                       []])
   in
-  let _ = Format.eprintf "@[add_typeclass command:@ %a@]\n" pp_vernac cmd in
+  let _ = debug_printf "@[add_typeclass command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc class_id, cmd)
 
 (* Add an instance of an operational typeclass *)
@@ -337,7 +351,7 @@ let add_op_instance inst_name inst_params inst_tp inst_body =
                Some (false, inst_body),
                None)
   in
-  let _ = Format.eprintf "@[add_op_instance command:@ %a@]\n" pp_vernac cmd in
+  let _ = debug_printf "@[add_op_instance command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc inst_name, cmd)
 
 
@@ -353,7 +367,7 @@ let add_record_instance inst_name inst_params inst_tp inst_fields =
                                        inst_fields)),
                None)
   in
-  let _ = Format.eprintf "@[add_record_instance command:@ %a@]\n" pp_vernac cmd in
+  let _ = debug_printf "@[add_record_instance command:@ %a@]\n" pp_vernac cmd in
   interp (loc, cmd)
 
 (* Begin an interactively-defined instance *)
@@ -397,13 +411,14 @@ let check_equal_term params t1 t2 =
                                 [(t1, None)]),
                           CastConv (mk_equality t1 t2)))))
   in
-  let _ = Format.eprintf "@[check_equal_term command:@ %a@]\n" pp_vernac cmd in
+  let _ = debug_printf "@[check_equal_term command:@ %a@]\n" pp_vernac cmd in
   try interp (dummy_loc, cmd); true
   with Type_errors.TypeError (env, err) ->
-       let _ = Format.eprintf "@[check_equal_term:@ %a@]\n" (pp_type_error env) err in
+       let _ = debug_printf "@[check_equal_term:@ %a@]\n" (pp_type_error env) err in
        false
      | Pretype_errors.PretypeError (env, evd, err) ->
-       let _ = Format.eprintf "@[check_equal_term:@ %a@]\n" (pp_pretype_error env evd) err in
+       let _ = debug_printf "@[check_equal_term:@ %a@]\n"
+                            (pp_pretype_error env evd) err in
        false
 
 (* Apply a series of reductions to a term in a parameter context, by
@@ -499,7 +514,7 @@ let unfold_fold_term params unfolds folds t =
               let res_to = interp_term t in
               (*
               let _ =
-                Format.eprintf "\nunfold_fold_term: unfolding %s to %a"
+                debug_printf "\nunfold_fold_term: unfolding %s to %a"
                                (Id.to_string id)
                                pp_constr_expr (uninterp_term res_to) in
                *)
@@ -507,10 +522,11 @@ let unfold_fold_term params unfolds folds t =
   let constr_out = fold_constr_vars folds_c constr_unfolded in
   let res = uninterp_term constr_out in
   (*
-  let _ = Format.eprintf "\nunfold_fold_term: unfolded term: %a\n" pp_constr_expr
+  let _ = debug_printf "\nunfold_fold_term: unfolded term: %a\n" pp_constr_expr
                          (uninterp_term constr_unfolded) in
    *)
-  let _ = Format.eprintf "@[unfold_fold_term: returning@ %a@]\n" pp_constr_expr res in
+  let _ = debug_printf "@[unfold_fold_term: returning@ %a@]\n"
+                       pp_constr_expr res in
   res
 
 (***
@@ -863,11 +879,11 @@ let add_local_definition loc (fctx : fctx) id type_opt body =
 let add_local_op_typeclass loc fctx id is_prop_class tp =
   let free_vars = free_vars_of_constr_expr tp in
   let _ =
-    Format.eprintf "add_local_op_typeclass for id %s: free vars = %s\n"
-                   (Id.to_string id)
-                   (Id.Set.fold (fun v str ->
-                                 Printf.sprintf "%s,%s" (Id.to_string v) str)
-                                free_vars "")
+    debug_printf "add_local_op_typeclass for id %s: free vars = %s\n"
+                 (Id.to_string id)
+                 (Id.Set.fold (fun v str ->
+                               Printf.sprintf "%s,%s" (Id.to_string v) str)
+                              free_vars "")
   in
   let fctx_free_vars = filter_fctx free_vars fctx in
   let _ = add_typeclass (loc, field_class_id id) true is_prop_class
@@ -957,8 +973,8 @@ let merge_fctxs loc fctx1 fctx2 =
   stored in reverse order (inner-most bindings last) *)
   List.fold_right
     (fun (f, _) fctx ->
-     let _ = Format.eprintf "@[%s@ %s@]\n"
-                            "merge_fctxs: adding id" (Id.to_string f)
+     let _ = debug_printf "@[%s@ %s@]\n"
+                          "merge_fctxs: adding id" (Id.to_string f)
      in
      let new_elem =
        match (fctx_lookup fctx1 f, fctx_lookup fctx2 f) with
@@ -1239,7 +1255,7 @@ let resolve_name_translation ?(total=false) spec xlate =
               match mapped_id with
               | Some id' ->
                  (*
-                 let _ = Format.eprintf "resolve_name_translation: mapped field %s to %s\n"
+                 let _ = debug_printf "resolve_name_translation: mapped field %s to %s\n"
                                         (Id.to_string id) (Id.to_string id') in
                   *)
                  if fctx_elem_has_def elem then
@@ -1315,7 +1331,7 @@ let get_fresh_inst_name id =
 let instance_map_add loc fctx globref spec elem_from id_to inst_map =
   let id_from = elem_from.felem_id in
   let from_fields = field_term_args elem_from.felem_type in
-  let _ = Format.eprintf
+  let _ = debug_printf
             "instance_map_add: id_from = %s, from_fields = %s\n"
             (Id.to_string id_from)
             (String.concat ", " (List.map Id.to_string from_fields))
@@ -1500,9 +1516,9 @@ let current_all_params loc =
 let add_declared_op op_name op_type =
   let op_id = located_elem op_name in
   let loc = located_loc op_name in
-  let _ = Format.eprintf "\nadd_declared_op: %s of type %a in context %s\n"
-                         (Id.to_string op_id) pp_constr_expr op_type
-                         (fctx_to_string (current_op_ctx loc))
+  let _ = debug_printf "\nadd_declared_op: %s of type %a in context %s\n"
+                       (Id.to_string op_id) pp_constr_expr op_type
+                       (fctx_to_string (current_op_ctx loc))
   in
 
   (* Add a type-class op_name__class : Type := op_name : op_type *)
@@ -1521,7 +1537,7 @@ let add_declared_op op_name op_type =
 let add_axiom ax_name is_ghost ax_type =
   let ax_id = located_elem ax_name in
   let loc = located_loc ax_name in
-  let _ = Format.eprintf "\nadd_axiom: %s\n" (Id.to_string ax_id) in
+  let _ = debug_printf "\nadd_axiom: %s\n" (Id.to_string ax_id) in
   (* Add a type-class ax_name__class : Prop := ax_name : ax_type *)
   let (tp_defn, cls_defn) =
     add_local_op_typeclass loc (current_op_ctx loc) ax_id true ax_type
@@ -1561,7 +1577,7 @@ let add_defined_op op_name op_type_opt op_body =
   in
   let op_ctx = current_op_ctx loc in
   let op_var_id = add_suffix_l op_name "var" in
-  let _ = Format.eprintf "\nadd_defined_op: %s\n" (Id.to_string op_id) in
+  let _ = debug_printf "\nadd_defined_op: %s\n" (Id.to_string op_id) in
 
   (* Add a definition op_name : op_type := op_body *)
   let def_defn = add_local_definition loc op_ctx op_id (Some op_type) op_body in
@@ -1685,7 +1701,7 @@ let rec interp_spec_term sterm : spec * potential_morphism list =
      (*
      let _ =
        List.iter (fun (id_from, id_to) ->
-                   Format.eprintf "Translating %s to %s\n"
+                   debug_printf "Translating %s to %s\n"
                                   (Id.to_string id_from)
                                   (Id.to_string id_to)) subst in
       *)
