@@ -42,9 +42,10 @@ Spec End MonoidImport0.
 Spec MonoidImport1.
 
 Spec Variable T : Type.
-Spec Variable m_zero : T.
+Spec Variable m1_plus : (T -> T -> T).
+Spec Axiom m1_plus_assoc : (forall x y z, m1_plus x (m1_plus y z) = m1_plus (m1_plus x y) z).
 
-Spec Import Monoid.
+Spec Import Monoid {m_% +-> m1_%}.
 
 Spec End MonoidImport1.
 

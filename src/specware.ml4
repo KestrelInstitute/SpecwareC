@@ -58,14 +58,12 @@ let concat_map f l =
 (* Topo sort failed because of a circularity *)
 exception TopoCircularity of int
 
-(* FIXME HERE: remove the reverse sort, or factor out the common functionality *)
-
-(* Stable forward topological sort: sort l so that every element x
-   comes after its dependencies, favoring the existing ordering of l
-   where possible. The dependencies of x are all nodes y whose key,
-   given by the key function, is key_eq to a key in (deps x). *)
+(* Stable topological sort: sort l so that every element x comes after (or
+   before, if reverse_p is set) its dependencies, favoring the existing ordering
+   of l where possible. The dependencies of x are all nodes y whose key, given
+   by the key function, is key_eq to a key in (deps x). *)
 (* FIXME: use sets for deps instead of lists *)
-let rec stable_forward_topo_sort loc key key_eq deps l =
+let rec stable_topo_sort ?(reverse_p=false) loc key key_eq deps l =
   let arr = Array.of_list l in
   let arr_deps = Array.make (List.length l) [] in
   let visited = Array.make (List.length l) false in
@@ -93,47 +91,10 @@ let rec stable_forward_topo_sort loc key key_eq deps l =
   let index_arr = Array.init (List.length l) (fun i -> i) in
   let _ = Array.stable_sort
             (fun i j ->
-             if List.mem j arr_deps.(i) then -1
-             else if List.mem i arr_deps.(j) then 1
-             else j-i)
-            index_arr in
-  Array.to_list (Array.map (fun i -> arr.(i)) index_arr)
-
-(* Stable reverse topological sort: sort l so that every element x
-   comes before its dependencies, favoring the existing ordering of l
-   where possible. The dependencies of x are all nodes y whose key,
-   given by the key function, is key_eq to a key in (deps x). *)
-(* FIXME: use sets for deps instead of lists *)
-let rec stable_reverse_topo_sort loc key key_eq deps l =
-  let arr = Array.of_list l in
-  let arr_deps = Array.make (List.length l) [] in
-  let visited = Array.make (List.length l) false in
-  let rec get_node_by_key_help k j =
-    if j >= Array.length arr then None
-    else if key_eq k (key arr.(j)) then Some j
-    else get_node_by_key_help k (j+1) in
-  let get_node_by_key k = get_node_by_key_help k 0 in
-  (* Perform a DFS to build the transitive closure of deps *)
-  let rec build_node_deps path_to_i i =
-    if visited.(i) then
-      arr_deps.(i)
-    else if List.mem i path_to_i then
-      raise loc (TopoCircularity i)
-    else
-      let i_immed_deps = filter_map get_node_by_key (deps arr.(i)) in
-      let i_deps = concat_map (build_node_deps (i::path_to_i)) i_immed_deps in
-      visited.(i) <- true;
-      arr_deps.(i) <- i_deps;
-      i::i_deps
-  in
-  let _ = for i = 0 to Array.length arr_deps - 1 do
-            ignore (build_node_deps [] i)
-          done in
-  let index_arr = Array.init (List.length l) (fun i -> i) in
-  let _ = Array.stable_sort
-            (fun i j ->
-             if List.mem j arr_deps.(i) then 1
-             else if List.mem i arr_deps.(j) then -1
+             if List.mem j arr_deps.(i) then
+               (if reverse_p then 1 else -1)
+             else if List.mem i arr_deps.(j) then
+               (if reverse_p then -1 else 1)
              else j-i)
             index_arr in
   Array.to_list (Array.map (fun i -> arr.(i)) index_arr)
@@ -948,7 +909,7 @@ let merge_fctxs loc fctx1 fctx2 =
   (* Next, sort the names *)
   let sorted_names_and_deps =
     try
-      stable_forward_topo_sort loc fst Id.equal snd names_and_deps
+      stable_topo_sort loc fst Id.equal snd names_and_deps
     with TopoCircularity i ->
       (* FIXME: use a better exception here *)
       raise loc (Failure ("merge_fctxs: circular dependency for field "
