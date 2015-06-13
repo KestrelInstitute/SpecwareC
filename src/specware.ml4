@@ -890,8 +890,6 @@ exception FieldMismatch of Id.t * bool
 (* Merge two fctxs, merging any fields that they share. Also check that the two
 fctxs are compatible, meaning that any shared fields have the same types and
 definitions; raise FieldMismatch if not. *)
-(* FIXME HERE NOW: make sure the sorting is right, and add a base_fctx for axiom
-contexts depending on op contexts *)
 let merge_fctxs loc base_fctx fctx1 fctx2 =
   (* First, build a list of all the field names and their dependencies *)
   let names_and_deps =
@@ -1393,7 +1391,7 @@ let apply_morphism loc morph spec =
   merge_specs loc spec_subst morph.morph_target
 
 
-(* FIXME HERE: update the following code ... *)
+(* FIXME HERE NOW: add morphisms!! *)
 
 (* FIXME HERE: use spec_defn_term_local (which should actually be
    called "global" since it interprets the term outside of a spec) for
