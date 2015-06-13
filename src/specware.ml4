@@ -718,6 +718,9 @@ type fctx_elem =
     }
 type fctx = fctx_elem list
 
+(* The empty field context *)
+let empty_fctx = []
+
 (* Return true iff an fctx_elem is defined *)
 let fctx_elem_has_def elem =
   match elem.felem_defn with
@@ -889,7 +892,7 @@ fctxs are compatible, meaning that any shared fields have the same types and
 definitions; raise FieldMismatch if not. *)
 (* FIXME HERE NOW: make sure the sorting is right, and add a base_fctx for axiom
 contexts depending on op contexts *)
-let merge_fctxs loc fctx1 fctx2 =
+let merge_fctxs loc base_fctx fctx1 fctx2 =
   (* First, build a list of all the field names and their dependencies *)
   let names_and_deps =
     (List.map (fun elem1 ->
@@ -942,8 +945,9 @@ let merge_fctxs loc fctx1 fctx2 =
        | (Some elem1, None) -> elem1
        | (None, Some elem2) -> elem2
        | (Some elem1, Some elem2) ->
-          let _ = if not (check_equal_field_term loc fctx elem1.felem_type
-                                                 elem2.felem_type) then
+          let _ = if not (check_equal_field_term
+                            loc (fctx @ base_fctx)
+                            elem1.felem_type elem2.felem_type) then
                     raise loc (FieldMismatch (f, false)) else ()
           in
           let defn_opt =
@@ -951,7 +955,8 @@ let merge_fctxs loc fctx1 fctx2 =
              | (Some d1, None) -> Some d1
              | (None, Some d2) -> Some d2
              | (Some d1, Some d2) ->
-                let _ = if not (check_equal_field_term loc fctx d1 d2) then
+                let _ = if not (check_equal_field_term
+                                  loc (fctx @ base_fctx) d1 d2) then
                           raise loc (FieldMismatch (f, true)) else ()
                 in
                 Some d1
@@ -1122,9 +1127,11 @@ let merge_specs loc spec1 spec2 =
   let _ = fctx_iter_shared_fields
             (fun id -> raise loc (OpAxiomMismatch id))
             spec2.spec_op_ctx spec1.spec_axiom_ctx in
-  {spec_op_ctx = merge_fctxs loc spec1.spec_op_ctx spec2.spec_op_ctx;
-   spec_axiom_ctx = merge_fctxs loc spec1.spec_axiom_ctx spec2.spec_axiom_ctx;
-   spec_axiom_class_id = None}
+  let op_ctx = merge_fctxs loc empty_fctx spec1.spec_op_ctx spec2.spec_op_ctx in
+  let axiom_ctx =
+    merge_fctxs loc op_ctx spec1.spec_axiom_ctx spec2.spec_axiom_ctx
+  in
+  {spec_op_ctx = op_ctx; spec_axiom_ctx = axiom_ctx; spec_axiom_class_id = None}
 
 (* A substitution into a spec would map an op and an axiom to the same name *)
 exception OpAxiomOverlap of Id.t * Id.t
