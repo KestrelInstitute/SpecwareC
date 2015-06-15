@@ -844,7 +844,7 @@ let add_local_definition loc (fctx : fctx) id type_opt body =
 
 (* Add an operational type class to the current module / spec, relative to the
    given fctx, and return a field_term for the new type class *)
-let add_local_op_typeclass loc fctx id is_prop_class tp =
+let add_local_op_typeclass loc ?(has_defn=false) fctx id is_prop_class tp =
   let free_vars = free_vars_of_constr_expr tp in
   let _ =
     debug_printf "add_local_op_typeclass for id %s: free vars = %s\n"
@@ -854,9 +854,10 @@ let add_local_op_typeclass loc fctx id is_prop_class tp =
                               free_vars "")
   in
   let fctx_free_vars = filter_fctx free_vars fctx in
+  let tc_field_id = if has_defn then add_suffix id "var" else id in
   let _ = add_typeclass (loc, field_class_id id) true is_prop_class
                         (fctx_params loc fctx_free_vars)
-                        [((loc, id), tp, false)] in
+                        [((loc, tc_field_id), tp, false)] in
   (mk_fctx_term fctx_free_vars tp,
    mk_fctx_term fctx_free_vars
                 (mk_id_app_named_args loc (loc, field_class_id id)
@@ -1560,7 +1561,8 @@ let add_defined_theorem thm_name thm_type thm_body =
   let thm_id = located_elem thm_name in
   let loc = located_loc thm_name in
   let (tp_defn, cls_defn) =
-    add_local_op_typeclass loc (current_op_ctx loc) thm_id true thm_type
+    add_local_op_typeclass loc ~has_defn:true
+                           (current_op_ctx loc) thm_id true thm_type
   in
   let def_defn =
     add_local_definition loc (current_full_ctx loc) thm_id
@@ -1591,7 +1593,7 @@ let add_defined_op op_name op_type_opt op_body =
 
   (* Add a type-class for op_name__class : Type := op_name__var : op_type *)
   let (tp_defn, cls_defn) =
-    add_local_op_typeclass loc op_ctx op_id false op_type in
+    add_local_op_typeclass loc ~has_defn:true op_ctx op_id false op_type in
 
   (* Add the new op to spec *)
   let _ =

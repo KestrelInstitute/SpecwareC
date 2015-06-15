@@ -15,6 +15,20 @@ Spec End Monoid.
 
 Print Monoid.
 
+
+Section Monoid_Thms.
+Import Monoid.
+Context `{Monoid}.
+Lemma left_id_uniq (x:T) : (forall y, m_plus x y = y) -> x = m_zero.
+  intros left_id.
+  rewrite <- (left_id m_zero).
+  rewrite m_zero_right.
+  reflexivity.
+Qed.
+
+End Monoid_Thms.
+
+
 (* FIXME: get undo to work! *)
 Spec Group.
 
@@ -27,6 +41,29 @@ Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 Spec End Group.
 
 Print Group.
+
+
+Section Group_Thms.
+Import Group.
+Context `{Group}.
+
+Lemma g_left_id_uniq (x:T) :
+  (forall y, g_plus x y = y) -> x = g_zero.
+  apply left_id_uniq.
+Qed.
+
+Lemma left_inv_uniq (x x_inv:T) :
+  g_plus x_inv x = g_zero -> x_inv = g_inv x.
+  intro left_inv.
+  rewrite <- (g_zero_right x_inv).
+  rewrite <- (g_inv_right x).
+  rewrite g_plus_assoc.
+  rewrite left_inv.
+  rewrite g_zero_left.
+  reflexivity.
+Qed.
+
+End Group_Thms.
 
 
 Spec Group2.
@@ -45,7 +82,6 @@ Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 
 Spec End Group2.
 
-
 Spec Morphism Group2_Monoid : Monoid -> Group2 {m_% +-> g_% }.
 constructor.
 unfold Monoid.m_zero_left__class. unfold Monoid.T. fold Group2.T.
@@ -54,10 +90,51 @@ unfold Monoid.m_zero_right__class.
 apply Group2.g_zero_right.
 unfold Monoid.m_plus_assoc__class.
 apply Group2.g_plus_assoc.
-Defined.
+Qed.
 
+
+Section Group2_Thms.
+Import Group2.
+Context `{Group2}.
+
+Lemma g2_left_id_uniq (x:T) :
+  (forall y, g_plus x y = y) -> x = g_zero.
+  apply left_id_uniq.
+Qed.
+End Group2_Thms.
 
 Spec MorphTest.
+Spec Import Monoid[Group2_Monoid].
+Spec End MorphTest.
+
+
+Spec NatMonoid.
+
+Spec Definition T : Type := nat.
+Spec Definition m_zero : T := 0.
+(* Spec Definition m_plus : (T -> T -> T) := plus. *)
+Spec Variable m_plus : (T -> T -> T).
+
+Spec Axiom m_zero_left : (forall x, m_plus m_zero x = x).
+Spec Axiom m_zero_right : (forall x, m_plus x m_zero = x).
+Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z).
+
+Spec End NatMonoid.
+
+Print NatMonoid.
+
+Set Printing All.
+Print Monoid.m_zero__class.
+Print NatMonoid.m_zero__class.
+Spec Morphism NatMonoid_Monoid : Monoid -> NatMonoid.
+constructor.
+unfold Monoid.m_zero_left__class. unfold Monoid.T. fold Group2.T.
+apply Group2.g_zero_left.
+unfold Monoid.m_zero_right__class.
+apply Group2.g_zero_right.
+unfold Monoid.m_plus_assoc__class.
+apply Group2.g_plus_assoc.
+Qed.
 
 
 (*
@@ -94,38 +171,3 @@ Print DoubleMonoid.
 (* Spec Morphism MG : Monoid -> Group { m_% +-> g_% }. *)
 
 Print Group.g_zero_left__class.
-
-Section Monoid_Thms.
-Import Monoid.
-Context `{Monoid}.
-Lemma left_id_uniq (x:T) :
-  (forall y, m_plus x y = y) -> x = m_zero.
-  intros left_id.
-  rewrite <- (left_id m_zero).
-  rewrite m_zero_right.
-  reflexivity.
-Qed.
-
-End Monoid_Thms.
-
-Section Group_Thms.
-Import Group.
-Context `{Group}.
-
-Lemma g_left_id_uniq (x:T) :
-  (forall y, g_plus x y = y) -> x = g_zero.
-  apply left_id_uniq.
-Qed.
-
-Lemma left_inv_uniq (x x_inv:T) :
-  g_plus x_inv x = g_zero -> x_inv = g_inv x.
-  intro left_inv.
-  rewrite <- (g_zero_right x_inv).
-  rewrite <- (g_inv_right x).
-  rewrite g_plus_assoc.
-  rewrite left_inv.
-  rewrite g_zero_left.
-  reflexivity.
-Qed.
-
-End Group_Thms.
