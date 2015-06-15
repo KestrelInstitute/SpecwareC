@@ -589,9 +589,8 @@ let field_axelem_id f = add_suffix f "axiom"
  ***)
 
 (* A field term (or term used in a spec field) is a essentially an expression
-with a set of its free variables marked as fields. To make substitution of
-fields easier, the fields of a field term are represented as the domain of
-a substitution into that expression. *)
+with a set of its free variables marked as fields. Field substitution into field
+terms is lazy: substitutions are accumulated in field_term_subst. *)
 type field_term =
     { field_term_body : constr_expr;
       field_term_init_args : Id.t list;
@@ -779,10 +778,15 @@ let fctx_cons id is_ghost tp cls defn_opt fctx =
   { felem_id = id; felem_is_ghost = is_ghost;
     felem_type = tp; felem_class = cls; felem_defn = defn_opt } :: fctx
 
-(* Convert a single fctx_elem to an implicit class assumption *)
-let fctx_elem_to_param loc elem =
-  mk_implicit_assum (field_var_id elem.felem_id)
-                    (field_term_to_expr elem.felem_class)
+(* Convert a single fctx_elem to an implicit assumption. If use_classes is true,
+this implicit assumption has the form f__param : f__class for field f, otherwise
+it has the form f : T where T is the body of f__class. *)
+let fctx_elem_to_param loc ?(use_classes=true) elem =
+  if use_classes then
+    mk_implicit_assum (field_var_id elem.felem_id)
+                      (field_term_to_expr elem.felem_class)
+  else
+    mk_implicit_assum elem.felem_id (field_term_to_expr elem.felem_type)
 
 (* Filter out only the non-ghost elements of an fctx *)
 let fctx_non_ghosts fctx =
@@ -790,8 +794,8 @@ let fctx_non_ghosts fctx =
 
 (* Convert an fctx to a list of class parameters, one for each field
    in the context (remember: fctx is reversed) *)
-let fctx_params loc fctx =
-  List.rev_map (fctx_elem_to_param loc) fctx
+let fctx_params loc ?(use_classes=true) fctx =
+  List.rev_map (fctx_elem_to_param loc ~use_classes:use_classes) fctx
 
 (* Convert an fctx to a list of implicit arguments (f:=f) *)
 let fctx_to_args loc fctx =
@@ -800,7 +804,7 @@ let fctx_to_args loc fctx =
 
 (* Check the equality of two field terms relative to fctx *)
 let check_equal_field_term loc fctx d1 d2 =
-  check_equal_term (fctx_params loc fctx)
+  check_equal_term (fctx_params loc ~use_classes:false fctx)
                    (field_term_to_expr d1) (field_term_to_expr d2)
 
 (* Apply f to any field name shared by fctx1 and fctx2 *)
@@ -1353,8 +1357,7 @@ type morphism = {
   morph_target : spec;
   morph_target_ref : spec_globref;
   morph_subst : field_subst;
-  morph_op_insts : instance_map;
-  morph_axiom_inst : constant
+  morph_instance : constant
 }
 
 (* The variable name for the implicit spec argument of a morphism instance *)
@@ -1365,7 +1368,7 @@ let morphism_table = ref (Cmap.empty)
 
 (* Register a morphism in the morphism table *)
 let register_morphism morph =
-  morphism_table := Cmap.add morph.morph_axiom_inst morph !morphism_table
+  morphism_table := Cmap.add morph.morph_instance morph !morphism_table
 
 (* Indicates that a morphism was not found *)
 exception MorphismNotFound of qualid
@@ -1391,15 +1394,53 @@ let apply_morphism loc morph spec =
   merge_specs loc spec_subst morph.morph_target
 
 
-(* FIXME HERE NOW: add morphisms!! *)
-
-(* FIXME HERE: use spec_defn_term_local (which should actually be
-   called "global" since it interprets the term outside of a spec) for
-   the types of the parameters *)
 (* Define a named morphism from the from spec to the to spec, both
    given by reference, via the given name translation *)
 let start_morphism morph_name from_ref to_ref xlate =
-  raise dummy_loc (Failure "start_morphism not yet implemented")
+  let loc = located_loc morph_name in
+  let from_locref = located_elem (qualid_of_reference from_ref) in
+  let to_locref = located_elem (qualid_of_reference to_ref) in
+  let (from_spec, from_gref) = lookup_spec_and_globref from_locref in
+  let (to_spec, to_gref) = lookup_spec_and_globref to_locref in
+  let subst = resolve_name_translation from_spec xlate in
+  let _ =
+    (* Check that subst applied to from_spec is compatible with to_spec *)
+    merge_specs loc (subst_spec loc subst from_spec) to_spec
+  in
+  let finish_hook gr =
+    register_morphism
+      { morph_source = from_spec;
+        morph_source_ref = from_gref;
+        morph_target = to_spec;
+        morph_target_ref = to_gref;
+        morph_subst = subst;
+        morph_instance = match gr with
+                         | ConstRef c -> c
+                         | _ -> anomaly (str "Morphism not a constant") }
+  in
+  ignore
+    (Classes.new_instance
+       false
+       (fctx_params loc to_spec.spec_op_ctx @
+          [mk_implicit_assum morph_spec_arg_id
+                             (mk_ref_app_named_args
+                                loc
+                                (spec_typeclass_ref loc to_locref) [])])
+       (lname_of_lident morph_name, Explicit,
+        (mk_ref_app_named_args
+           loc (spec_typeclass_ref loc from_locref)
+           (List.rev_map
+              (fun elem ->
+               (field_var_id elem.felem_id,
+                mk_var (loc, field_var_id
+                               (fst (subst_id subst elem.felem_id)))))
+              from_spec.spec_op_ctx)))
+       None
+       ~hook:finish_hook
+       None)
+
+(* FIXME HERE NOW: add morphisms!! *)
+
 
 (*
   let loc = located_loc morph_name in
@@ -1827,15 +1868,15 @@ END
 (* Top-level syntax for morphisms *)
 VERNAC COMMAND EXTEND Morphism
   (* Define a named morphism with the given name translation *)
-  | [ "Spec" "Morphism" ident(spec_name) ":" global(s1) "->" global(s2)
+  | [ "Spec" "Morphism" ident(morph_name) ":" global(s1) "->" global(s2)
              "{" name_translation(xlate) "}" ]
-    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity, [spec_name]),
+    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity, [morph_name]),
           Vernacexpr.VtLater) ]
-    -> [ start_morphism (dummy_loc, spec_name) s1 s2 xlate ]
+    -> [ start_morphism (dummy_loc, morph_name) s1 s2 xlate ]
 
   (* Define a named morphism with no name translation *)
-  | [ "Spec" "Morphism" ident(spec_name) ":" global(s1) "->" global(s2) ]
-    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity, [spec_name]),
+  | [ "Spec" "Morphism" ident(morph_name) ":" global(s1) "->" global(s2) ]
+    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity, [morph_name]),
           Vernacexpr.VtLater) ]
-    -> [ start_morphism (dummy_loc, spec_name) s1 s2 [] ]
+    -> [ start_morphism (dummy_loc, morph_name) s1 s2 [] ]
 END

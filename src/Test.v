@@ -29,6 +29,37 @@ Spec End Group.
 Print Group.
 
 
+Spec Group2.
+
+Spec Variable T : Type.
+Spec Variable g_zero : T.
+Spec Variable g_plus : (T -> T -> T).
+
+Spec Axiom g_zero_left : (forall x, g_plus g_zero x = x).
+Spec Axiom g_zero_right : (forall x, g_plus x g_zero = x).
+Spec Axiom g_plus_assoc : (forall x y z, g_plus x (g_plus y z) = g_plus (g_plus x y) z).
+
+Spec Variable g_inv : (T -> T).
+Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
+Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
+
+Spec End Group2.
+
+
+Spec Morphism Group2_Monoid : Monoid -> Group2 {m_% +-> g_% }.
+constructor.
+unfold Monoid.m_zero_left__class. unfold Monoid.T. fold Group2.T.
+apply Group2.g_zero_left.
+unfold Monoid.m_zero_right__class.
+apply Group2.g_zero_right.
+unfold Monoid.m_plus_assoc__class.
+apply Group2.g_plus_assoc.
+Defined.
+
+
+Spec MorphTest.
+
+
 (*
 Spec MonoidImport0.
 
