@@ -28,6 +28,7 @@ Qed.
 
 End Monoid_Thms.
 
+Print left_id_uniq.
 
 (* FIXME: get undo to work! *)
 Spec Group.
@@ -41,14 +42,14 @@ Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 Spec End Group.
 
 Print Group.
-
+Set Printing All.
+Print Group.Monoid__inst__6.
 
 Section Group_Thms.
 Import Group.
 Context `{Group}.
 
-Lemma g_left_id_uniq (x:T) :
-  (forall y, g_plus x y = y) -> x = g_zero.
+Lemma g_left_id_uniq (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
   apply left_id_uniq.
 Qed.
 
@@ -82,9 +83,19 @@ Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 
 Spec End Group2.
 
-Spec Morphism Group2_Monoid : Monoid -> Group2 {m_% +-> g_% }.
+(*
+Section Group2_Thms.
+Import Group2.
+Context `{Group2}.
+
+Lemma g2_left_id_uniq (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
+  apply left_id_uniq.
+Qed.
+*)
+
+Spec Morphism Group2_Monoid : Monoid -> Group2 {m_% +-> g_%}.
 constructor.
-unfold Monoid.m_zero_left__class. unfold Monoid.T. fold Group2.T.
+unfold Monoid.m_zero_left__class.
 apply Group2.g_zero_left.
 unfold Monoid.m_zero_right__class.
 apply Group2.g_zero_right.
@@ -92,13 +103,13 @@ unfold Monoid.m_plus_assoc__class.
 apply Group2.g_plus_assoc.
 Qed.
 
+Print Group2_Monoid.
 
 Section Group2_Thms.
 Import Group2.
 Context `{Group2}.
 
-Lemma g2_left_id_uniq (x:T) :
-  (forall y, g_plus x y = y) -> x = g_zero.
+Lemma g2_left_id_uniq (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
   apply left_id_uniq.
 Qed.
 End Group2_Thms.
@@ -112,8 +123,8 @@ Spec NatMonoid.
 
 Spec Definition T : Type := nat.
 Spec Definition m_zero : T := 0.
-(* Spec Definition m_plus : (T -> T -> T) := plus. *)
-Spec Variable m_plus : (T -> T -> T).
+Spec Definition m_plus : (T -> T -> T) := Nat.add.
+(* Spec Variable m_plus : (T -> T -> T). *)
 
 Spec Axiom m_zero_left : (forall x, m_plus m_zero x = x).
 Spec Axiom m_zero_right : (forall x, m_plus x m_zero = x).

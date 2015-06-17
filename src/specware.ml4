@@ -10,6 +10,7 @@ open Errors
 open Vernacexpr
 open Vernacentries
 open Constrexpr
+open Constrexpr_ops
 open Misctypes
 open Decl_kinds
 open Ppconstr
@@ -242,6 +243,7 @@ let lookup_constant loc qualid =
 
 (* Look up an identifier in the current module and make it fully qualified *)
 let qualify_identifier id =
+  let _ = debug_printf "@[qualify_identifier: %s@]\n" (Id.to_string id) in
   qualid_of_global (Nametab.locate (qualid_of_ident id))
 
 (* Build the expression t1 = t2 *)
@@ -275,11 +277,12 @@ let mk_implicit_assum name tp =
 
 (* Add a definition to the current Coq image *)
 let add_definition id params type_opt body =
-  interp
-    (located_loc id,
-     VernacDefinition
-       ((None, Definition), id,
-        DefineBody (params, None, body, type_opt)))
+  let cmd = VernacDefinition
+              ((None, Definition), id,
+               DefineBody (params, None, body, type_opt))
+  in
+  let _ = debug_printf "@[add_definition command:@ %a@]\n" pp_vernac cmd in
+  interp (located_loc id, cmd)
 
 (* Add a type-class to the current Coq image, where is_op_class says
    whether to add an operational type-class in Type (if true) or a
@@ -304,15 +307,15 @@ let add_typeclass class_id is_op_class is_prop_class params fields =
   let _ = debug_printf "@[add_typeclass command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc class_id, cmd)
 
-(* Add an instance of an operational typeclass *)
-let add_op_instance inst_name inst_params inst_tp inst_body =
+(* Add an instance of an typeclass that is a single term *)
+let add_term_instance inst_name inst_params inst_tp inst_body =
   let cmd = VernacInstance
               (false, inst_params,
                (inst_name, Decl_kinds.Explicit, inst_tp),
                Some (false, inst_body),
                None)
   in
-  let _ = debug_printf "@[add_op_instance command:@ %a@]\n" pp_vernac cmd in
+  let _ = debug_printf "@[add_term_instance command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc inst_name, cmd)
 
 
@@ -332,12 +335,16 @@ let add_record_instance inst_name inst_params inst_tp inst_fields =
   interp (loc, cmd)
 
 (* Begin an interactively-defined instance *)
-let begin_instance inst_name inst_params inst_tp =
-  let loc = located_loc inst_name in
-  interp (loc, VernacInstance
-                 (false, inst_params,
-                  (inst_name, Decl_kinds.Explicit, inst_tp),
-                  None, None))
+let begin_instance ?(hook=(fun _ -> ())) inst_params inst_name inst_tp =
+  let cmd = VernacInstance
+              (false, inst_params,
+               (inst_name, Explicit, inst_tp),
+               None, None)
+  in
+  let _ = debug_printf "@[begin_instance command:@ %a@]\n" pp_vernac cmd in
+  ignore
+    (Classes.new_instance
+       false inst_params (inst_name, Explicit, inst_tp) None ~hook:hook None)
 
 (* Begin a new module *)
 let begin_module mod_name =
@@ -362,7 +369,7 @@ let within_module mod_name f =
 let check_equal_term params t1 t2 =
   let cmd = VernacCheckMayEval
               (None, None,
-               (Constrexpr_ops.mkCLambdaN
+               (mkCLambdaN
                   dummy_loc
                   params
                   (CCast (dummy_loc,
@@ -588,6 +595,8 @@ let field_axelem_id f = add_suffix f "axiom"
  *** Field Terms and Substitutions
  ***)
 
+(* FIXME HERE: use glob_term in place of constr_expr *)
+
 (* A field term (or term used in a spec field) is a essentially an expression
 with a set of its free variables marked as fields. Field substitution into field
 terms is lazy: substitutions are accumulated in field_term_subst. *)
@@ -627,7 +636,7 @@ let mk_field_term fields body =
     field_term_subst = mk_id_subst fields }
 
 (* Make the substitution that adds definition d to id for each (id,d) in defs *)
-let make_subst_for_defs fields defs : field_subst =
+let make_subst_for_defs defs : field_subst =
   List.map (fun (id, d) -> (id, id, Some d)) defs
 
 (* Apply a field substitution to a field, returning a pair of the new field name
@@ -659,6 +668,10 @@ let field_term_args t =
 let field_subst_to_id_map subst =
   List.fold_left (fun id_map (id_from, id_to, _) ->
                   Id.Map.add id_from id_to id_map) Id.Map.empty subst
+
+(* Convert a map on Ids to a field_subst *)
+let field_subst_of_id_map map =
+  Id.Map.fold (fun id_from id_to subst -> (id_from, id_to, None) :: subst) map []
 
 (* Convert a field_term to a constr_expr by applying the substitution *)
 let rec field_term_to_expr t =
@@ -863,13 +876,13 @@ let add_local_op_typeclass loc ?(has_defn=false) fctx id is_prop_class tp =
                 (mk_id_app_named_args loc (loc, field_class_id id)
                                       (fctx_to_args loc fctx_free_vars)))
 
-(* Add an operational typeclass instance to the current module / spec *)
-let add_local_op_instance loc fctx id tp body =
+(* Add a typeclass instance to the current module / spec *)
+let add_local_term_instance loc fctx id tp body =
   let free_vars =
     Id.Set.union (free_vars_of_constr_expr tp) (free_vars_of_constr_expr body)
   in
   let fctx_free_vars = filter_fctx free_vars fctx in
-  add_op_instance (loc, id) (fctx_params loc fctx_free_vars) tp body
+  add_term_instance (loc, id) (fctx_params loc fctx_free_vars) tp body
 
 (* Add a record-based typeclass instance to the current module / spec *)
 let add_local_record_instance loc fctx id tp fields =
@@ -1106,6 +1119,10 @@ let spec_full_fctx ghosts_p spec =
   let fctx = spec.spec_axiom_ctx @ spec.spec_op_ctx in
   if ghosts_p then fctx else fctx_non_ghosts fctx
 
+(* Remove the axiom context of a spec *)
+let remove_spec_axioms spec =
+  { spec with spec_axiom_ctx = [] }
+
 (* Get the ids of all the ops *)
 let spec_op_ids spec =
   List.rev_map (fun elem -> elem.felem_id) spec.spec_op_ctx
@@ -1215,41 +1232,48 @@ let rec translate_id xlate id =
 (* Resolve a name translation into a name substitution for a spec; if
    the total flag is set, make the returned substitution be total on
    all fields of spec (even if it is the identity on some of them) *)
-let resolve_name_translation ?(total=false) spec xlate =
-  concat_map (fun elem ->
-              let id = elem.felem_id in
-              let mapped_id =
-                match translate_id xlate id with
-                | None -> if total then Some id else None
-                | Some id' -> Some id'
-              in
-              match mapped_id with
-              | Some id' ->
-                 (*
+let resolve_name_translation ?(total=false) ?(ops_only=false) spec xlate =
+  let op_subst =
+    concat_map (fun elem ->
+                let id = elem.felem_id in
+                let mapped_id =
+                  match translate_id xlate id with
+                  | None -> if total then Some id else None
+                  | Some id' -> Some id'
+                in
+                match mapped_id with
+                | Some id' ->
+                   (*
                  let _ = debug_printf "resolve_name_translation: mapped field %s to %s\n"
                                         (Id.to_string id) (Id.to_string id') in
-                  *)
-                 if fctx_elem_has_def elem then
-                   (* If id is a def, also map id__eq -> id'__eq *)
-                   [(id, id', None); (add_suffix id "eq", add_suffix id' "eq", None)]
-                 else
-                   [(id, id', None)]
-              | None -> [])
-             spec.spec_op_ctx
-  @ filter_map (fun elem ->
-                let id = elem.felem_id in
-                match translate_id xlate id with
-                | Some id' ->
-                   (* Filter out mappings on "__eq" axioms *)
-                   if has_suffix id "__eq" then None else
-                     Some (id, id', None)
-                | None -> None)
-               spec.spec_axiom_ctx
+                    *)
+                   if fctx_elem_has_def elem then
+                     (* If id is a def, also map id__eq -> id'__eq *)
+                     [(id, id', None); (add_suffix id "eq", add_suffix id' "eq", None)]
+                   else
+                     [(id, id', None)]
+                | None -> [])
+               spec.spec_op_ctx
+  in
+  if ops_only then op_subst else
+    op_subst
+    @ filter_map (fun elem ->
+                  let id = elem.felem_id in
+                  match translate_id xlate id with
+                  | Some id' ->
+                     (* Filter out mappings on "__eq" axioms *)
+                     if has_suffix id "__eq" then None else
+                       Some (id, id', None)
+                  | None -> None)
+                 spec.spec_axiom_ctx
 
 
 (***
  *** Potential Morphisms
  ***)
+
+(* FIXME HERE NOW: potential morphisms should not map axioms in the field_subst;
+instead, they should have a field_term for the axiom class instance *)
 
 (* A potential morphism is intuitively a morphism that does not yet have a
 target spec. It thus also does not have any typeclass instances defined yet, and
@@ -1274,22 +1298,10 @@ type instance_map = Id.t Id.Map.t
 (* The empty instance map *)
 let instance_map_empty = Id.Map.empty
 
-(* Apply a field in a global spec to the instances in an instance map *)
-let apply_field_to_inst_map loc globref id arg_fields inst_map =
-  mk_ref_app_named_args
-    loc
-    (Qualid (loc, field_in_global_spec globref id))
-    (List.map
-       (fun id ->
-        let inst_id =
-          try Id.Map.find id inst_map
-          with Not_found ->
-            raise loc (Failure
-                         ("apply_field_class_to_inst_map: no binding for field "
-                          ^ Id.to_string id))
-        in
-        (field_var_id id, mk_var (loc, inst_id)))
-       arg_fields)
+(* Convert a field_term to a term, mapping all the fields to their corresponding
+instances in inst_map *)
+let instantiate_field_term t inst_map =
+  field_term_to_expr (subst_field_term (field_subst_of_id_map inst_map) t)
 
 (* Fresh names for generating instance names *)
 let inst_name_counter = ref 0
@@ -1299,7 +1311,7 @@ let get_fresh_inst_name id =
   Id.of_string (Id.to_string id ^ "__inst__" ^ string_of_int i)
 
 (* Create a typeclass instance of id_from in spec and add it to inst_map *)
-let instance_map_add loc fctx globref spec elem_from id_to inst_map =
+let instance_map_add loc fctx elem_from (id_to,defn_opt_to) inst_map =
   let id_from = elem_from.felem_id in
   let from_fields = field_term_args elem_from.felem_type in
   let _ = debug_printf
@@ -1307,10 +1319,14 @@ let instance_map_add loc fctx globref spec elem_from id_to inst_map =
             (Id.to_string id_from)
             (String.concat ", " (List.map Id.to_string from_fields))
   in
-  let tp = apply_field_to_inst_map loc globref (field_class_id id_from)
-                                   from_fields inst_map in
+  let tp = instantiate_field_term elem_from.felem_class inst_map in
   let inst_id = get_fresh_inst_name id_from in
-  let _ = add_local_op_instance loc fctx (Name inst_id) tp (mk_var (loc, id_to)) in
+  let inst_body =
+    match defn_opt_to with
+    | Some d -> field_term_to_expr d
+    | None -> mk_var (loc, id_to)
+  in
+  let _ = add_local_term_instance loc fctx (Name inst_id) tp inst_body in
   Id.Map.add id_from inst_id inst_map
 
 (* Add instances for all the fields of the domain of a potential morphism,
@@ -1318,8 +1334,8 @@ returning an instance map for those fields *)
 let add_potential_morphism_field_instances loc fctx (pot_m : potential_morphism) =
   let (globref, spec, subst) = pot_m in
   List.fold_right (fun elem inst_map ->
-                   let (id_to, _) = subst_id subst elem.felem_id in
-                   instance_map_add loc fctx globref spec elem id_to inst_map)
+                   instance_map_add loc fctx elem
+                                    (subst_id subst elem.felem_id) inst_map)
                   (spec_full_fctx true spec)
                   instance_map_empty
 
@@ -1374,6 +1390,12 @@ let register_morphism morph =
 (* Indicates that a morphism was not found *)
 exception MorphismNotFound of qualid
 
+(* Indicates that a field is not in the target of a morphism *)
+exception FieldNotInMoprphTarget of Id.t
+
+(* Indicates that a field is no longer defined in the target of a morphism *)
+exception FieldNotDefinedInMoprphTarget of Id.t
+
 (* Look up a morphism by reference, raising Not_found if it does not exist *)
 let lookup_morphism r =
   let loc = loc_of_reference r in
@@ -1384,11 +1406,13 @@ let lookup_morphism r =
   with Not_found ->
     raise loc (MorphismNotFound qualid)
 
+(* FIXME HERE NOW: applying a morphism should remove the axioms in the source spec *)
+
 (* Apply a morphism to a spec. This is accomplished by: merging the spec with
 the source of the morphism, which checks that all the types and definitions in
 the spec agree with the morphism; applying the substitution of the morphism; and
-then merging the target spec with the result, to add any additional fields not
-in the range of the substitution. *)
+then merging the target spec with the result, to add back the axioms as well as
+any additional ops not in the range of the substitution. *)
 let apply_morphism loc morph spec =
   let spec_in = merge_specs loc spec morph.morph_source in
   let spec_subst = subst_spec loc morph.morph_subst spec_in in
@@ -1403,10 +1427,29 @@ let start_morphism morph_name from_ref to_ref xlate =
   let to_locref = located_elem (qualid_of_reference to_ref) in
   let (from_spec, from_gref) = lookup_spec_and_globref from_locref in
   let (to_spec, to_gref) = lookup_spec_and_globref to_locref in
-  let subst = resolve_name_translation from_spec xlate in
+  let subst_nodefs = resolve_name_translation ~ops_only:true from_spec xlate in
+  let subst_ops =
+    List.map (fun (id_from, id_to, _) ->
+              match (fctx_lookup from_spec.spec_op_ctx id_from,
+                     fctx_lookup to_spec.spec_op_ctx id_to) with
+              | (Some from_elem, Some to_elem) ->
+                 if not (fctx_elem_has_def from_elem) then
+                   (id_from, id_to, to_elem.felem_defn)
+                 else if not (fctx_elem_has_def to_elem) then
+                   raise loc (FieldNotDefinedInMoprphTarget id_to)
+                 else
+                   (id_from, id_to, None)
+              | (Some _, None) ->
+                 raise loc (FieldNotInMoprphTarget id_to)
+              | _ -> raise loc (Failure ("start_morphism: could not find id "
+                                         ^ Id.to_string id_from
+                                         ^ " in source spec")))
+             subst_nodefs
+  in
   let _ =
-    (* Check that subst applied to from_spec is compatible with to_spec *)
-    merge_specs loc (subst_spec loc subst from_spec) to_spec
+    (* Check that subst_ops on the from_spec ops is compatible with to_spec *)
+    merge_specs loc (subst_spec loc subst_ops
+                                (remove_spec_axioms from_spec)) to_spec
   in
   let finish_hook gr =
     register_morphism
@@ -1414,63 +1457,55 @@ let start_morphism morph_name from_ref to_ref xlate =
         morph_source_ref = from_gref;
         morph_target = to_spec;
         morph_target_ref = to_gref;
-        morph_subst = subst;
-        morph_instance = match gr with
-                         | ConstRef c -> c
-                         | _ -> anomaly (str "Morphism not a constant") }
+        morph_subst =
+          (* Build a substitution that maps all the axioms of from_spec to
+          applications of the morphism instance *)
+          (let op_ids = spec_op_ids to_spec in
+           subst_ops @
+             (make_subst_for_defs
+                (List.map
+                   (fun ax_id ->
+                    (ax_id,
+                     mk_field_term
+                       op_ids
+                       (mk_global_app_named_args
+                          gr
+                          (List.map
+                             (fun op_id ->
+                              (field_var_id op_id,
+                               mk_var (loc, op_id)))
+                             op_ids)
+                   )))
+                   (spec_axiom_ids from_spec))));
+          morph_instance = match gr with
+                           | ConstRef c -> c
+                           | _ -> anomaly (str "Morphism not a constant") }
   in
-  ignore
-    (Classes.new_instance
-       false
-       (fctx_params loc to_spec.spec_op_ctx @
-          [mk_implicit_assum morph_spec_arg_id
-                             (mk_ref_app_named_args
-                                loc
-                                (spec_typeclass_ref loc to_locref) [])])
-       (lname_of_lident morph_name, Explicit,
-        (mk_ref_app_named_args
-           loc (spec_typeclass_ref loc from_locref)
-           (List.rev_map
-              (fun elem ->
-               (field_var_id elem.felem_id,
-                mk_var (loc, field_var_id
-                               (fst (subst_id subst elem.felem_id)))))
-              from_spec.spec_op_ctx)))
-       None
-       ~hook:finish_hook
-       None)
+  begin_instance
+    ~hook:finish_hook
+    (fctx_params loc to_spec.spec_op_ctx @
+       [mk_implicit_assum morph_spec_arg_id
+                          (mk_ref_app_named_args
+                             loc
+                             (spec_typeclass_ref loc to_locref) [])])
+    (lname_of_lident morph_name)
+    (mk_ref_app_named_args
+       loc (spec_typeclass_ref loc from_locref)
+       (* FIXME HERE: make this map into an operation on substs or fctxs *)
+       (List.rev_map
+          (fun elem ->
+           (field_var_id elem.felem_id,
+            let (to_id,defn_opt) = subst_id subst_ops elem.felem_id in
+            let has_defn =
+              fctx_elem_has_def elem ||
+                (match defn_opt with Some _ -> true | None -> false)
+            in
+            if has_defn then
+              mkRefC (Qualid (loc, qualid_cons to_locref to_id))
+            else
+              mk_var (loc, field_var_id to_id)))
+          from_spec.spec_op_ctx))
 
-(* FIXME HERE NOW: add morphisms!! *)
-
-
-(*
-  let loc = located_loc morph_name in
-  let from_qualid = located_elem (qualid_of_reference from_ref) in
-  let to_qualid = located_elem (qualid_of_reference to_ref) in
-  let from_spec = lookup_spec from_qualid in
-  let to_spec = lookup_spec to_qualid in
-  let subst = resolve_name_translation ~total:true from_spec xlate in
-  let finish_hook gr =
-    register_morphism
-      { morph_source = from_spec;
-        morph_target = to_spec;
-        morph_subst = subst;
-        morph_interp = match gr with
-                       | ConstRef c -> c
-                       | _ -> anomaly (str "Morphism not a constant") } in
-  ignore
-    (Classes.new_instance
-       false (* (fctx_params to_spec.spec_op_ctx @
-                [mk_implicit_assum morph_spec_arg_id
-                                   (mk_ref_app_named_args
-                                      (spec_typeclass_ref loc to_qualid) [])]) *) []
-       (lname_of_lident morph_name, Explicit,
-        (mk_ref_app_named_args (spec_typeclass_ref loc from_qualid)
-                               (subst_to_args subst)))
-       None
-       ~hook:finish_hook
-       None)
- *)
 
 (***
  *** Building up the current spec
@@ -1730,8 +1765,8 @@ let rec interp_spec_term sterm : spec * potential_morphism list =
   | SpecAddDefs (sterm', loc, defs) ->
      let (spec, insts) = interp_spec_term sterm' in
      let subst =
-       make_subst_for_defs defs
-                           (List.map (fun ((_, id), d) ->
+       (* FIXME HERE: filter the free variables of each definition *)
+       make_subst_for_defs (List.map (fun ((_, id), d) ->
                                       (id, mk_fctx_term spec.spec_op_ctx d))
                                      defs)
      in
