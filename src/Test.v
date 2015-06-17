@@ -42,8 +42,6 @@ Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 Spec End Group.
 
 Print Group.
-Set Printing All.
-Print Group.Monoid__inst__6.
 
 Section Group_Thms.
 Import Group.
