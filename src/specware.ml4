@@ -22,10 +22,10 @@ open Topconstr
  *** Debugging support
  ***)
 
-let debug = ref true
+let debug_level = ref 1
 
-let debug_printf args =
-  if !debug then
+let debug_printf level args =
+  if !debug_level >= level then
     Format.eprintf args
   else
     Format.ifprintf Format.std_formatter args
@@ -243,7 +243,7 @@ let lookup_constant loc qualid =
 
 (* Look up an identifier in the current module and make it fully qualified *)
 let qualify_identifier id =
-  let _ = debug_printf "@[qualify_identifier: %s@]\n" (Id.to_string id) in
+  let _ = debug_printf 2 "@[qualify_identifier: %s@]\n" (Id.to_string id) in
   qualid_of_global (Nametab.locate (qualid_of_ident id))
 
 (* Build the expression t1 = t2 *)
@@ -281,7 +281,7 @@ let add_definition id params type_opt body =
               ((None, Definition), id,
                DefineBody (params, None, body, type_opt))
   in
-  let _ = debug_printf "@[add_definition command:@ %a@]\n" pp_vernac cmd in
+  let _ = debug_printf 1 "@[add_definition command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc id, cmd)
 
 (* Add a type-class to the current Coq image, where is_op_class says
@@ -304,7 +304,7 @@ let add_typeclass class_id is_op_class is_prop_class params fields =
                          RecordDecl (None, List.map mk_record_field fields)),
                       []])
   in
-  let _ = debug_printf "@[add_typeclass command:@ %a@]\n" pp_vernac cmd in
+  let _ = debug_printf 1 "@[add_typeclass command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc class_id, cmd)
 
 (* Add an instance of an typeclass that is a single term *)
@@ -315,7 +315,7 @@ let add_term_instance inst_name inst_params inst_tp inst_body =
                Some (false, inst_body),
                None)
   in
-  let _ = debug_printf "@[add_term_instance command:@ %a@]\n" pp_vernac cmd in
+  let _ = debug_printf 1 "@[add_term_instance command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc inst_name, cmd)
 
 
@@ -331,7 +331,7 @@ let add_record_instance inst_name inst_params inst_tp inst_fields =
                                        inst_fields)),
                None)
   in
-  let _ = debug_printf "@[add_record_instance command:@ %a@]\n" pp_vernac cmd in
+  let _ = debug_printf 1 "@[add_record_instance command:@ %a@]\n" pp_vernac cmd in
   interp (loc, cmd)
 
 (* Begin an interactively-defined instance *)
@@ -341,7 +341,7 @@ let begin_instance ?(hook=(fun _ -> ())) inst_params inst_name inst_tp =
                (inst_name, Explicit, inst_tp),
                None, None)
   in
-  let _ = debug_printf "@[begin_instance command:@ %a@]\n" pp_vernac cmd in
+  let _ = debug_printf 1 "@[begin_instance command:@ %a@]\n" pp_vernac cmd in
   ignore
     (Classes.new_instance
        false inst_params (inst_name, Explicit, inst_tp) None ~hook:hook None)
@@ -379,13 +379,13 @@ let check_equal_term params t1 t2 =
                                 [(t1, None)]),
                           CastConv (mk_equality t1 t2)))))
   in
-  let _ = debug_printf "@[check_equal_term command:@ %a@]\n" pp_vernac cmd in
+  let _ = debug_printf 2 "@[check_equal_term command:@ %a@]\n" pp_vernac cmd in
   try interp (dummy_loc, cmd); true
   with Type_errors.TypeError (env, err) ->
-       let _ = debug_printf "@[check_equal_term:@ %a@]\n" (pp_type_error env) err in
+       let _ = debug_printf 1 "@[check_equal_term:@ %a@]\n" (pp_type_error env) err in
        false
      | Pretype_errors.PretypeError (env, evd, err) ->
-       let _ = debug_printf "@[check_equal_term:@ %a@]\n"
+       let _ = debug_printf 1 "@[check_equal_term:@ %a@]\n"
                             (pp_pretype_error env evd) err in
        false
 
@@ -493,7 +493,7 @@ let unfold_fold_term params unfolds folds t =
   let _ = debug_printf "\nunfold_fold_term: unfolded term: %a\n" pp_constr_expr
                          (uninterp_term constr_unfolded) in
    *)
-  let _ = debug_printf "@[unfold_fold_term: returning@ %a@]\n"
+  let _ = debug_printf 2 "@[unfold_fold_term: returning@ %a@]\n"
                        pp_constr_expr res in
   res
 
@@ -869,20 +869,19 @@ let add_local_definition loc (fctx : fctx) id type_opt body =
 (* Add an operational type class to the current module / spec, relative to the
    given fctx, and return a field_term for the new type class *)
 (* FIXME HERE: document the two field_terms returned by this function *)
-let add_local_op_typeclass loc ?(has_defn=false) fctx id is_prop_class tp =
+let add_local_op_typeclass loc fctx id is_prop_class tp =
   let free_vars = free_vars_of_constr_expr tp in
   let _ =
-    debug_printf "add_local_op_typeclass for id %s: free vars = %s\n"
+    debug_printf 2 "add_local_op_typeclass for id %s: free vars = %s\n"
                  (Id.to_string id)
                  (Id.Set.fold (fun v str ->
                                Printf.sprintf "%s,%s" (Id.to_string v) str)
                               free_vars "")
   in
   let fctx_free_vars = filter_fctx free_vars fctx in
-  let tc_field_id = if has_defn then add_suffix id "var" else id in
   let _ = add_typeclass (loc, field_class_id id) true is_prop_class
                         (fctx_params loc fctx_free_vars)
-                        [((loc, tc_field_id), tp, false)] in
+                        [((loc, id), tp, false)] in
   (mk_fctx_term fctx_free_vars tp,
    mk_fctx_term fctx_free_vars
                 (mk_id_app_named_args loc (loc, field_class_id id)
@@ -963,18 +962,11 @@ let merge_fctxs loc base_fctx fctx1 fctx2 =
                                   ^ String.concat "," (List.map Id.to_string deps)
                                   ^ "}") names_and_deps)))
   in
-  let _ =
-    Printf.eprintf "merge_fctxs: sorted names = %s\n"
-                   (String.concat
-                      ", "
-                      (List.map (fun (id,_) -> Id.to_string id)
-                                sorted_names_and_deps))
-  in
   (* Now build up the context to return starting at the right, because fctxs are
   stored in reverse order (inner-most bindings last) *)
   List.fold_right
     (fun (f, _) fctx ->
-     let _ = debug_printf "@[%s@ %s@]\n"
+     let _ = debug_printf 2 "@[%s@ %s@]\n"
                           "merge_fctxs: adding id" (Id.to_string f)
      in
      let new_elem =
@@ -1559,7 +1551,7 @@ let current_all_params loc =
 let add_declared_op op_name op_type =
   let op_id = located_elem op_name in
   let loc = located_loc op_name in
-  let _ = debug_printf "\nadd_declared_op: %s of type %a in context %s\n"
+  let _ = debug_printf 2 "\nadd_declared_op: %s of type %a in context %s\n"
                        (Id.to_string op_id) pp_constr_expr op_type
                        (fctx_to_string (current_op_ctx loc))
   in
@@ -1580,7 +1572,7 @@ let add_declared_op op_name op_type =
 let add_axiom ax_name is_ghost ax_type =
   let ax_id = located_elem ax_name in
   let loc = located_loc ax_name in
-  let _ = debug_printf "\nadd_axiom: %s\n" (Id.to_string ax_id) in
+  let _ = debug_printf 2 "\nadd_axiom: %s\n" (Id.to_string ax_id) in
   (* Add a type-class ax_name__class : Prop := ax_name : ax_type *)
   let (tp_defn, cls_defn) =
     add_local_op_typeclass loc (current_op_ctx loc) ax_id true ax_type
@@ -1593,11 +1585,13 @@ let add_axiom ax_name is_ghost ax_type =
 
 (* FIXME HERE: make sure this is right: use typeclasses? *)
 let add_defined_theorem thm_name thm_type thm_body =
+  let _ =
+    raise dummy_loc (Failure "add_defined_theorem: not implemented (FIXME HERE)")
+  in
   let thm_id = located_elem thm_name in
   let loc = located_loc thm_name in
   let (tp_defn, cls_defn) =
-    add_local_op_typeclass loc ~has_defn:true
-                           (current_op_ctx loc) thm_id true thm_type
+    add_local_op_typeclass loc (current_op_ctx loc) thm_id true thm_type
   in
   let def_defn =
     add_local_definition loc (current_full_ctx loc) thm_id
@@ -1621,14 +1615,14 @@ let add_defined_op op_name op_type_opt op_body =
   in
   let op_ctx = current_op_ctx loc in
   let op_var_id = add_suffix_l op_name "var" in
-  let _ = debug_printf "\nadd_defined_op: %s\n" (Id.to_string op_id) in
+  let _ = debug_printf 2 "\nadd_defined_op: %s\n" (Id.to_string op_id) in
 
   (* Add a definition op_name : op_type := op_body *)
   let def_defn = add_local_definition loc op_ctx op_id (Some op_type) op_body in
 
   (* Add a type-class for op_name__class : Type := op_name__var : op_type *)
   let (tp_defn, cls_defn) =
-    add_local_op_typeclass loc ~has_defn:true op_ctx op_id false op_type in
+    add_local_op_typeclass loc op_ctx op_id false op_type in
 
   (* Add the new op to spec *)
   let _ =
