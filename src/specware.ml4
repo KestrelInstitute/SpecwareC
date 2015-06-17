@@ -1143,8 +1143,15 @@ let spec_full_fctx ghosts_p spec =
   if ghosts_p then fctx else fctx_non_ghosts fctx
 
 (* Remove the axiom context of a spec *)
-let remove_spec_axioms spec =
+let remove_all_spec_axioms spec =
   { spec with spec_axiom_ctx = [] }
+
+(* Remove some axioms from a spec *)
+let remove_spec_axioms axioms spec =
+  { spec with spec_axiom_ctx =
+                List.filter (fun elem ->
+                             not (List.exists (Id.equal elem.felem_id) axioms))
+                            spec.spec_axiom_ctx }
 
 (* Get the ids of all the ops *)
 let spec_op_ids spec =
@@ -1388,17 +1395,17 @@ let lookup_morphism r =
   with Not_found ->
     raise loc (MorphismNotFound qualid)
 
-(* FIXME HERE NOW: applying a morphism should remove the axioms in the source spec *)
-
 (* Apply a morphism to a spec. This is accomplished by: merging the spec with
 the source of the morphism, which checks that all the types and definitions in
-the spec agree with the morphism; applying the substitution of the morphism; and
-then merging the target spec with the result, to add back the axioms as well as
-any additional ops not in the range of the substitution. *)
+the spec agree with the morphism; removing any axioms listed in the domain spec;
+applying the substitution of the morphism; and then merging the target spec with
+the result, to add the axioms of the target spec as well as any additional ops
+not in the range of the substitution. *)
 let apply_morphism loc morph spec =
-  let spec_in = merge_specs loc spec morph.morph_source in
-  let spec_subst = subst_spec loc morph.morph_subst spec_in in
-  merge_specs loc spec_subst morph.morph_target
+  let spec1 = merge_specs loc spec morph.morph_source in
+  let spec2 = remove_spec_axioms (spec_axiom_ids morph.morph_source) spec1 in
+  let spec3 = subst_spec loc morph.morph_subst spec2 in
+  merge_specs loc spec3 morph.morph_target
 
 
 (* Define a named morphism from the from spec to the to spec, both
@@ -1431,7 +1438,8 @@ let start_morphism morph_name from_ref to_ref xlate =
   let _ =
     (* Check that subst_ops on the from_spec ops is compatible with to_spec *)
     merge_specs loc (subst_spec loc subst_ops
-                                (remove_spec_axioms from_spec)) to_spec
+                                (remove_all_spec_axioms from_spec))
+                to_spec
   in
   let finish_hook gr =
     register_morphism
@@ -1450,14 +1458,24 @@ let start_morphism morph_name from_ref to_ref xlate =
                     (ax_id,
                      mk_field_term
                        op_ids
-                       (mk_global_app_named_args
-                          gr
-                          (List.map
-                             (fun op_id ->
-                              (field_var_id op_id,
-                               mk_var (loc, op_id)))
-                             op_ids)
-                   )))
+                       (CAppExpl
+                          (loc,
+                           (None,
+                            Qualid (loc, qualid_cons from_locref
+                                                     (field_axelem_id ax_id)),
+                            None),
+                           List.map (fun id ->
+                                     mk_var (loc, fst (subst_id subst_ops id)))
+                                    (spec_op_ids from_spec)
+                           @ [mk_global_app_named_args
+                                gr
+                                (List.map
+                                   (fun op_id ->
+                                    (field_var_id op_id,
+                                     mk_var (loc, op_id)))
+                                   op_ids)]
+                       ))
+                   ))
                    (spec_axiom_ids from_spec))));
           morph_instance = match gr with
                            | ConstRef c -> c
