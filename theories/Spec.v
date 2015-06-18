@@ -17,6 +17,12 @@ Require Import Specware.Util.
 Definition Field : Set := string.
 Definition Field_dec : forall (f1 f2 : Field), {f1=f2} + {f1<>f2} := string_dec.
 
+Lemma Field_dec_eq f : { e : f = f | Field_dec f f = left e }.
+  destruct (Field_dec f f).
+  exists e; reflexivity.
+  elimtype False; apply n; reflexivity.
+Qed.
+
 (* A field map is an association list on fields *)
 Definition FMap := list (Field * Field).
 
@@ -68,11 +74,12 @@ Qed.
 Definition fmap_dom (m : FMap) : list Field := map fst m.
 
 (* Inversion lemma for field maps *)
+(*
 Lemma reverse_fmap m f1 f2 :
   apply_fmap m f1 = f2 -> f1 = f2 \/ In f1 (fmap_dom m).
   admit. (* FIXME HERE *)
 Qed.
-
+*)
 
 (*** The inductive type of specs ***)
 
@@ -118,6 +125,77 @@ Fixpoint spec_model (spec:Spec) : Type :=
     | Spec_DefOp _ _ _ rest => spec_model rest
   end.
 
+(* Try to project a field out of a model of a spec *)
+Fixpoint model_proj f spec : spec_model spec -> option Any :=
+  match spec return spec_model spec -> option Any with
+    | Spec_Axioms _ => fun _ => None
+    | Spec_DeclOp f' T rest =>
+      fun model =>
+        if Field_dec f f' then Some (mkAny T (projT1 model)) else
+          model_proj f (rest (projT1 model)) (projT2 model)
+    | Spec_DefOp f' T t rest =>
+      fun model =>
+        if Field_dec f f' then Some (mkAny T t) else
+          model_proj f rest model
+  end.
+
+
+(*** Model Substitution ***)
+
+(* This is true iff a model of source can be built from a given model of target
+by using field map m to map each field of source to one of target. *)
+Fixpoint CanSubstModel (m : FMap) (source target : Spec)
+         (model : spec_model target) : Prop :=
+  match source with
+    | Spec_Axioms axioms => conjoin_axioms axioms
+    | Spec_DeclOp f T rest =>
+      exists t,
+        model_proj (apply_fmap m f) target model = Some (mkAny T t)
+        /\ CanSubstModel m (rest t) target model
+    | Spec_DefOp f T t rest =>
+        model_proj (apply_fmap m f) target model = Some (mkAny T t)
+        /\ CanSubstModel m rest target model
+  end.
+
+FIXME HERE: need a way to cons a new op onto target in CanSubstModel
+
+FIXME HERE: update the following definitions for the new definition of model_proj
+
+(* Perform model substitution. This intuitively applies the map m backwards,
+building a model of source from a model of target by applying m to each field in
+source to get the field name for the value to use in the model of target. *)
+Fixpoint subst_model m source target model :
+  CanSubstModel m source target model -> spec_model source :=
+  match source return CanSubstModel m source target model -> spec_model source with
+    | Spec_Axioms axioms =>
+      fun pf => pf
+    | Spec_DeclOp f T rest =>
+      fun can_subst =>
+        existT (fun t => spec_model (rest t))
+               (model_proj (apply_fmap m f) T target model (proj1_sig can_subst))
+               (subst_model m _ target model (proj2_sig can_subst))
+    | Spec_DefOp f T t rest =>
+      fun can_subst =>
+        (subst_model m _ target model
+                     (proj2 (proj2_sig can_subst)))
+  end.
+
+(* CanSubstModel is reflexive *)
+Lemma CanSubstModel_refl spec model : CanSubstModel fmap_id spec spec model.
+  revert model; induction spec; unfold CanSubstModel; unfold spec_model;
+    fold spec_model; fold CanSubstModel.
+  intros; assumption.
+  rewrite fmap_id_ok; intro model; destruct model as [t model].
+  assert (field_has_type f T (Spec_DeclOp f T rest) (existT _ t model)) as has_type.
+  unfold field_has_type; fold field_has_type;
+    destruct (Field_dec_eq f) as [eq_f_f eq_field_dec]; rewrite eq_field_dec; reflexivity.
+  exists has_type. unfold CanSubstModel; fold CanSubstModel.
+
+
+
+(*** FIXME: Old Stuff Below ***)
+
+
 (* Whether field f has type T in a given model of spec *)
 Fixpoint field_has_type f T spec : spec_model spec -> Prop :=
   match spec return spec_model spec -> Prop with
@@ -132,7 +210,45 @@ Fixpoint field_has_type f T spec : spec_model spec -> Prop :=
           field_has_type f T rest model
   end.
 
+(* Invert field_has_type for Spec_DeclOp *)
+Definition field_has_type_inv_decl f T f' T' rest :
+  forall model,
+    field_has_type f T (Spec_DeclOp f' T' rest) model ->
+    {T' = T} + {field_has_type f T (rest (projT1 model)) (projT2 model)}.
+  unfold field_has_type; fold field_has_type; unfold spec_model; fold spec_model.
+  destruct (Field_dec f f'); intros.
+  left; assumption.
+  right; assumption.
+Defined.
+
+(* Invert field_has_type for Spec_DefOp *)
+Definition field_has_type_inv_def f T f' T' t' rest :
+  forall model,
+    field_has_type f T (Spec_DefOp f' T' t' rest) model ->
+    {T' = T} + {field_has_type f T rest model}.
+  unfold field_has_type; fold field_has_type; unfold spec_model; fold spec_model.
+  destruct (Field_dec f f'); intros.
+  left; assumption.
+  right; assumption.
+Defined.
+
+
 (* Project a named field out of a model of a spec *)
+(*
+Definition model_proj f T spec :
+  forall (model:spec_model spec), field_has_type f T spec model -> T.
+  induction spec; unfold field_has_type; fold field_has_type;
+    unfold spec_model; fold spec_model.
+  intros; elimtype False; assumption.
+  destruct (Field_dec f f0).
+    intros; rewrite <- H; apply (projT1 model).
+    intros; apply (X (projT1 model) (projT2 model)); assumption.
+  destruct (Field_dec f f0).
+    intros; rewrite <- H; apply t.
+    intros; apply (IHspec model); assumption.
+Defined.
+*)
+
 Fixpoint model_proj f T spec :
   forall (model:spec_model spec), field_has_type f T spec model -> T :=
   match spec return forall (model:spec_model spec),
@@ -141,28 +257,19 @@ Fixpoint model_proj f T spec :
       fun model has_type => (match has_type with end)
     | Spec_DeclOp f' T' rest =>
       fun model has_type =>
-
-FIXME HERE: need a better definition of this for the proof of CanSubstModel_refl below
-
-        if Field_dec f f' then T' = T else
-          field_has_type f T (rest (projT1 model)) (projT2 model)
-    | Spec_DefOp f' T' t rest =>
-      fun model =>
-        if Field_dec f f' then T' = T else
-          field_has_type f T rest model
+        (match field_has_type_inv_decl f T f' T' rest model has_type with
+           | left e => eq_rect T' id (projT1 model) T e
+           | right has_type' =>
+             model_proj f T (rest (projT1 model)) (projT2 model) has_type'
+         end)
+    | Spec_DefOp f' T' t' rest =>
+      fun model has_type =>
+        (match field_has_type_inv_def f T f' T' t' rest model has_type with
+           | left e => eq_rect T' id t' T e
+           | right has_type' =>
+             model_proj f T rest model has_type'
+         end)
   end.
-
-
-induction spec; unfold field_has_type; fold field_has_type;
-  unfold spec_model; fold spec_model; intros.
-elimtype False; assumption.
-destruct model; destruct (Field_dec f f0).
-  revert x rest s X; rewrite H; intros; apply x.
-  apply (X x s H).
-destruct (Field_dec f f0).
-rewrite H in t; exact t.
-apply (IHspec model H).
-Defined.
 
 
 (*** Model Substitution ***)
@@ -205,11 +312,21 @@ Fixpoint subst_model m source target model :
 (* CanSubstModel is reflexive *)
 Lemma CanSubstModel_refl spec model : CanSubstModel fmap_id spec spec model.
   revert model; induction spec; unfold CanSubstModel; unfold spec_model;
-    fold spec_model; fold CanSubstModel; intros.
-  assumption.
-  rewrite fmap_id_ok; unfold field_has_type; fold field_has_type.
-  unfold model_proj; fold model_proj.
+    fold spec_model; fold CanSubstModel.
+  intros; assumption.
+  rewrite fmap_id_ok; intro model; destruct model as [t model].
+  assert (field_has_type f T (Spec_DeclOp f T rest) (existT _ t model)) as has_type.
+  unfold field_has_type; fold field_has_type;
+    destruct (Field_dec_eq f) as [eq_f_f eq_field_dec]; rewrite eq_field_dec; reflexivity.
+  exists has_type. unfold CanSubstModel; fold CanSubstModel.
+
+  assert {e:Field_dec f f}
+
+  unfold model_proj; unfold field_has_type_inv_decl; unfold projT1; unfold projT2;
+fold (model_proj f T);
   destruct (Field_dec f f).
+  Focus 2. fold (model_proj f T (Spec_Decl)).
+
 exists (eq_refl T).
 
 
