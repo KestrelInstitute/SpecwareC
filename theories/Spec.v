@@ -11,10 +11,67 @@ Require Import Specware.Util.
 *)
 
 
-(* Define the type of fields in one place, so we can change it later *)
+(*** Fields and Field Maps ***)
 
+(* We define the type of fields in one place, so we can change it later *)
 Definition Field : Set := string.
 Definition Field_dec : forall (f1 f2 : Field), {f1=f2} + {f1<>f2} := string_dec.
+
+(* A field map is an association list on fields *)
+Definition FMap := list (Field * Field).
+
+(*
+Definition FMap := { l : list (Field * Field) | NoDup (map fst l) }.
+
+Lemma NoDup_tail A (x:A) l : NoDup (x::l) -> NoDup l.
+  intro nd. apply (NoDup_remove_1 [] l x). assumption.
+Qed.
+*)
+
+(* Apply a field map to a field *)
+Fixpoint apply_fmap (m : FMap) (f : Field) : Field :=
+  match m with
+    | [] => f
+    | (f_in, f_out) :: m' =>
+      if Field_dec f f_in then f_out else apply_fmap m' f
+  end.
+
+(* The identity field map *)
+Definition fmap_id : FMap := [].
+
+(* fmap_id is the identity *)
+Lemma fmap_id_ok f : apply_fmap fmap_id f = f.
+  reflexivity.
+Qed.
+
+(* Compose two field maps *)
+Fixpoint fmap_compose (m2 m1 : FMap) : FMap :=
+  match m1 with
+    | [] => m2
+    | (f_in, f_out) :: m1' =>
+      (f_in, apply_fmap m2 f_out) :: fmap_compose m2 m1'
+  end.
+
+(* Field map composition commutes with application *)
+Lemma fmap_compose_ok m2 m1 f :
+  apply_fmap (fmap_compose m2 m1) f = apply_fmap m2 (apply_fmap m1 f).
+  induction m1.
+  reflexivity.
+  destruct a.
+  unfold apply_fmap; unfold fmap_compose; fold fmap_compose; fold apply_fmap.
+  destruct (Field_dec f f0).
+  reflexivity.
+  assumption.
+Qed.
+
+(* The domain of a field map *)
+Definition fmap_dom (m : FMap) : list Field := map fst m.
+
+(* Inversion lemma for field maps *)
+Lemma reverse_fmap m f1 f2 :
+  apply_fmap m f1 = f2 -> f1 = f2 \/ In f1 (fmap_dom m).
+  admit. (* FIXME HERE *)
+Qed.
 
 
 (*** The inductive type of specs ***)
@@ -41,6 +98,133 @@ Inductive Spec : list string -> Type :=
 .
 *)
 
+(*** The Models of a Spec ***)
+
+(* Helper for elements of a model at an arbitrary type *)
+Definition Any : Type := { T : Type & T }.
+Definition mkAny (T:Type) (t:T) : Any := existT (fun T => T) T t.
+
+(* Helper for conjoining all the axioms in an axiom list *)
+Fixpoint conjoin_axioms (axioms : list (Field * Prop)) : Prop :=
+  fold_left (fun P1 f_P2 => and P1 (snd f_P2)) axioms True.
+
+(* Build the type of the models of spec as a nested dependent pair *)
+Fixpoint spec_model (spec:Spec) : Type :=
+  match spec with
+    | Spec_Axioms axioms =>
+      conjoin_axioms axioms
+    | Spec_DeclOp _ T rest =>
+      { t : T & spec_model (rest t)}
+    | Spec_DefOp _ _ _ rest => spec_model rest
+  end.
+
+(* Whether field f has type T in a given model of spec *)
+Fixpoint field_has_type f T spec : spec_model spec -> Prop :=
+  match spec return spec_model spec -> Prop with
+    | Spec_Axioms _ => fun model => False
+    | Spec_DeclOp f' T' rest =>
+      fun model =>
+        if Field_dec f f' then T' = T else
+          field_has_type f T (rest (projT1 model)) (projT2 model)
+    | Spec_DefOp f' T' t rest =>
+      fun model =>
+        if Field_dec f f' then T' = T else
+          field_has_type f T rest model
+  end.
+
+(* Project a named field out of a model of a spec *)
+Fixpoint model_proj f T spec :
+  forall (model:spec_model spec), field_has_type f T spec model -> T :=
+  match spec return forall (model:spec_model spec),
+                      field_has_type f T spec model -> T with
+    | Spec_Axioms _ =>
+      fun model has_type => (match has_type with end)
+    | Spec_DeclOp f' T' rest =>
+      fun model has_type =>
+
+FIXME HERE: need a better definition of this for the proof of CanSubstModel_refl below
+
+        if Field_dec f f' then T' = T else
+          field_has_type f T (rest (projT1 model)) (projT2 model)
+    | Spec_DefOp f' T' t rest =>
+      fun model =>
+        if Field_dec f f' then T' = T else
+          field_has_type f T rest model
+  end.
+
+
+induction spec; unfold field_has_type; fold field_has_type;
+  unfold spec_model; fold spec_model; intros.
+elimtype False; assumption.
+destruct model; destruct (Field_dec f f0).
+  revert x rest s X; rewrite H; intros; apply x.
+  apply (X x s H).
+destruct (Field_dec f f0).
+rewrite H in t; exact t.
+apply (IHspec model H).
+Defined.
+
+
+(*** Model Substitution ***)
+
+(* This is true iff a model of source can be built from a given model of target
+by using field map m to map each field of source to one of target. *)
+Fixpoint CanSubstModel (m : FMap) (source target : Spec)
+         (model : spec_model target) : Prop :=
+  match source with
+    | Spec_Axioms axioms => conjoin_axioms axioms
+    | Spec_DeclOp f T rest =>
+      { has_type:field_has_type (apply_fmap m f) T target model |
+        CanSubstModel m (rest (model_proj (apply_fmap m f) T target model has_type))
+                      target model }
+    | Spec_DefOp f T t rest =>
+      { has_type:field_has_type (apply_fmap m f) T target model |
+        (model_proj (apply_fmap m f) T target model has_type) = t /\
+        CanSubstModel m rest target model }
+  end.
+
+(* Perform model substitution. This intuitively applies the map m backwards,
+building a model of source from a model of target by applying m to each field in
+source to get the field name for the value to use in the model of target. *)
+Fixpoint subst_model m source target model :
+  CanSubstModel m source target model -> spec_model source :=
+  match source return CanSubstModel m source target model -> spec_model source with
+    | Spec_Axioms axioms =>
+      fun pf => pf
+    | Spec_DeclOp f T rest =>
+      fun can_subst =>
+        existT (fun t => spec_model (rest t))
+               (model_proj (apply_fmap m f) T target model (proj1_sig can_subst))
+               (subst_model m _ target model (proj2_sig can_subst))
+    | Spec_DefOp f T t rest =>
+      fun can_subst =>
+        (subst_model m _ target model
+                     (proj2 (proj2_sig can_subst)))
+  end.
+
+(* CanSubstModel is reflexive *)
+Lemma CanSubstModel_refl spec model : CanSubstModel fmap_id spec spec model.
+  revert model; induction spec; unfold CanSubstModel; unfold spec_model;
+    fold spec_model; fold CanSubstModel; intros.
+  assumption.
+  rewrite fmap_id_ok; unfold field_has_type; fold field_has_type.
+  unfold model_proj; fold model_proj.
+  destruct (Field_dec f f).
+exists (eq_refl T).
+
+
+(*** Morphisms ***)
+
+(* Field map m is a morphism from source to target iff it can be used to
+substitute into any model of target to get a model of source *)
+Definition IsMorphism (m : FMap) (source target : Spec) : Prop :=
+  forall (model:spec_model target), CanSubstModel m source target model.
+
+
+
+
+(*** FIXME: old stuff below ***)
+
 (*** The models of a spec ***)
 
 Definition Any : Type := { T : Type & T }.
@@ -57,69 +241,15 @@ Fixpoint model_proj f model : option Any :=
         model_proj f model'
   end.
 
-Fixpoint combine_axioms (axioms : list (Field * Prop)) : Prop :=
-  fold_left (fun P1 f_P2 => and P1 (snd f_P2)) axioms True.
-
 (* NOTE: this is in Type because we need to compute the model elements *)
 Fixpoint IsModel (model:Model) (s:Spec) : Prop :=
   match s with
-    | Spec_Axioms axioms => combine_axioms axioms
+    | Spec_Axioms axioms => conjoin_axioms axioms
     | Spec_DeclOp f T rest =>
       exists t, model_proj f model = Some (mkAny T t) /\ IsModel model (rest t)
     | Spec_DefOp f T t rest =>
       model_proj f model = Some (mkAny T t) /\ IsModel model rest
   end.
-
-
-(*** Field maps ***)
-
-Definition FMap := list (Field * Field).
-
-(*
-Definition FMap := { l : list (Field * Field) | NoDup (map fst l) }.
-
-Lemma NoDup_tail A (x:A) l : NoDup (x::l) -> NoDup l.
-  intro nd. apply (NoDup_remove_1 [] l x). assumption.
-Qed.
-*)
-
-Fixpoint apply_fmap (m : FMap) (f : Field) : Field :=
-  match m with
-    | [] => f
-    | (f_in, f_out) :: m' =>
-      if Field_dec f f_in then f_out else apply_fmap m' f
-  end.
-
-Definition fmap_id : FMap := [].
-
-Lemma fmap_id_ok f : apply_fmap fmap_id f = f.
-  reflexivity.
-Qed.
-
-Fixpoint fmap_compose (m2 m1 : FMap) : FMap :=
-  match m1 with
-    | [] => m2
-    | (f_in, f_out) :: m1' =>
-      (f_in, apply_fmap m2 f_out) :: fmap_compose m2 m1'
-  end.
-
-Lemma fmap_compose_ok m2 m1 f :
-  apply_fmap (fmap_compose m2 m1) f = apply_fmap m2 (apply_fmap m1 f).
-  induction m1.
-  reflexivity.
-  destruct a.
-  unfold apply_fmap; unfold fmap_compose; fold fmap_compose; fold apply_fmap.
-  destruct (Field_dec f f0).
-  reflexivity.
-  assumption.
-Qed.
-
-Definition fmap_dom (m : FMap) : list Field := map fst m.
-
-Lemma reverse_fmap m f1 f2 :
-  apply_fmap m f1 = f2 -> f1 = f2 \/ In f1 (fmap_dom m).
-  admit. (* FIXME HERE *)
-Qed.
 
 
 (*** Morphisms ***)
@@ -128,7 +258,7 @@ Fixpoint unmap_model (m : FMap) (model:Model) : Model := FIXME HERE
 
 Fixpoint IsMappedModel (m : FMap) (model:Model) (s:Spec) : Prop :=
   match s with
-    | Spec_Axioms axioms => combine_axioms axioms
+    | Spec_Axioms axioms => conjoin_axioms axioms
     | Spec_DeclOp f T rest =>
       exists t,
         model_proj (apply_fmap m f) model = Some (mkAny T t)
@@ -207,7 +337,7 @@ Fixpoint unmap_model (m : Field -> Field) (model:Model) (s:Spec) :
 Fixpoint spec_model (spec:Spec) : Type :=
   match spec with
     | Spec_Axioms axioms =>
-      combine_axioms axioms
+      conjoin_axioms axioms
     | Spec_DeclOp _ T rest =>
       { t : T & spec_model (rest t)}
     | Spec_DefOp _ _ _ rest => spec_model rest
@@ -242,12 +372,12 @@ Fixpoint IsMorphModel (m : Field -> Field)
          (source target : Spec) (t_model : Model) : Prop :=
   match source with
     | Spec_Axioms axioms =>
-      combine_axioms axioms
+      conjoin_axioms axioms
     | Spec_DeclOp f T rest =>
       
 
 Fixpoint IsMorphism (m : Field -> Field) (source target : Spec) : Prop :=
   match source with
     | Spec_Axioms axioms =>
-      combine_axioms axioms
+      conjoin_axioms axioms
     | Spec_DeclOp f T rest =>
