@@ -81,29 +81,51 @@ Lemma reverse_fmap m f1 f2 :
 Qed.
 *)
 
+
+(*** Field lists, with no duplicates ***)
+
+Definition flist := { l : list Field | NoDup l }.
+
+Definition fnil : flist := exist _ [] (NoDup_nil Field).
+
+Definition fcons f l (pf : ~ In f (proj1_sig l)) : flist :=
+  exist _ (f :: proj1_sig l) (NoDup_cons f pf (proj2_sig l)).
+
+Definition in_fl f (l : flist) : Prop := In f (proj1_sig l).
+
+Definition in_fl_dec f l : {in_fl f l} + {~ in_fl f l} :=
+  In_dec Field_dec f (proj1_sig l).
+
+Lemma in_fl_eq f l pf : in_fl f (fcons f l pf).
+  left; reflexivity.
+Qed.
+
+Lemma in_fl_fcons_inv f f' l pf : in_fl f (fcons f' l pf) -> f' <> f -> in_fl f l.
+  unfold in_fl; intros; destruct H.
+    elimtype False; apply (H0 H).
+    assumption.
+Qed.
+
+Definition in_fl_inv f f' l pf (i: in_fl f (fcons f' l pf)) : {f'=f} + {in_fl f l} :=
+  match Field_dec f' f with
+    | left e => left e
+    | right neq => right (in_fl_fcons_inv _ _ _ _ i neq)
+  end.
+
+
 (*** The inductive type of specs ***)
 
-Inductive Spec : Type :=
+Inductive Spec : flist -> Type :=
 (* The base case contains the names and types of the axioms *)
-| Spec_Axioms (axioms : list (Field * Prop))
+| Spec_Axioms (axioms : list (Field * Prop)) : Spec fnil
 (* Declared op: the rest of the spec can refer to the op *)
-| Spec_DeclOp (f : Field) (T : Type) (rest : T -> Spec)
+| Spec_DeclOp f flds not_in (T : Type) (rest : T -> Spec flds)
+  : Spec (fcons f flds not_in)
 (* Defined op: gives an element of the type *)
-| Spec_DefOp (f : Field) (T : Type) (t : T) (rest : Spec)
+| Spec_DefOp f flds not_in (T : Type) (t : T) (rest : Spec flds)
+  : Spec (fcons f flds not_in)
 .
 
-(*
-Inductive Spec : list string -> Type :=
-(* The base case contains the names and types of the axioms *)
-| Spec_Axioms (axioms : list (Field * Prop)) : Spec []
-(* Declared op: the rest of the spec can refer to the op *)
-| Spec_DeclOp flds f (T : Type) (rest : T -> Spec flds)
-  : Spec (f :: flds)
-(* Defined op: gives an element of the type *)
-| Spec_DefOp flds f (T : Type) (t : T) (rest : Spec flds)
-  : Spec (f :: flds)
-.
-*)
 
 (*** The Models of a Spec ***)
 
@@ -116,27 +138,32 @@ Fixpoint conjoin_axioms (axioms : list (Field * Prop)) : Prop :=
   fold_left (fun P1 f_P2 => and P1 (snd f_P2)) axioms True.
 
 (* Build the type of the models of spec as a nested dependent pair *)
-Fixpoint spec_model (spec:Spec) : Type :=
-  match spec with
+Fixpoint spec_model flds (spec:Spec flds) : Type :=
+  match spec in Spec flds with
     | Spec_Axioms axioms =>
       conjoin_axioms axioms
-    | Spec_DeclOp _ T rest =>
-      { t : T & spec_model (rest t)}
-    | Spec_DefOp _ _ _ rest => spec_model rest
+    | Spec_DeclOp _ flds' _ T rest =>
+      { t : T & spec_model flds' (rest t)}
+    | Spec_DefOp _ flds' _ _ _ rest => spec_model flds' rest
   end.
 
-(* Try to project a field out of a model of a spec *)
-Fixpoint model_proj f spec : spec_model spec -> option Any :=
-  match spec return spec_model spec -> option Any with
-    | Spec_Axioms _ => fun _ => None
-    | Spec_DeclOp f' T rest =>
-      fun model =>
-        if Field_dec f f' then Some (mkAny T (projT1 model)) else
-          model_proj f (rest (projT1 model)) (projT2 model)
-    | Spec_DefOp f' T t rest =>
-      fun model =>
-        if Field_dec f f' then Some (mkAny T t) else
-          model_proj f rest model
+(* Project a field out of a model of a spec *)
+Fixpoint model_proj f flds spec : in_fl f flds -> spec_model flds spec -> Any :=
+  match spec in Spec flds
+        return in_fl f flds -> spec_model flds spec -> Any with
+    | Spec_Axioms _ => fun i _ => (match i with end)
+    | Spec_DeclOp f' flds' not_in T rest =>
+      fun i model =>
+        match in_fl_inv f f' flds' not_in i with
+          | left _ => mkAny T (projT1 model)
+          | right i' => model_proj f flds' (rest (projT1 model)) i' (projT2 model)
+        end
+    | Spec_DefOp f' flds' not_in T t rest =>
+      fun i model =>
+        match in_fl_inv f f' flds' not_in i with
+          | left _ => mkAny T t
+          | right i' => model_proj f flds' rest i' model
+        end
   end.
 
 
@@ -144,52 +171,94 @@ Fixpoint model_proj f spec : spec_model spec -> option Any :=
 
 (* This is true iff a model of source can be built from a given model of target
 by using field map m to map each field of source to one of target. *)
-Fixpoint CanSubstModel (m : FMap) (source target : Spec)
-         (model : spec_model target) : Prop :=
-  match source with
+Fixpoint CanSubstModel (m : FMap) flds_s (source : Spec flds_s) flds_t
+         (target : Spec flds_t) (model : spec_model _ target) : Prop :=
+  match source in Spec flds_s with
     | Spec_Axioms axioms => conjoin_axioms axioms
-    | Spec_DeclOp f T rest =>
-      exists t,
-        model_proj (apply_fmap m f) target model = Some (mkAny T t)
-        /\ CanSubstModel m (rest t) target model
-    | Spec_DefOp f T t rest =>
-        model_proj (apply_fmap m f) target model = Some (mkAny T t)
-        /\ CanSubstModel m rest target model
+    | Spec_DeclOp f flds_s' not_in T rest =>
+      exists i t,
+        model_proj (apply_fmap m f) flds_t target i model = mkAny T t
+        /\ CanSubstModel m flds_s' (rest t) flds_t target model
+    | Spec_DefOp f flds_s' not_in T t rest =>
+      exists i,
+        model_proj (apply_fmap m f) flds_t target i model = mkAny T t
+        /\ CanSubstModel m flds_s' rest flds_t target model
   end.
 
-FIXME HERE: need a way to cons a new op onto target in CanSubstModel
+(*
+Inductive CanSubstModel (m : FMap) flds_t target (model : spec_model flds_t target) : 
+  forall flds_s, Spec flds_s -> Prop :=
+| CanSubst_Axioms axioms (pf : conjoin_axioms axioms)
+  : CanSubstModel m flds_t target model fnil (Spec_Axioms axioms)
+| CanSubst_DeclOp f flds_s not_in T rest t i
+                  (e : model_proj (apply_fmap m f) _ _ i model = mkAny T t)
+                  (rec : CanSubstModel m flds_t target model flds_s (rest t))
+  : CanSubstModel m flds_t target model _
+                  (Spec_DeclOp f flds_s not_in T rest)
+| CanSubst_DefOp f flds_s not_in T rest t i
+                  (e : model_proj (apply_fmap m f) _ _ i model = mkAny T t)
+                  (rec : CanSubstModel m flds_t target model flds_s rest)
+  : CanSubstModel m flds_t target model _
+                  (Spec_DefOp f flds_s not_in T t rest)
+.
+*)
 
-FIXME HERE: update the following definitions for the new definition of model_proj
+Lemma CanSubstModel_cons_decl m f flds_t not_in T t target model flds_s source
+: CanSubstModel m flds_s source flds_t (target t) model ->
+  CanSubstModel m flds_s source _ (Spec_DeclOp f flds_t not_in T target) (existT _ t model).
+  induction source; unfold CanSubstModel; fold CanSubstModel; intro csm.
+  assumption.
+  admit.
+  admit.
+Qed.
+
+Lemma CanSubstModel_cons_def m f flds_t not_in T t target model flds_s source
+: CanSubstModel m flds_s source flds_t target model ->
+  CanSubstModel m flds_s source _ (Spec_DefOp f flds_t not_in T t target) model.
+  induction source; unfold CanSubstModel; fold CanSubstModel; intro csm.
+  assumption.
+  admit.
+  admit.
+Qed.
+
+
+(* CanSubstModel is reflexive *)
+Lemma CanSubstModel_refl flds spec model : CanSubstModel fmap_id flds spec flds spec model.
+  revert model; induction spec;
+    unfold CanSubstModel; fold CanSubstModel; unfold model_proj; fold model_proj; intros.
+  assumption.
+  rewrite fmap_id_ok. exists (in_fl_eq _ _ _). exists (projT1 model).
+  unfold in_fl_inv. destruct (Field_dec_eq f) as [f_eq fdec_eq]; rewrite fdec_eq.
+  split; [ reflexivity | ].
+  destruct model. apply CanSubstModel_cons_decl. apply H.
+  rewrite fmap_id_ok. exists (in_fl_eq _ _ _).
+  unfold in_fl_inv. destruct (Field_dec_eq f) as [f_eq fdec_eq]; rewrite fdec_eq.
+  split; [ reflexivity | ].
+  apply CanSubstModel_cons_def. apply IHspec.
+Qed.
+
 
 (* Perform model substitution. This intuitively applies the map m backwards,
 building a model of source from a model of target by applying m to each field in
 source to get the field name for the value to use in the model of target. *)
-Fixpoint subst_model m source target model :
-  CanSubstModel m source target model -> spec_model source :=
-  match source return CanSubstModel m source target model -> spec_model source with
+Fixpoint subst_model m flds_s source flds_t target model :
+  CanSubstModel m flds_s source flds_t target model -> spec_model flds_s source :=
+  match source in Spec flds_s
+        return CanSubstModel m flds_s source flds_t target model ->
+               spec_model flds_s source with
     | Spec_Axioms axioms =>
       fun pf => pf
-    | Spec_DeclOp f T rest =>
+    | Spec_DeclOp f flds_s' not_in T rest =>
       fun can_subst =>
-        existT (fun t => spec_model (rest t))
-               (model_proj (apply_fmap m f) T target model (proj1_sig can_subst))
+        existT (fun t => spec_model _ (rest t))
+               (model_proj (apply_fmap m f) flds_t target model (proj1_sig can_subst))
                (subst_model m _ target model (proj2_sig can_subst))
-    | Spec_DefOp f T t rest =>
+    | Spec_DefOp f flds_s' not_in T t rest =>
       fun can_subst =>
         (subst_model m _ target model
                      (proj2 (proj2_sig can_subst)))
   end.
 
-(* CanSubstModel is reflexive *)
-Lemma CanSubstModel_refl spec model : CanSubstModel fmap_id spec spec model.
-  revert model; induction spec; unfold CanSubstModel; unfold spec_model;
-    fold spec_model; fold CanSubstModel.
-  intros; assumption.
-  rewrite fmap_id_ok; intro model; destruct model as [t model].
-  assert (field_has_type f T (Spec_DeclOp f T rest) (existT _ t model)) as has_type.
-  unfold field_has_type; fold field_has_type;
-    destruct (Field_dec_eq f) as [eq_f_f eq_field_dec]; rewrite eq_field_dec; reflexivity.
-  exists has_type. unfold CanSubstModel; fold CanSubstModel.
 
 
 
