@@ -23,6 +23,13 @@ Lemma Field_dec_eq f : { e : f = f | Field_dec f f = left e }.
   elimtype False; apply n; reflexivity.
 Qed.
 
+Lemma Field_dec_neq f f' : f <> f' -> { neq : f <> f' | Field_dec f f' = right neq }.
+  destruct (Field_dec f f'); intros.
+  elimtype False; apply (H e).
+  exists n; reflexivity.
+Qed.
+
+
 (* A field map is an association list on fields *)
 Definition FMap := list (Field * Field).
 
@@ -147,7 +154,83 @@ Fixpoint spec_model flds (spec:Spec flds) : Type :=
     | Spec_DefOp _ flds' _ _ _ rest => spec_model flds' rest
   end.
 
+(* Whether field f has type T in a model *)
+Fixpoint has_type_in_model f T flds spec : spec_model flds spec -> Prop :=
+  match spec in Spec flds return spec_model flds spec -> Prop with
+    | Spec_Axioms _ => fun model => False
+    | Spec_DeclOp f' flds' not_in T' rest =>
+      fun model =>
+        (f = f' -> T' = T) /\
+        (f <> f' ->
+         has_type_in_model f T flds' (rest (projT1 model)) (projT2 model))
+    | Spec_DefOp f' flds' not_in T' t' rest =>
+      fun model =>
+        (f = f' -> T' = T) /\
+        (f <> f' -> has_type_in_model f T flds' rest model)
+  end.
+
+Lemma has_type_in_model_in_flds f T flds spec model :
+  has_type_in_model f T flds spec model -> in_fl f flds.
+  revert model; induction spec; intros.
+  elimtype False; apply H.
+  destruct (Field_dec f f0).
+  rewrite e; apply in_fl_eq.
+  right. apply (H (projT1 model) (projT2 model)).
+  destruct H0. apply H1. assumption.
+  destruct (Field_dec f f0).
+  rewrite e; apply in_fl_eq.
+  right; apply (IHspec model). destruct H. apply H0. assumption.
+Qed.
+
+Lemma has_type_in_model_eq_decl f T flds not_in rest model :
+  has_type_in_model f T _ (Spec_DeclOp f flds not_in T rest) model.
+  split; intros; [ | elimtype False; apply H ]; reflexivity.
+Qed.
+
+Lemma has_type_in_model_eq_def f T flds not_in t rest model :
+  has_type_in_model f T _ (Spec_DefOp f flds not_in T t rest) model.
+  split; intros; [ | elimtype False; apply H ]; reflexivity.
+Qed.
+
+Lemma has_type_in_model_cons_decl f T f' flds' not_in T' t' rest model
+: f <> f' -> has_type_in_model f T flds' (rest t') model ->
+  has_type_in_model f T _ (Spec_DeclOp f' flds' not_in T' rest) (existT _ t' model).
+  split; [ intro H1; elimtype False; apply (H H1) | ].
+  intros; assumption.
+Qed.
+
+Lemma has_type_in_model_cons_def f T f' flds' not_in T' t' rest model
+: f <> f' -> has_type_in_model f T flds' rest model ->
+  has_type_in_model f T _ (Spec_DefOp f' flds' not_in T' t' rest) model.
+  split; [ intro H1; elimtype False; apply (H H1) | ].
+  intros; assumption.
+Qed.
+
+
 (* Project a field out of a model of a spec *)
+Fixpoint model_proj f T flds spec
+: forall model, has_type_in_model f T flds spec model -> T :=
+  match spec in Spec flds
+        return forall model, has_type_in_model f T flds spec model -> T with
+    | Spec_Axioms _ => fun model htim => (match htim with end)
+    | Spec_DeclOp f' flds' not_in T' rest =>
+      fun model htim =>
+        match Field_dec f f' with
+          | left e => eq_rect T' id (projT1 model) T (proj1 htim e)
+          | right neq =>
+            model_proj f T flds' (rest (projT1 model)) (projT2 model)
+                       ((match htim with conj _ f => f end) neq)
+        end
+    | Spec_DefOp f' flds' not_in T' t rest =>
+      fun model htim =>
+        match Field_dec f f' with
+          | left e => eq_rect T' id t T (proj1 htim e)
+          | right neq => model_proj f T flds' rest model
+                                    ((match htim with conj _ f => f end) neq)
+        end
+  end.
+
+(*
 Fixpoint model_proj f flds spec : in_fl f flds -> spec_model flds spec -> Any :=
   match spec in Spec flds
         return in_fl f flds -> spec_model flds spec -> Any with
@@ -165,7 +248,7 @@ Fixpoint model_proj f flds spec : in_fl f flds -> spec_model flds spec -> Any :=
           | right i' => model_proj f flds' rest i' model
         end
   end.
-
+*)
 
 (*** Model Substitution ***)
 
@@ -176,13 +259,12 @@ Fixpoint CanSubstModel (m : FMap) flds_s (source : Spec flds_s) flds_t
   match source in Spec flds_s with
     | Spec_Axioms axioms => conjoin_axioms axioms
     | Spec_DeclOp f flds_s' not_in T rest =>
-      exists i t,
-        model_proj (apply_fmap m f) flds_t target i model = mkAny T t
-        /\ CanSubstModel m flds_s' (rest t) flds_t target model
+      exists (htim : has_type_in_model (apply_fmap m f) T flds_t target model),
+        CanSubstModel m flds_s' (rest (model_proj _ _ _ _ model htim)) flds_t target model
     | Spec_DefOp f flds_s' not_in T t rest =>
-      exists i,
-        model_proj (apply_fmap m f) flds_t target i model = mkAny T t
-        /\ CanSubstModel m flds_s' rest flds_t target model
+      exists (htim : has_type_in_model (apply_fmap m f) T flds_t target model),
+        model_proj _ _ _ _ model htim = t /\
+        CanSubstModel m flds_s' rest flds_t target model
   end.
 
 (*
@@ -208,8 +290,24 @@ Lemma CanSubstModel_cons_decl m f flds_t not_in T t target model flds_s source
   CanSubstModel m flds_s source _ (Spec_DeclOp f flds_t not_in T target) (existT _ t model).
   induction source; unfold CanSubstModel; fold CanSubstModel; intro csm.
   assumption.
-  admit.
-  admit.
+  destruct csm as [htim csm].
+  assert (apply_fmap m f0 <> f) as neq.
+    intro; apply not_in; rewrite <- H0;
+      apply (has_type_in_model_in_flds _ _ _ _ _ htim).
+  assert (apply_fmap m f0 = f -> T = T0); [ intros; contradiction | ].
+  exists (conj H0 (fun _ => htim)).
+  unfold model_proj; fold model_proj.
+  destruct (Field_dec_neq _ _ neq); rewrite e. apply H. assumption.
+  destruct csm as [htim conj]; destruct conj as [proj_eq csm].
+  assert (apply_fmap m f0 <> f) as neq.
+    intro; apply not_in; rewrite <- H;
+      apply (has_type_in_model_in_flds _ _ _ _ _ htim).
+  assert (apply_fmap m f0 = f -> T = T0); [ intros; contradiction | ].
+  exists (conj H (fun _ => htim)).
+  unfold model_proj; fold model_proj.
+  destruct (Field_dec_neq _ _ neq); rewrite e. split.
+  assumption.
+  apply IHsource. assumption.
 Qed.
 
 Lemma CanSubstModel_cons_def m f flds_t not_in T t target model flds_s source
