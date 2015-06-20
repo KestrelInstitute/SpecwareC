@@ -216,7 +216,8 @@ Fixpoint model_proj f T flds spec
     | Spec_DeclOp f' flds' not_in T' rest =>
       fun model htim =>
         match Field_dec f f' with
-          | left e => eq_rect T' id (projT1 model) T (proj1 htim e)
+          | left e => eq_rect T' id (projT1 model) T
+                              ((match htim with conj f _ => f end) e)
           | right neq =>
             model_proj f T flds' (rest (projT1 model)) (projT2 model)
                        ((match htim with conj _ f => f end) neq)
@@ -224,7 +225,8 @@ Fixpoint model_proj f T flds spec
     | Spec_DefOp f' flds' not_in T' t rest =>
       fun model htim =>
         match Field_dec f f' with
-          | left e => eq_rect T' id t T (proj1 htim e)
+          | left e => eq_rect T' id t T
+                              ((match htim with conj f _ => f end) e)
           | right neq => model_proj f T flds' rest model
                                     ((match htim with conj _ f => f end) neq)
         end
@@ -315,22 +317,45 @@ Lemma CanSubstModel_cons_def m f flds_t not_in T t target model flds_s source
   CanSubstModel m flds_s source _ (Spec_DefOp f flds_t not_in T t target) model.
   induction source; unfold CanSubstModel; fold CanSubstModel; intro csm.
   assumption.
-  admit.
-  admit.
+  destruct csm as [htim csm].
+  assert (apply_fmap m f0 <> f) as neq.
+    intro; apply not_in; rewrite <- H0;
+      apply (has_type_in_model_in_flds _ _ _ _ _ htim).
+  assert (apply_fmap m f0 = f -> T = T0); [ intros; contradiction | ].
+  exists (conj H0 (fun _ => htim)).
+  unfold model_proj; fold model_proj.
+  destruct (Field_dec_neq _ _ neq); rewrite e. apply H. assumption.
+  destruct csm as [htim conj]; destruct conj as [proj_eq csm].
+  assert (apply_fmap m f0 <> f) as neq.
+    intro; apply not_in; rewrite <- H;
+      apply (has_type_in_model_in_flds _ _ _ _ _ htim).
+  assert (apply_fmap m f0 = f -> T = T0); [ intros; contradiction | ].
+  exists (conj H (fun _ => htim)).
+  unfold model_proj; fold model_proj.
+  destruct (Field_dec_neq _ _ neq); rewrite e. split.
+  assumption.
+  apply IHsource. assumption.
 Qed.
 
 
 (* CanSubstModel is reflexive *)
 Lemma CanSubstModel_refl flds spec model : CanSubstModel fmap_id flds spec flds spec model.
-  revert model; induction spec;
-    unfold CanSubstModel; fold CanSubstModel; unfold model_proj; fold model_proj; intros.
+  revert model; induction spec; intros.
   assumption.
-  rewrite fmap_id_ok. exists (in_fl_eq _ _ _). exists (projT1 model).
-  unfold in_fl_inv. destruct (Field_dec_eq f) as [f_eq fdec_eq]; rewrite fdec_eq.
-  split; [ reflexivity | ].
-  destruct model. apply CanSubstModel_cons_decl. apply H.
-  rewrite fmap_id_ok. exists (in_fl_eq _ _ _).
-  unfold in_fl_inv. destruct (Field_dec_eq f) as [f_eq fdec_eq]; rewrite fdec_eq.
+  unfold CanSubstModel; fold CanSubstModel; rewrite fmap_id_ok.
+  unfold model_proj; fold model_proj.
+  destruct (Field_dec_eq f). rewrite e.
+  destruct model as [t model].
+  assert (f <> f -> has_type_in_model f T flds (rest t) model).
+  intro neq; elimtype False; apply neq; reflexivity.
+  exists (conj (fun _ => eq_refl) H0).
+  apply CanSubstModel_cons_decl. apply H.
+  unfold CanSubstModel; fold CanSubstModel; rewrite fmap_id_ok.
+  unfold model_proj; fold model_proj.
+  destruct (Field_dec_eq f). rewrite e.
+  assert (f <> f -> has_type_in_model f T flds spec model).
+  intro neq; elimtype False; apply neq; reflexivity.
+  exists (conj (fun _ => eq_refl) H).
   split; [ reflexivity | ].
   apply CanSubstModel_cons_def. apply IHspec.
 Qed.
@@ -349,7 +374,8 @@ Fixpoint subst_model m flds_s source flds_t target model :
     | Spec_DeclOp f flds_s' not_in T rest =>
       fun can_subst =>
         existT (fun t => spec_model _ (rest t))
-               (model_proj (apply_fmap m f) flds_t target model (proj1_sig can_subst))
+               (model_proj (apply_fmap m f) T flds_t target model
+                           (match can_subst with ex_intro ))
                (subst_model m _ target model (proj2_sig can_subst))
     | Spec_DefOp f flds_s' not_in T t rest =>
       fun can_subst =>
