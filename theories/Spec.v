@@ -133,6 +133,41 @@ Inductive Spec : flist -> Type :=
   : Spec (fcons f flds not_in)
 .
 
+(* Helper for building the type of the "rest" of a spec_cons *)
+Definition spec_rest flds T (t_opt:option T) : Type :=
+  match t_opt with
+    | Some (_) => Spec flds
+    | None => T -> Spec flds
+  end.
+
+(* Helper for consing declared or defined ops *)
+Definition spec_cons f flds not_in T t_opt :
+  (spec_rest flds T t_opt) -> Spec (fcons f flds not_in) :=
+  match t_opt return spec_rest flds T t_opt -> Spec (fcons f flds not_in) with
+    | Some t =>
+      Spec_DefOp f flds not_in T t
+    | None =>
+      Spec_DeclOp f flds not_in T
+  end.
+
+(* Helper for building the type of the "rest" of a spec_cons *)
+(*
+Definition spec_rest_arg T (t_opt:option T) : Type :=
+  match t_opt with
+    | Some (_) => Spec flds
+    | None => T -> Spec flds
+  end.
+*)
+
+(* Helper for applying the "rest" of a spec_cons to an optional argument *)
+(*
+Definition spec_rest_apply flds T t_opt :
+  spec_rest flds T t_opt -> Spec flds :=
+  match t_opt return spec_rest flds T t_opt -> Spec flds with
+    | Some t => fun rest => rest t
+    | None => fun rest => rest
+  end.
+*)
 
 (*** The Models of a Spec ***)
 
@@ -182,14 +217,16 @@ Lemma has_type_in_model_in_flds f T flds spec model :
   right; apply (IHspec model). destruct H. apply H0. assumption.
 Qed.
 
-Lemma has_type_in_model_eq_decl f T flds not_in rest model :
-  has_type_in_model f T _ (Spec_DeclOp f flds not_in T rest) model.
-  split; intros; [ | elimtype False; apply H ]; reflexivity.
+Lemma has_type_in_model_eq f T flds not_in t_opt rest model :
+  has_type_in_model f T _ (spec_cons f flds not_in T t_opt rest) model.
+  destruct t_opt; (split; intros; [ | elimtype False; apply H ]; reflexivity).
 Qed.
 
-Lemma has_type_in_model_eq_def f T flds not_in t rest model :
-  has_type_in_model f T _ (Spec_DefOp f flds not_in T t rest) model.
-  split; intros; [ | elimtype False; apply H ]; reflexivity.
+Lemma has_type_in_model_cons f T f' flds' not_in T' t_opt' rest model
+: f <> f' -> has_type_in_model f T flds' (rest t') model ->
+  has_type_in_model f T _ (Spec_DeclOp f' flds' not_in T' rest) (existT _ t' model).
+  split; [ intro H1; elimtype False; apply (H H1) | ].
+  intros; assumption.
 Qed.
 
 Lemma has_type_in_model_cons_decl f T f' flds' not_in T' t' rest model
@@ -251,6 +288,7 @@ Fixpoint model_proj f flds spec : in_fl f flds -> spec_model flds spec -> Any :=
         end
   end.
 *)
+
 
 (*** Model Substitution ***)
 
