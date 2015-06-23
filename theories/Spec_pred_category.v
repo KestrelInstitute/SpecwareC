@@ -9,6 +9,7 @@ Require Import List.
 Import ListNotations.
 Require Import String.
 Import EqNotations.
+Require Export Coq.Logic.Eqdep_dec.
 
 (*
 Add LoadPath "." as Specware.
@@ -36,22 +37,25 @@ Qed.
 
 (*** Field lists, with no duplicates ***)
 
-Definition flist := { l : list Field | NoDup l }.
+Inductive flist : list Field -> Set :=
+| fnil : flist []
+| fcons f {l} (flist' : flist l) (not_in : ~In f l) : flist (f::l)
+.
 
-Definition fnil : flist := exist _ [] (NoDup_nil Field).
+Definition in_fl f {l} (fl : flist l) : Prop := In f l.
 
-Definition fcons f l (pf : ~ In f (proj1_sig l)) : flist :=
-  exist _ (f :: proj1_sig l) (NoDup_cons f pf (proj2_sig l)).
+Definition in_fl_dec f {l} fl : {@in_fl f l fl} + {~ @in_fl f l fl} :=
+  In_dec Field_dec f l.
 
-Definition in_fl f (l : flist) : Prop := In f (proj1_sig l).
-
-Definition in_fl_dec f l : {in_fl f l} + {~ in_fl f l} :=
-  In_dec Field_dec f (proj1_sig l).
-
-Lemma in_fl_eq f l pf : in_fl f (fcons f l pf).
+Lemma in_fl_eq f l fl pf : @in_fl f (f::l) (fcons f pf fl).
   left; reflexivity.
 Qed.
 
+Lemma flist_NoDup {l} (fl : flist l) : NoDup l.
+  induction fl; constructor; assumption.
+Qed.
+
+(*
 Lemma in_fl_fcons_inv f f' l pf : in_fl f (fcons f' l pf) -> f' <> f -> in_fl f l.
   unfold in_fl; intros; destruct H.
     elimtype False; apply (H0 H).
@@ -63,103 +67,205 @@ Definition in_fl_inv f f' l pf (i: in_fl f (fcons f' l pf)) : {f'=f} + {in_fl f 
     | left e => left e
     | right neq => right (in_fl_fcons_inv _ _ _ _ i neq)
   end.
-
-(* Injectivity of cons *)
-Lemma cons_inj A (x1:A) l1 x2 l2 : x1::l1 = x2::l2 -> x1 = x2 /\ l1 = l2.
-  intros; injection H; intros; split; assumption.
-Qed.
-
-FIXME HERE: the following requires axiom K for field lists (which is provable but annoying...)
-
-(* Recursion scheme for flists *)
-Fixpoint flist_rect_H
-         (P : flist -> Type) (f1 : P fnil)
-         (f2 : forall f l not_in, P l -> P (fcons f l not_in))
-         l : forall nd, P (exist _ l nd) :=
-  match l return forall nd, P (exist _ l nd) with
-    | [] => fun nd => f1
-    | f::l' =>
-      fun nd =>
-      f2 f (exist _ l' (NoDup_remove_2 [] l' f nd))
+*)
 
 (* A field in a field list *)
-Definition Field_in fl : Set := { f : Field | in_fl f fl }.
+Definition Field_in {l} fl : Set := { f : Field | @in_fl f l fl }.
+
+Definition mk_Field_in {l} fl f in_fl : @Field_in l fl := exist _ f in_fl.
+
+(* In proofs in lists without duplicates are always equal *)
+Lemma in_fl_proofs_eq (f:Field) l (nd:NoDup l) (in1 in2 : In f l) : in1 = in2.
+  induction l.
+  elimtype False; assumption.
+  unfold In in in1,in2; fold (In f l) in in1,in2.
+  destruct in1; destruct in2.
+  rewrite (UIP_dec Field_dec e e0); reflexivity.
+  Check NoDup_remove_2.
+  elimtype False; apply (NoDup_remove_2 [] l a nd); rewrite e; assumption.
+  elimtype False; apply (NoDup_remove_2 [] l a nd); rewrite e; assumption.
+  f_equal; apply (IHl (NoDup_remove_1 [] l a nd)).
+Qed.
+
+(* Decidable equaltiy on Field_in *)
+Definition Field_in_dec {l} fl (f1 f2 : @Field_in l fl) : {f1=f2} + {f1 <> f2}.
+  destruct f1 as [f1 in1]; destruct f2 as [f2 in2]; destruct (Field_dec f1 f2).
+  revert in1 in2; rewrite e; intros; left;
+    f_equal; apply in_fl_proofs_eq; apply flist_NoDup; assumption.
+  right. injection. assumption.
+Qed.
+
+Lemma Field_in_dec_eq {l} fl f1 pf1 f2 pf2
+: f1 = f2 -> { e | @Field_in_dec l fl (exist _ f1 pf1) (exist _ f2 pf2) = left e }.
+  intro e; destruct (Field_in_dec fl (exist _ f1 pf1) (exist _ f2 pf2)).
+  exists e0; reflexivity.
+  revert pf1 pf2 n; rewrite e; intros.
+  elimtype False; apply n; f_equal;
+    apply in_fl_proofs_eq; apply flist_NoDup; assumption.
+Qed.
+
+Lemma Field_in_dec_neq {l} fl f1 pf1 f2 pf2
+: f1 <> f2 -> { neq | @Field_in_dec l fl (exist _ f1 pf1) (exist _ f2 pf2) = right neq }.
+  intro neq; destruct (Field_in_dec fl (exist _ f1 pf1) (exist _ f2 pf2)).
+  elimtype False; apply neq; injection e; intros; assumption.
+  exists n; reflexivity.
+Qed.
 
 
 (*** The category of field maps on field lists ***)
 
-(* The type of field maps from source to target *)
-Inductive FMap (target : flist) : flist -> Set :=
-| FMap_nil : FMap target fnil
-| FMap_cons (f_to : Field_in target) source f_from not_in_s :
-    FMap target source -> FMap target (fcons f_from source not_in_s)
-.
+(* The underlying type of an FMap is an association list on Fields *)
+Definition FMap_alist := list (Field * Field).
 
 (* Apply a field map to a field *)
-Fixpoint apply_fmap_field s t (m : FMap t s) (f : Field) : Field := 
+Fixpoint apply_fmap_field (m : FMap_alist) (f : Field) : Field := 
   match m with
-    | FMap_nil _ => f
-    | FMap_cons _ f_to s' f_from not_in m' =>
-      if Field_dec f f_from then proj1_sig f_to else apply_fmap_field s' t m' f
+    | [] => f
+    | (f_from, f_to) :: m' =>
+      if Field_dec f f_from then f_to else apply_fmap_field m' f
   end.
 
-(* Applying a field map goes from fields in s to fields in t *)
-Lemma apply_fmap_proof s t (m : FMap t s) f :
-  in_fl f s -> in_fl (apply_fmap_field s t m f) t.
-  induction m; intros.
-  elimtype False; assumption.
-  unfold apply_fmap_field; fold apply_fmap_field; destruct (Field_dec f f_from).
-  apply (proj2_sig f_to).
-  apply IHm; destruct H.
+(* Whether an FMap_alist maps from source s to target t *)
+Definition is_fmap {sl} (s: flist sl) {tl} (t: flist tl) (alist: FMap_alist) :=
+  map fst alist = sl /\
+  forall f, In f sl -> In (apply_fmap_field alist f) tl.
+
+(* The bundled type of field maps from s to t *)
+Definition FMap {sl} (s : flist sl) {tl} (t : flist tl) :=
+  { alist : FMap_alist | is_fmap s t alist }.
+
+(* Apply a bundled FMap to a field in source s to get a field in target t *)
+Definition apply_fmap {sl s tl t} (m : @FMap sl s tl t) (f : Field_in s) : Field_in t :=
+  mk_Field_in t (apply_fmap_field (proj1_sig m) (proj1_sig f))
+              (proj2 (proj2_sig m) (proj1_sig f) (proj2_sig f)).
+
+(* Build the identity alist *)
+Fixpoint fmap_id_alist l : FMap_alist :=
+  match l with
+    | [] => []
+    | f::l' => (f,f) :: fmap_id_alist l'
+  end.
+
+(* Proof that the identity alist is an FMap *)
+Lemma fmap_id_proof sl s : @is_fmap sl s sl s (fmap_id_alist sl).
+  induction s; unfold fmap_id_alist; fold fmap_id_alist.
+  split; [ reflexivity | intros; elimtype False; assumption ].
+  destruct IHs; split.
+  unfold map; fold (map fst (fmap_id_alist l)); f_equal; assumption.
+  intros; unfold apply_fmap_field; fold apply_fmap_field.
+  destruct (Field_dec f0 f).
+  rewrite e in H1; assumption.
+  right; apply H0; destruct H1.
   elimtype False; apply n; symmetry; assumption.
   assumption.
 Qed.
 
-(* Apply a field map to a Field_in *)
-Fixpoint apply_fmap s t (m : FMap t s) (f : Field_in s) : Field_in t :=
-  exist _ (apply_fmap_field s t m (proj1_sig f))
-        (apply_fmap_proof s t m (proj1_sig f) (proj2_sig f)).
+(* Bundled identity morphism on flist s *)
+Definition fmap_id {sl} s : @FMap sl s sl s :=
+  exist _ (fmap_id_alist sl) (fmap_id_proof sl s).
 
-(* The identity field map *)
-Fixpoint fmap_id s : FMap s s :=
-  match s with
-    | 
-
-(* fmap_id is the identity *)
-Lemma fmap_id_ok f : apply_fmap fmap_id f = f.
+(* Applying fmap_id is the identity *)
+Lemma fmap_id_id sl s f : proj1_sig (apply_fmap (@fmap_id sl s) f) = proj1_sig (f).
+  destruct f as [f in_s]; unfold apply_fmap; unfold proj1_sig;
+    unfold mk_Field_in; unfold fmap_id.
+  induction s.
   reflexivity.
-Qed.
-
-(* Compose two field maps *)
-Fixpoint fmap_compose (m2 m1 : FMap) : FMap :=
-  match m1 with
-    | [] => m2
-    | (f_in, f_out) :: m1' =>
-      (f_in, apply_fmap m2 f_out) :: fmap_compose m2 m1'
-  end.
-
-(* Field map composition commutes with application *)
-Lemma fmap_compose_ok m2 m1 f :
-  apply_fmap (fmap_compose m2 m1) f = apply_fmap m2 (apply_fmap m1 f).
-  induction m1.
-  reflexivity.
-  destruct a.
-  unfold apply_fmap; unfold fmap_compose; fold fmap_compose; fold apply_fmap.
+  unfold fmap_id_alist; fold fmap_id_alist;
+    unfold apply_fmap_field; fold apply_fmap_field.
   destruct (Field_dec f f0).
-  reflexivity.
+  symmetry; assumption.
+  apply IHs. destruct in_s.
+  elimtype False; apply n; symmetry; assumption.
   assumption.
 Qed.
 
-(* The domain of a field map *)
-Definition fmap_dom (m : FMap) : list Field := map fst m.
+(* Compose two field map alists *)
+Fixpoint fmap_compose_alist (m2 m1 : FMap_alist) : FMap_alist :=
+  match m1 with
+    | [] => []
+    | (f_in, f_out) :: m1' =>
+      (f_in, apply_fmap_field m2 f_out) :: fmap_compose_alist m2 m1'
+  end.
 
-(* Inversion lemma for field maps *)
-(*
-Lemma reverse_fmap m f1 f2 :
-  apply_fmap m f1 = f2 -> f1 = f2 \/ In f1 (fmap_dom m).
-  admit. (* FIXME HERE *)
+(* Composing two field maps returns a field map *)
+Lemma fmap_compose_proof l1 fl1 l2 fl2 l3 fl3 m2 m1 :
+  @is_fmap l1 fl1 l2 fl2 m1 -> @is_fmap l2 fl2 l3 fl3 m2 ->
+  @is_fmap l1 fl1 l3 fl3 (fmap_compose_alist m2 m1).
+  revert l2 fl2 l3 fl3 m1 m2; induction fl1; intros.
+  destruct m1.
+  split; [ reflexivity | intros; elimtype False; assumption ].
+  elimtype False; destruct H; destruct p; apply (@nil_cons _ f (map fst m1));
+    symmetry; assumption.
+  destruct m1.
+  elimtype False; destruct H; apply (nil_cons H).
+  destruct H; destruct p.
+  injection H; intros.
+  revert H1; unfold apply_fmap_field; fold apply_fmap_field; rewrite H3; intros.
+  destruct (IHfl1 l2 fl2 l3 fl3 m1 m2).
+  split.
+  assumption.
+  intros. assert (In f2 (f::l)); [ right; assumption | ].
+  replace (apply_fmap_field m1 f2) with
+    (if Field_dec f2 f then f1 else apply_fmap_field m1 f2);
+    [ apply H1; assumption | ].
+  destruct (Field_dec f2 f).
+  elimtype False; apply not_in; rewrite e in H4; assumption.
+  reflexivity.
+  assumption.
+  unfold fmap_compose_alist; fold fmap_compose_alist.
+  split.
+  unfold map; fold (@map _ Field (@fst _ Field)); f_equal; assumption.
+  intros.
+  unfold apply_fmap_field; fold apply_fmap_field.
+  destruct (Field_dec f2 f).
+  destruct H0; apply H7.
+  replace f1 with (if Field_dec f0 f then f1 else apply_fmap_field m1 f0).
+  apply H1; left; symmetry; assumption.
+  rewrite H3. destruct (Field_dec_eq f) as [ e3 e4 ]; rewrite e4; reflexivity.
+  apply H5. destruct H6.
+  elimtype False; apply n; symmetry; assumption.
+  assumption.
 Qed.
-*)
+
+(* Bundled composition of two morphisms *)
+Definition fmap_compose {l1 fl1 l2 fl2 l3 fl3} m2 m1 : FMap fl1 fl3 :=
+  exist _ (fmap_compose_alist (proj1_sig m2) (proj1_sig m1))
+        (fmap_compose_proof l1 fl1 l2 fl2 l3 fl3
+                            (proj1_sig m2) (proj1_sig m1)
+                            (proj2_sig m1) (proj2_sig m2)).
+
+(* Field map composition commutes with application *)
+Lemma fmap_compose_composes l1 fl1 l2 fl2 l3 fl3 (m2 : FMap fl2 fl3) (m1 : FMap fl1 fl2) f :
+  proj1_sig (apply_fmap (@fmap_compose l1 fl1 l2 fl2 l3 fl3 m2 m1) f)
+  = proj1_sig (apply_fmap m2 (apply_fmap m1 f)).
+  destruct f as [f in_s]; destruct m1 as [m1 is_map1];
+  destruct m2 as [m2 is_map2]; unfold apply_fmap;
+    unfold mk_Field_in; unfold fmap_compose; unfold proj1_sig.
+  revert l1 fl1 is_map1 in_s. induction m1; intros.
+  elimtype False.
+  destruct is_map1. unfold in_fl in in_s. rewrite <- H in in_s. apply in_s.
+  destruct a.
+  unfold apply_fmap_field; unfold fmap_compose_alist;
+    fold fmap_compose_alist; fold apply_fmap_field.
+  destruct (Field_dec f f0).
+  reflexivity.
+  destruct fl1;
+    [ elimtype False; destruct is_map1; apply (nil_cons (eq_sym H)) | ].
+  destruct is_map1. injection H; intros.
+  apply (IHm1 _ fl1).
+  split.
+  assumption.
+  intros.
+  replace (apply_fmap_field m1 f3) with (apply_fmap_field ((f0, f1) :: m1) f3).
+  apply H0; right; assumption.
+  unfold apply_fmap_field; fold apply_fmap_field.
+  destruct (Field_dec_neq f3 f0).
+  rewrite H2. intro. apply not_in. rewrite <- H4. assumption.
+  rewrite e. reflexivity.
+  destruct in_s.
+  elimtype False; apply n; rewrite H2; rewrite H3; reflexivity.
+  assumption.
+Qed.
 
 
 (*** Models ***)
@@ -171,7 +277,8 @@ Definition anyType (any:Any) : Type := projT1 any.
 Definition anyObj (any:Any) : anyType any := projT2 any.
 
 (* A model is any list of fields and corresponding ops *)
-Definition Model : Type := list (Field * Any).
+Definition Model {l} (fl : flist l) : Type :=
+  fun f 
 
 (* Whether f has type T in model *)
 (* FIXME: use or remove *)
