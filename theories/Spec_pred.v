@@ -1,6 +1,9 @@
 
 (*** Modeling specs and morphisms as Coq terms ***)
 
+(* Specs are defined here as an inductive type, and models are untyped lists of
+(field, element) pairs *)
+
 Require Import List.
 Import ListNotations.
 Require Import String.
