@@ -1,13 +1,15 @@
 
 (*** Modeling specs and morphisms as Coq terms ***)
 
-(* This approach defines an inductive type of specs and defines spec_model as a
-recursive function over specs that builds a nested dependent product *)
-
+(* This approach attempts to model field maps as morphisms in a category of
+non-duplicated field lists. I got stuck on the complexity of flist_rect_H,
+below... *)
 
 Require Import List.
 Import ListNotations.
 Require Import String.
+Import EqNotations.
+Require Export Coq.Logic.Eqdep_dec.
 
 (*
 Add LoadPath "." as Specware.
@@ -15,7 +17,7 @@ Require Import Specware.Util.
 *)
 
 
-(*** Fields and Field Maps ***)
+(*** Fields ***)
 
 (* We define the type of fields in one place, so we can change it later *)
 Definition Field : Set := string.
@@ -33,84 +35,27 @@ Lemma Field_dec_neq f f' : f <> f' -> { neq : f <> f' | Field_dec f f' = right n
   exists n; reflexivity.
 Qed.
 
-
-(* A field map is an association list on fields *)
-Definition FMap := list (Field * Field).
-
-(*
-Definition FMap := { l : list (Field * Field) | NoDup (map fst l) }.
-
-Lemma NoDup_tail A (x:A) l : NoDup (x::l) -> NoDup l.
-  intro nd. apply (NoDup_remove_1 [] l x). assumption.
-Qed.
-*)
-
-(* Apply a field map to a field *)
-Fixpoint apply_fmap (m : FMap) (f : Field) : Field :=
-  match m with
-    | [] => f
-    | (f_in, f_out) :: m' =>
-      if Field_dec f f_in then f_out else apply_fmap m' f
-  end.
-
-(* The identity field map *)
-Definition fmap_id : FMap := [].
-
-(* fmap_id is the identity *)
-Lemma fmap_id_ok f : apply_fmap fmap_id f = f.
-  reflexivity.
-Qed.
-
-(* Compose two field maps *)
-Fixpoint fmap_compose (m2 m1 : FMap) : FMap :=
-  match m1 with
-    | [] => m2
-    | (f_in, f_out) :: m1' =>
-      (f_in, apply_fmap m2 f_out) :: fmap_compose m2 m1'
-  end.
-
-(* Field map composition commutes with application *)
-Lemma fmap_compose_ok m2 m1 f :
-  apply_fmap (fmap_compose m2 m1) f = apply_fmap m2 (apply_fmap m1 f).
-  induction m1.
-  reflexivity.
-  destruct a.
-  unfold apply_fmap; unfold fmap_compose; fold fmap_compose; fold apply_fmap.
-  destruct (Field_dec f f0).
-  reflexivity.
-  assumption.
-Qed.
-
-(* The domain of a field map *)
-Definition fmap_dom (m : FMap) : list Field := map fst m.
-
-(* Inversion lemma for field maps *)
-(*
-Lemma reverse_fmap m f1 f2 :
-  apply_fmap m f1 = f2 -> f1 = f2 \/ In f1 (fmap_dom m).
-  admit. (* FIXME HERE *)
-Qed.
-*)
-
-
 (*** Field lists, with no duplicates ***)
 
-Definition flist := { l : list Field | NoDup l }.
+Inductive flist : list Field -> Set :=
+| fnil : flist []
+| fcons f {l} (flist' : flist l) (not_in : ~In f l) : flist (f::l)
+.
 
-Definition fnil : flist := exist _ [] (NoDup_nil Field).
+Definition in_fl f {l} (fl : flist l) : Prop := In f l.
 
-Definition fcons f l (pf : ~ In f (proj1_sig l)) : flist :=
-  exist _ (f :: proj1_sig l) (NoDup_cons f pf (proj2_sig l)).
+Definition in_fl_dec f {l} fl : {@in_fl f l fl} + {~ @in_fl f l fl} :=
+  In_dec Field_dec f l.
 
-Definition in_fl f (l : flist) : Prop := In f (proj1_sig l).
-
-Definition in_fl_dec f l : {in_fl f l} + {~ in_fl f l} :=
-  In_dec Field_dec f (proj1_sig l).
-
-Lemma in_fl_eq f l pf : in_fl f (fcons f l pf).
+Lemma in_fl_eq f l fl pf : @in_fl f (f::l) (fcons f pf fl).
   left; reflexivity.
 Qed.
 
+Lemma flist_NoDup {l} (fl : flist l) : NoDup l.
+  induction fl; constructor; assumption.
+Qed.
+
+(*
 Lemma in_fl_fcons_inv f f' l pf : in_fl f (fcons f' l pf) -> f' <> f -> in_fl f l.
   unfold in_fl; intros; destruct H.
     elimtype False; apply (H0 H).
@@ -122,9 +67,307 @@ Definition in_fl_inv f f' l pf (i: in_fl f (fcons f' l pf)) : {f'=f} + {in_fl f 
     | left e => left e
     | right neq => right (in_fl_fcons_inv _ _ _ _ i neq)
   end.
+*)
+
+(* A field in a field list *)
+Definition Field_in {l} fl : Set := { f : Field | @in_fl f l fl }.
+
+Definition mk_Field_in {l} fl f in_fl : @Field_in l fl := exist _ f in_fl.
+
+(* In proofs in lists without duplicates are always equal *)
+Lemma in_fl_proofs_eq (f:Field) l (nd:NoDup l) (in1 in2 : In f l) : in1 = in2.
+  induction l.
+  elimtype False; assumption.
+  unfold In in in1,in2; fold (In f l) in in1,in2.
+  destruct in1; destruct in2.
+  rewrite (UIP_dec Field_dec e e0); reflexivity.
+  Check NoDup_remove_2.
+  elimtype False; apply (NoDup_remove_2 [] l a nd); rewrite e; assumption.
+  elimtype False; apply (NoDup_remove_2 [] l a nd); rewrite e; assumption.
+  f_equal; apply (IHl (NoDup_remove_1 [] l a nd)).
+Qed.
+
+(* Decidable equaltiy on Field_in *)
+Definition Field_in_dec {l} fl (f1 f2 : @Field_in l fl) : {f1=f2} + {f1 <> f2}.
+  destruct f1 as [f1 in1]; destruct f2 as [f2 in2]; destruct (Field_dec f1 f2).
+  revert in1 in2; rewrite e; intros; left;
+    f_equal; apply in_fl_proofs_eq; apply flist_NoDup; assumption.
+  right. injection. assumption.
+Qed.
+
+Lemma Field_in_dec_eq {l} fl f1 pf1 f2 pf2
+: f1 = f2 -> { e | @Field_in_dec l fl (exist _ f1 pf1) (exist _ f2 pf2) = left e }.
+  intro e; destruct (Field_in_dec fl (exist _ f1 pf1) (exist _ f2 pf2)).
+  exists e0; reflexivity.
+  revert pf1 pf2 n; rewrite e; intros.
+  elimtype False; apply n; f_equal;
+    apply in_fl_proofs_eq; apply flist_NoDup; assumption.
+Qed.
+
+Lemma Field_in_dec_neq {l} fl f1 pf1 f2 pf2
+: f1 <> f2 -> { neq | @Field_in_dec l fl (exist _ f1 pf1) (exist _ f2 pf2) = right neq }.
+  intro neq; destruct (Field_in_dec fl (exist _ f1 pf1) (exist _ f2 pf2)).
+  elimtype False; apply neq; injection e; intros; assumption.
+  exists n; reflexivity.
+Qed.
 
 
-(*** The inductive type of specs ***)
+(*** The category of field maps on field lists ***)
+
+(* The underlying type of an FMap is an association list on Fields *)
+Definition FMap_alist := list (Field * Field).
+
+(* Apply a field map to a field *)
+Fixpoint apply_fmap_field (m : FMap_alist) (f : Field) : Field := 
+  match m with
+    | [] => f
+    | (f_from, f_to) :: m' =>
+      if Field_dec f f_from then f_to else apply_fmap_field m' f
+  end.
+
+(* Whether an FMap_alist maps from source s to target t *)
+Definition is_fmap {sl} (s: flist sl) {tl} (t: flist tl) (alist: FMap_alist) :=
+  map fst alist = sl /\
+  forall f, In f sl -> In (apply_fmap_field alist f) tl.
+
+(* The bundled type of field maps from s to t *)
+Definition FMap {sl} (s : flist sl) {tl} (t : flist tl) :=
+  { alist : FMap_alist | is_fmap s t alist }.
+
+(* Apply a bundled FMap to a field in source s to get a field in target t *)
+Definition apply_fmap {sl s tl t} (m : @FMap sl s tl t) (f : Field_in s) : Field_in t :=
+  mk_Field_in t (apply_fmap_field (proj1_sig m) (proj1_sig f))
+              (proj2 (proj2_sig m) (proj1_sig f) (proj2_sig f)).
+
+(* Build the identity alist *)
+Fixpoint fmap_id_alist l : FMap_alist :=
+  match l with
+    | [] => []
+    | f::l' => (f,f) :: fmap_id_alist l'
+  end.
+
+(* Proof that the identity alist is an FMap *)
+Lemma fmap_id_proof sl s : @is_fmap sl s sl s (fmap_id_alist sl).
+  induction s; unfold fmap_id_alist; fold fmap_id_alist.
+  split; [ reflexivity | intros; elimtype False; assumption ].
+  destruct IHs; split.
+  unfold map; fold (map fst (fmap_id_alist l)); f_equal; assumption.
+  intros; unfold apply_fmap_field; fold apply_fmap_field.
+  destruct (Field_dec f0 f).
+  rewrite e in H1; assumption.
+  right; apply H0; destruct H1.
+  elimtype False; apply n; symmetry; assumption.
+  assumption.
+Qed.
+
+(* Bundled identity morphism on flist s *)
+Definition fmap_id {sl} s : @FMap sl s sl s :=
+  exist _ (fmap_id_alist sl) (fmap_id_proof sl s).
+
+(* Applying fmap_id is the identity *)
+Lemma fmap_id_id sl s f : proj1_sig (apply_fmap (@fmap_id sl s) f) = proj1_sig (f).
+  destruct f as [f in_s]; unfold apply_fmap; unfold proj1_sig;
+    unfold mk_Field_in; unfold fmap_id.
+  induction s.
+  reflexivity.
+  unfold fmap_id_alist; fold fmap_id_alist;
+    unfold apply_fmap_field; fold apply_fmap_field.
+  destruct (Field_dec f f0).
+  symmetry; assumption.
+  apply IHs. destruct in_s.
+  elimtype False; apply n; symmetry; assumption.
+  assumption.
+Qed.
+
+(* Compose two field map alists *)
+Fixpoint fmap_compose_alist (m2 m1 : FMap_alist) : FMap_alist :=
+  match m1 with
+    | [] => []
+    | (f_in, f_out) :: m1' =>
+      (f_in, apply_fmap_field m2 f_out) :: fmap_compose_alist m2 m1'
+  end.
+
+(* Composing two field maps returns a field map *)
+Lemma fmap_compose_proof l1 fl1 l2 fl2 l3 fl3 m2 m1 :
+  @is_fmap l1 fl1 l2 fl2 m1 -> @is_fmap l2 fl2 l3 fl3 m2 ->
+  @is_fmap l1 fl1 l3 fl3 (fmap_compose_alist m2 m1).
+  revert l2 fl2 l3 fl3 m1 m2; induction fl1; intros.
+  destruct m1.
+  split; [ reflexivity | intros; elimtype False; assumption ].
+  elimtype False; destruct H; destruct p; apply (@nil_cons _ f (map fst m1));
+    symmetry; assumption.
+  destruct m1.
+  elimtype False; destruct H; apply (nil_cons H).
+  destruct H; destruct p.
+  injection H; intros.
+  revert H1; unfold apply_fmap_field; fold apply_fmap_field; rewrite H3; intros.
+  destruct (IHfl1 l2 fl2 l3 fl3 m1 m2).
+  split.
+  assumption.
+  intros. assert (In f2 (f::l)); [ right; assumption | ].
+  replace (apply_fmap_field m1 f2) with
+    (if Field_dec f2 f then f1 else apply_fmap_field m1 f2);
+    [ apply H1; assumption | ].
+  destruct (Field_dec f2 f).
+  elimtype False; apply not_in; rewrite e in H4; assumption.
+  reflexivity.
+  assumption.
+  unfold fmap_compose_alist; fold fmap_compose_alist.
+  split.
+  unfold map; fold (@map _ Field (@fst _ Field)); f_equal; assumption.
+  intros.
+  unfold apply_fmap_field; fold apply_fmap_field.
+  destruct (Field_dec f2 f).
+  destruct H0; apply H7.
+  replace f1 with (if Field_dec f0 f then f1 else apply_fmap_field m1 f0).
+  apply H1; left; symmetry; assumption.
+  rewrite H3. destruct (Field_dec_eq f) as [ e3 e4 ]; rewrite e4; reflexivity.
+  apply H5. destruct H6.
+  elimtype False; apply n; symmetry; assumption.
+  assumption.
+Qed.
+
+(* Bundled composition of two morphisms *)
+Definition fmap_compose {l1 fl1 l2 fl2 l3 fl3} m2 m1 : FMap fl1 fl3 :=
+  exist _ (fmap_compose_alist (proj1_sig m2) (proj1_sig m1))
+        (fmap_compose_proof l1 fl1 l2 fl2 l3 fl3
+                            (proj1_sig m2) (proj1_sig m1)
+                            (proj2_sig m1) (proj2_sig m2)).
+
+(* Field map composition commutes with application *)
+Lemma fmap_compose_composes l1 fl1 l2 fl2 l3 fl3 (m2 : FMap fl2 fl3) (m1 : FMap fl1 fl2) f :
+  proj1_sig (apply_fmap (@fmap_compose l1 fl1 l2 fl2 l3 fl3 m2 m1) f)
+  = proj1_sig (apply_fmap m2 (apply_fmap m1 f)).
+  destruct f as [f in_s]; destruct m1 as [m1 is_map1];
+  destruct m2 as [m2 is_map2]; unfold apply_fmap;
+    unfold mk_Field_in; unfold fmap_compose; unfold proj1_sig.
+  revert l1 fl1 is_map1 in_s. induction m1; intros.
+  elimtype False.
+  destruct is_map1. unfold in_fl in in_s. rewrite <- H in in_s. apply in_s.
+  destruct a.
+  unfold apply_fmap_field; unfold fmap_compose_alist;
+    fold fmap_compose_alist; fold apply_fmap_field.
+  destruct (Field_dec f f0).
+  reflexivity.
+  destruct fl1;
+    [ elimtype False; destruct is_map1; apply (nil_cons (eq_sym H)) | ].
+  destruct is_map1. injection H; intros.
+  apply (IHm1 _ fl1).
+  split.
+  assumption.
+  intros.
+  replace (apply_fmap_field m1 f3) with (apply_fmap_field ((f0, f1) :: m1) f3).
+  apply H0; right; assumption.
+  unfold apply_fmap_field; fold apply_fmap_field.
+  destruct (Field_dec_neq f3 f0).
+  rewrite H2. intro. apply not_in. rewrite <- H4. assumption.
+  rewrite e. reflexivity.
+  destruct in_s.
+  elimtype False; apply n; rewrite H2; rewrite H3; reflexivity.
+  assumption.
+Qed.
+
+
+(*** Models ***)
+
+(* Helper for elements of a model at an arbitrary type *)
+Definition Any : Type := { T : Type & T }.
+Definition mkAny (T:Type) (t:T) : Any := existT (fun T => T) T t.
+Definition anyType (any:Any) : Type := projT1 any.
+Definition anyObj (any:Any) : anyType any := projT2 any.
+
+(* A model is any list of fields and corresponding ops *)
+Definition Model {l} (fl : flist l) : Type :=
+  fun f 
+
+(* Whether f has type T in model *)
+(* FIXME: use or remove *)
+Fixpoint has_type_in_model f T (model:Model) : Prop :=
+  match model with
+    | [] => False
+    | (f', elem) :: model' =>
+      (f = f' -> anyType elem = T) /\
+      (f <> f' -> has_type_in_model f T model')
+  end.
+
+(* Project field f from model *)
+(* FIXME: use or remove *)
+Fixpoint model_proj f T (model:Model) : has_type_in_model f T model -> T :=
+  match model return has_type_in_model f T model -> T with
+    | [] => fun htim => match htim with end
+    | (f', elem) :: model' =>
+      fun htim =>
+        match Field_dec f f' with
+          | left e => rew (match htim with conj f _ => f e end) in (projT2 elem)
+          | right neq => model_proj f T model'
+                                    (match htim with conj _ f => f neq end)
+        end
+  end.
+
+(* Try to project field f from model *)
+Fixpoint model_proj_opt f (model:Model) : option Any :=
+  match model with
+    | [] => None
+    | (f', elem) :: model' =>
+      if Field_dec f f' then Some elem else
+        model_proj_opt f model'
+  end.
+
+(* Build a model with a subset of the fields in flds by mapping each f in flds
+using m to a value, if any, in model *)
+Fixpoint unmap_model (m : FMap) flds (model:Model) : Model :=
+  match flds with
+    | [] => []
+    | f :: flds' =>
+      match model_proj_opt (apply_fmap m f) model with
+        | Some elem => (f, elem) :: unmap_model m flds' model
+        | None => unmap_model m flds' model
+      end
+  end.
+
+(* FIXME: use or remove *)
+Lemma unmap_model_not_in m flds model f :
+  ~In f flds -> model_proj_opt f (unmap_model m flds model) = None.
+  induction flds; intros.
+  reflexivity.
+  unfold unmap_model; fold unmap_model.
+  destruct (model_proj_opt (apply_fmap m a) model).
+  unfold model_proj_opt; fold model_proj_opt.
+  destruct (Field_dec f a).
+  elimtype False; apply H; left; symmetry; assumption.
+  apply IHflds. intro; apply H; right; assumption.
+  apply IHflds. intro; apply H; right; assumption.
+Qed.
+
+Lemma unmap_model_yields_none m flds model f :
+  model_proj_opt (apply_fmap m f) model = None ->
+  model_proj_opt f (unmap_model m flds model) = None.
+
+Lemma unmap_model_preserves_proj m flds model f :
+  In f flds -> model_proj_opt f (unmap_model m flds model)
+               = model_proj_opt (apply_fmap m f) model.
+  induction flds; intros.
+  elimtype False; assumption.
+  unfold unmap_model; fold unmap_model.
+  case_eq (model_proj_opt (apply_fmap m a) model); intros.
+  unfold model_proj_opt; fold model_proj_opt.
+  destruct (Field_dec f a).
+  rewrite e; symmetry; assumption.
+  apply IHflds.
+  destruct H; [ elimtype False; apply n; symmetry | ]; assumption.
+  destruct H.
+  
+
+  apply IHflds.
+  destruct H.
+  rewrite H; rewrite H in H0; rewrite H0; unfold model_proj_opt;
+    destruct (Field_dec_eq f) as [ e1 e2 ]; rewrite e2;
+    reflexivity.
+  
+  unfold model_proj_opt; fold model_proj_opt.
+
+
+(*** Specs ***)
 
 Inductive Spec : flist -> Type :=
 (* The base case contains the names and types of the axioms *)
@@ -137,599 +380,37 @@ Inductive Spec : flist -> Type :=
   : Spec (fcons f flds not_in)
 .
 
-(* Helper for building the type of the "rest" of a spec_cons *)
-Definition spec_rest flds T (t_opt:option T) : Type :=
-  match t_opt with
-    | Some (_) => Spec flds
-    | None => T -> Spec flds
-  end.
-
-(* Helper for consing declared or defined ops *)
-Definition spec_cons f flds not_in T t_opt :
-  (spec_rest flds T t_opt) -> Spec (fcons f flds not_in) :=
-  match t_opt return spec_rest flds T t_opt -> Spec (fcons f flds not_in) with
-    | Some t =>
-      Spec_DefOp f flds not_in T t
-    | None =>
-      Spec_DeclOp f flds not_in T
-  end.
-
-(* Helper for building the type of the "rest" of a spec_cons *)
-(*
-Definition spec_rest_arg T (t_opt:option T) : Type :=
-  match t_opt with
-    | Some (_) => Spec flds
-    | None => T -> Spec flds
-  end.
-*)
-
-(* Helper for applying the "rest" of a spec_cons to an optional argument *)
-(*
-Definition spec_rest_apply flds T t_opt :
-  spec_rest flds T t_opt -> Spec flds :=
-  match t_opt return spec_rest flds T t_opt -> Spec flds with
-    | Some t => fun rest => rest t
-    | None => fun rest => rest
-  end.
-*)
-
-(*** The Models of a Spec ***)
-
-(* Helper for elements of a model at an arbitrary type *)
-Definition Any : Type := { T : Type & T }.
-Definition mkAny (T:Type) (t:T) : Any := existT (fun T => T) T t.
-
-(* Helper for conjoining all the axioms in an axiom list *)
+(* Conjoin all the axioms in an axiom list *)
 Fixpoint conjoin_axioms (axioms : list (Field * Prop)) : Prop :=
   fold_left (fun P1 f_P2 => and P1 (snd f_P2)) axioms True.
 
-(* Build the type of the models of spec as a nested dependent pair *)
-Fixpoint spec_model flds (spec:Spec flds) : Type :=
+(* Whether a model satisfies a spec *)
+Fixpoint satisfies_spec flds spec model : Prop :=
   match spec in Spec flds with
-    | Spec_Axioms axioms =>
-      conjoin_axioms axioms
-    | Spec_DeclOp _ flds' _ T rest =>
-      { t : T & spec_model flds' (rest t)}
-    | Spec_DefOp _ flds' _ _ _ rest => spec_model flds' rest
-  end.
-
-(* Whether field f has type T in a model *)
-Fixpoint has_type_in_model f T flds spec : spec_model flds spec -> Prop :=
-  match spec in Spec flds return spec_model flds spec -> Prop with
-    | Spec_Axioms _ => fun model => False
-    | Spec_DeclOp f' flds' not_in T' rest =>
-      fun model =>
-        (f = f' -> T' = T) /\
-        (f <> f' ->
-         has_type_in_model f T flds' (rest (projT1 model)) (projT2 model))
-    | Spec_DefOp f' flds' not_in T' t' rest =>
-      fun model =>
-        (f = f' -> T' = T) /\
-        (f <> f' -> has_type_in_model f T flds' rest model)
-  end.
-
-Lemma has_type_in_model_in_flds f T flds spec model :
-  has_type_in_model f T flds spec model -> in_fl f flds.
-  revert model; induction spec; intros.
-  elimtype False; apply H.
-  destruct (Field_dec f f0).
-  rewrite e; apply in_fl_eq.
-  right. apply (H (projT1 model) (projT2 model)).
-  destruct H0. apply H1. assumption.
-  destruct (Field_dec f f0).
-  rewrite e; apply in_fl_eq.
-  right; apply (IHspec model). destruct H. apply H0. assumption.
-Qed.
-
-Lemma has_type_in_model_eq f T flds not_in t_opt rest model :
-  has_type_in_model f T _ (spec_cons f flds not_in T t_opt rest) model.
-  destruct t_opt; (split; intros; [ | elimtype False; apply H ]; reflexivity).
-Qed.
-
-Lemma has_type_in_model_cons f T f' flds' not_in T' t_opt' rest model
-: f <> f' -> has_type_in_model f T flds' (rest t') model ->
-  has_type_in_model f T _ (Spec_DeclOp f' flds' not_in T' rest) (existT _ t' model).
-  split; [ intro H1; elimtype False; apply (H H1) | ].
-  intros; assumption.
-Qed.
-
-Lemma has_type_in_model_cons_decl f T f' flds' not_in T' t' rest model
-: f <> f' -> has_type_in_model f T flds' (rest t') model ->
-  has_type_in_model f T _ (Spec_DeclOp f' flds' not_in T' rest) (existT _ t' model).
-  split; [ intro H1; elimtype False; apply (H H1) | ].
-  intros; assumption.
-Qed.
-
-Lemma has_type_in_model_cons_def f T f' flds' not_in T' t' rest model
-: f <> f' -> has_type_in_model f T flds' rest model ->
-  has_type_in_model f T _ (Spec_DefOp f' flds' not_in T' t' rest) model.
-  split; [ intro H1; elimtype False; apply (H H1) | ].
-  intros; assumption.
-Qed.
-
-
-(* Project a field out of a model of a spec *)
-Fixpoint model_proj f T flds spec
-: forall model, has_type_in_model f T flds spec model -> T :=
-  match spec in Spec flds
-        return forall model, has_type_in_model f T flds spec model -> T with
-    | Spec_Axioms _ => fun model htim => (match htim with end)
-    | Spec_DeclOp f' flds' not_in T' rest =>
-      fun model htim =>
-        match Field_dec f f' with
-          | left e => eq_rect T' id (projT1 model) T
-                              ((match htim with conj f _ => f end) e)
-          | right neq =>
-            model_proj f T flds' (rest (projT1 model)) (projT2 model)
-                       ((match htim with conj _ f => f end) neq)
-        end
-    | Spec_DefOp f' flds' not_in T' t rest =>
-      fun model htim =>
-        match Field_dec f f' with
-          | left e => eq_rect T' id t T
-                              ((match htim with conj f _ => f end) e)
-          | right neq => model_proj f T flds' rest model
-                                    ((match htim with conj _ f => f end) neq)
-        end
-  end.
-
-(*
-Fixpoint model_proj f flds spec : in_fl f flds -> spec_model flds spec -> Any :=
-  match spec in Spec flds
-        return in_fl f flds -> spec_model flds spec -> Any with
-    | Spec_Axioms _ => fun i _ => (match i with end)
-    | Spec_DeclOp f' flds' not_in T rest =>
-      fun i model =>
-        match in_fl_inv f f' flds' not_in i with
-          | left _ => mkAny T (projT1 model)
-          | right i' => model_proj f flds' (rest (projT1 model)) i' (projT2 model)
-        end
-    | Spec_DefOp f' flds' not_in T t rest =>
-      fun i model =>
-        match in_fl_inv f f' flds' not_in i with
-          | left _ => mkAny T t
-          | right i' => model_proj f flds' rest i' model
-        end
-  end.
-*)
-
-
-(*** Model Substitution ***)
-
-(* This is true iff a model of source can be built from a given model of target
-by using field map m to map each field of source to one of target. *)
-Fixpoint CanSubstModel (m : FMap) flds_s (source : Spec flds_s) flds_t
-         (target : Spec flds_t) (model : spec_model _ target) : Prop :=
-  match source in Spec flds_s with
     | Spec_Axioms axioms => conjoin_axioms axioms
-    | Spec_DeclOp f flds_s' not_in T rest =>
-      exists (htim : has_type_in_model (apply_fmap m f) T flds_t target model),
-        CanSubstModel m flds_s' (rest (model_proj _ _ _ _ model htim)) flds_t target model
-    | Spec_DefOp f flds_s' not_in T t rest =>
-      exists (htim : has_type_in_model (apply_fmap m f) T flds_t target model),
-        model_proj _ _ _ _ model htim = t /\
-        CanSubstModel m flds_s' rest flds_t target model
-  end.
-
-(*
-Inductive CanSubstModel (m : FMap) flds_t target (model : spec_model flds_t target) : 
-  forall flds_s, Spec flds_s -> Prop :=
-| CanSubst_Axioms axioms (pf : conjoin_axioms axioms)
-  : CanSubstModel m flds_t target model fnil (Spec_Axioms axioms)
-| CanSubst_DeclOp f flds_s not_in T rest t i
-                  (e : model_proj (apply_fmap m f) _ _ i model = mkAny T t)
-                  (rec : CanSubstModel m flds_t target model flds_s (rest t))
-  : CanSubstModel m flds_t target model _
-                  (Spec_DeclOp f flds_s not_in T rest)
-| CanSubst_DefOp f flds_s not_in T rest t i
-                  (e : model_proj (apply_fmap m f) _ _ i model = mkAny T t)
-                  (rec : CanSubstModel m flds_t target model flds_s rest)
-  : CanSubstModel m flds_t target model _
-                  (Spec_DefOp f flds_s not_in T t rest)
-.
-*)
-
-Lemma CanSubstModel_cons_decl m f flds_t not_in T t target model flds_s source
-: CanSubstModel m flds_s source flds_t (target t) model ->
-  CanSubstModel m flds_s source _ (Spec_DeclOp f flds_t not_in T target) (existT _ t model).
-  induction source; unfold CanSubstModel; fold CanSubstModel; intro csm.
-  assumption.
-  destruct csm as [htim csm].
-  assert (apply_fmap m f0 <> f) as neq.
-    intro; apply not_in; rewrite <- H0;
-      apply (has_type_in_model_in_flds _ _ _ _ _ htim).
-  assert (apply_fmap m f0 = f -> T = T0); [ intros; contradiction | ].
-  exists (conj H0 (fun _ => htim)).
-  unfold model_proj; fold model_proj.
-  destruct (Field_dec_neq _ _ neq); rewrite e. apply H. assumption.
-  destruct csm as [htim conj]; destruct conj as [proj_eq csm].
-  assert (apply_fmap m f0 <> f) as neq.
-    intro; apply not_in; rewrite <- H;
-      apply (has_type_in_model_in_flds _ _ _ _ _ htim).
-  assert (apply_fmap m f0 = f -> T = T0); [ intros; contradiction | ].
-  exists (conj H (fun _ => htim)).
-  unfold model_proj; fold model_proj.
-  destruct (Field_dec_neq _ _ neq); rewrite e. split.
-  assumption.
-  apply IHsource. assumption.
-Qed.
-
-Lemma CanSubstModel_cons_def m f flds_t not_in T t target model flds_s source
-: CanSubstModel m flds_s source flds_t target model ->
-  CanSubstModel m flds_s source _ (Spec_DefOp f flds_t not_in T t target) model.
-  induction source; unfold CanSubstModel; fold CanSubstModel; intro csm.
-  assumption.
-  destruct csm as [htim csm].
-  assert (apply_fmap m f0 <> f) as neq.
-    intro; apply not_in; rewrite <- H0;
-      apply (has_type_in_model_in_flds _ _ _ _ _ htim).
-  assert (apply_fmap m f0 = f -> T = T0); [ intros; contradiction | ].
-  exists (conj H0 (fun _ => htim)).
-  unfold model_proj; fold model_proj.
-  destruct (Field_dec_neq _ _ neq); rewrite e. apply H. assumption.
-  destruct csm as [htim conj]; destruct conj as [proj_eq csm].
-  assert (apply_fmap m f0 <> f) as neq.
-    intro; apply not_in; rewrite <- H;
-      apply (has_type_in_model_in_flds _ _ _ _ _ htim).
-  assert (apply_fmap m f0 = f -> T = T0); [ intros; contradiction | ].
-  exists (conj H (fun _ => htim)).
-  unfold model_proj; fold model_proj.
-  destruct (Field_dec_neq _ _ neq); rewrite e. split.
-  assumption.
-  apply IHsource. assumption.
-Qed.
-
-
-(* CanSubstModel is reflexive *)
-Lemma CanSubstModel_refl flds spec model : CanSubstModel fmap_id flds spec flds spec model.
-  revert model; induction spec; intros.
-  assumption.
-  unfold CanSubstModel; fold CanSubstModel; rewrite fmap_id_ok.
-  unfold model_proj; fold model_proj.
-  destruct (Field_dec_eq f). rewrite e.
-  destruct model as [t model].
-  assert (f <> f -> has_type_in_model f T flds (rest t) model).
-  intro neq; elimtype False; apply neq; reflexivity.
-  exists (conj (fun _ => eq_refl) H0).
-  apply CanSubstModel_cons_decl. apply H.
-  unfold CanSubstModel; fold CanSubstModel; rewrite fmap_id_ok.
-  unfold model_proj; fold model_proj.
-  destruct (Field_dec_eq f). rewrite e.
-  assert (f <> f -> has_type_in_model f T flds spec model).
-  intro neq; elimtype False; apply neq; reflexivity.
-  exists (conj (fun _ => eq_refl) H).
-  split; [ reflexivity | ].
-  apply CanSubstModel_cons_def. apply IHspec.
-Qed.
-
-
-(* Perform model substitution. This intuitively applies the map m backwards,
-building a model of source from a model of target by applying m to each field in
-source to get the field name for the value to use in the model of target. *)
-Fixpoint subst_model m flds_s source flds_t target model :
-  CanSubstModel m flds_s source flds_t target model -> spec_model flds_s source :=
-  match source in Spec flds_s
-        return CanSubstModel m flds_s source flds_t target model ->
-               spec_model flds_s source with
-    | Spec_Axioms axioms =>
-      fun pf => pf
-    | Spec_DeclOp f flds_s' not_in T rest =>
-      fun can_subst =>
-        existT (fun t => spec_model _ (rest t))
-               (model_proj (apply_fmap m f) T flds_t target model
-                           (match can_subst with ex_intro ))
-               (subst_model m _ target model (proj2_sig can_subst))
-    | Spec_DefOp f flds_s' not_in T t rest =>
-      fun can_subst =>
-        (subst_model m _ target model
-                     (proj2 (proj2_sig can_subst)))
-  end.
-
-
-
-
-(*** FIXME: Old Stuff Below ***)
-
-
-(* Whether field f has type T in a given model of spec *)
-Fixpoint field_has_type f T spec : spec_model spec -> Prop :=
-  match spec return spec_model spec -> Prop with
-    | Spec_Axioms _ => fun model => False
-    | Spec_DeclOp f' T' rest =>
-      fun model =>
-        if Field_dec f f' then T' = T else
-          field_has_type f T (rest (projT1 model)) (projT2 model)
-    | Spec_DefOp f' T' t rest =>
-      fun model =>
-        if Field_dec f f' then T' = T else
-          field_has_type f T rest model
-  end.
-
-(* Invert field_has_type for Spec_DeclOp *)
-Definition field_has_type_inv_decl f T f' T' rest :
-  forall model,
-    field_has_type f T (Spec_DeclOp f' T' rest) model ->
-    {T' = T} + {field_has_type f T (rest (projT1 model)) (projT2 model)}.
-  unfold field_has_type; fold field_has_type; unfold spec_model; fold spec_model.
-  destruct (Field_dec f f'); intros.
-  left; assumption.
-  right; assumption.
-Defined.
-
-(* Invert field_has_type for Spec_DefOp *)
-Definition field_has_type_inv_def f T f' T' t' rest :
-  forall model,
-    field_has_type f T (Spec_DefOp f' T' t' rest) model ->
-    {T' = T} + {field_has_type f T rest model}.
-  unfold field_has_type; fold field_has_type; unfold spec_model; fold spec_model.
-  destruct (Field_dec f f'); intros.
-  left; assumption.
-  right; assumption.
-Defined.
-
-
-(* Project a named field out of a model of a spec *)
-(*
-Definition model_proj f T spec :
-  forall (model:spec_model spec), field_has_type f T spec model -> T.
-  induction spec; unfold field_has_type; fold field_has_type;
-    unfold spec_model; fold spec_model.
-  intros; elimtype False; assumption.
-  destruct (Field_dec f f0).
-    intros; rewrite <- H; apply (projT1 model).
-    intros; apply (X (projT1 model) (projT2 model)); assumption.
-  destruct (Field_dec f f0).
-    intros; rewrite <- H; apply t.
-    intros; apply (IHspec model); assumption.
-Defined.
-*)
-
-Fixpoint model_proj f T spec :
-  forall (model:spec_model spec), field_has_type f T spec model -> T :=
-  match spec return forall (model:spec_model spec),
-                      field_has_type f T spec model -> T with
-    | Spec_Axioms _ =>
-      fun model has_type => (match has_type with end)
-    | Spec_DeclOp f' T' rest =>
-      fun model has_type =>
-        (match field_has_type_inv_decl f T f' T' rest model has_type with
-           | left e => eq_rect T' id (projT1 model) T e
-           | right has_type' =>
-             model_proj f T (rest (projT1 model)) (projT2 model) has_type'
-         end)
-    | Spec_DefOp f' T' t' rest =>
-      fun model has_type =>
-        (match field_has_type_inv_def f T f' T' t' rest model has_type with
-           | left e => eq_rect T' id t' T e
-           | right has_type' =>
-             model_proj f T rest model has_type'
-         end)
-  end.
-
-
-(*** Model Substitution ***)
-
-(* This is true iff a model of source can be built from a given model of target
-by using field map m to map each field of source to one of target. *)
-Fixpoint CanSubstModel (m : FMap) (source target : Spec)
-         (model : spec_model target) : Prop :=
-  match source with
-    | Spec_Axioms axioms => conjoin_axioms axioms
-    | Spec_DeclOp f T rest =>
-      { has_type:field_has_type (apply_fmap m f) T target model |
-        CanSubstModel m (rest (model_proj (apply_fmap m f) T target model has_type))
-                      target model }
-    | Spec_DefOp f T t rest =>
-      { has_type:field_has_type (apply_fmap m f) T target model |
-        (model_proj (apply_fmap m f) T target model has_type) = t /\
-        CanSubstModel m rest target model }
-  end.
-
-(* Perform model substitution. This intuitively applies the map m backwards,
-building a model of source from a model of target by applying m to each field in
-source to get the field name for the value to use in the model of target. *)
-Fixpoint subst_model m source target model :
-  CanSubstModel m source target model -> spec_model source :=
-  match source return CanSubstModel m source target model -> spec_model source with
-    | Spec_Axioms axioms =>
-      fun pf => pf
-    | Spec_DeclOp f T rest =>
-      fun can_subst =>
-        existT (fun t => spec_model (rest t))
-               (model_proj (apply_fmap m f) T target model (proj1_sig can_subst))
-               (subst_model m _ target model (proj2_sig can_subst))
-    | Spec_DefOp f T t rest =>
-      fun can_subst =>
-        (subst_model m _ target model
-                     (proj2 (proj2_sig can_subst)))
-  end.
-
-(* CanSubstModel is reflexive *)
-Lemma CanSubstModel_refl spec model : CanSubstModel fmap_id spec spec model.
-  revert model; induction spec; unfold CanSubstModel; unfold spec_model;
-    fold spec_model; fold CanSubstModel.
-  intros; assumption.
-  rewrite fmap_id_ok; intro model; destruct model as [t model].
-  assert (field_has_type f T (Spec_DeclOp f T rest) (existT _ t model)) as has_type.
-  unfold field_has_type; fold field_has_type;
-    destruct (Field_dec_eq f) as [eq_f_f eq_field_dec]; rewrite eq_field_dec; reflexivity.
-  exists has_type. unfold CanSubstModel; fold CanSubstModel.
-
-  assert {e:Field_dec f f}
-
-  unfold model_proj; unfold field_has_type_inv_decl; unfold projT1; unfold projT2;
-fold (model_proj f T);
-  destruct (Field_dec f f).
-  Focus 2. fold (model_proj f T (Spec_Decl)).
-
-exists (eq_refl T).
-
-
-(*** Morphisms ***)
-
-(* Field map m is a morphism from source to target iff it can be used to
-substitute into any model of target to get a model of source *)
-Definition IsMorphism (m : FMap) (source target : Spec) : Prop :=
-  forall (model:spec_model target), CanSubstModel m source target model.
-
-
-
-
-(*** FIXME: old stuff below ***)
-
-(*** The models of a spec ***)
-
-Definition Any : Type := { T : Type & T }.
-Definition mkAny (T:Type) (t:T) : Any := existT (fun T => T) T t.
-Definition dummyAny : Any := mkAny _ tt.
-
-Definition Model := list (Field * Any).
-
-Fixpoint model_proj f model : option Any :=
-  match model with
-    | [] => None
-    | (f', any) :: model' =>
-      if Field_dec f f' then Some any else
-        model_proj f model'
-  end.
-
-(* NOTE: this is in Type because we need to compute the model elements *)
-Fixpoint IsModel (model:Model) (s:Spec) : Prop :=
-  match s with
-    | Spec_Axioms axioms => conjoin_axioms axioms
-    | Spec_DeclOp f T rest =>
-      exists t, model_proj f model = Some (mkAny T t) /\ IsModel model (rest t)
-    | Spec_DefOp f T t rest =>
-      model_proj f model = Some (mkAny T t) /\ IsModel model rest
+    | Spec_DeclOp f flds' not_in T rest =>
+      (match model_proj_opt f model with
+         | Some elem =>
+           exists (e: anyType elem = T),
+             satisfies_spec flds' (rest (rew e in (projT2 elem))) model
+         | None => False
+       end)
+    | Spec_DefOp f flds' not_in T t rest =>
+      (match model_proj_opt f model with
+         | Some elem => elem = mkAny T t /\ satisfies_spec flds' rest model
+         | None => False
+       end)
   end.
 
 
 (*** Morphisms ***)
 
-Fixpoint unmap_model (m : FMap) (model:Model) : Model := FIXME HERE
+Definition IsMorphism (m:FMap) flds_s source flds_t target : Prop :=
+  forall model,
+    satisfies_spec flds_t target model ->
+    satisfies_spec flds_s source (unmap_model m (proj1_sig flds_s) model).
 
-Fixpoint IsMappedModel (m : FMap) (model:Model) (s:Spec) : Prop :=
-  match s with
-    | Spec_Axioms axioms => conjoin_axioms axioms
-    | Spec_DeclOp f T rest =>
-      exists t,
-        model_proj (apply_fmap m f) model = Some (mkAny T t)
-        /\ IsMappedModel m model (rest t)
-    | Spec_DefOp f T t rest =>
-      model_proj (apply_fmap m f) model = Some (mkAny T t)
-      /\ IsMappedModel m model rest
-  end.
-
-Definition IsMorphism m (source target : Spec) : Prop :=
-  forall model, IsModel model target -> IsMappedModel m model source.
-
-
-Lemma IsMappedModel_id model s : IsModel model s <-> IsMappedModel fmap_id model s.
-  split; induction s;
-  unfold IsModel; fold IsModel; unfold IsMappedModel; fold IsMappedModel; intro.
-  assumption.
-  destruct H0; destruct H0; exists x; split; [ | apply H]; assumption.
-  destruct H; split; [ | apply IHs ]; assumption.
-  assumption.
-  destruct H0; destruct H0; exists x; split; [ | apply H]; assumption.
-  destruct H; split; [ | apply IHs ]; assumption.
-Qed.
-
-Theorem morphism_refl spec : IsMorphism fmap_id spec spec.
-  intros model ism; apply IsMappedModel_id; assumption.
-Qed.
-
-(* Need a model (or a mapped model) to extract the fields from a spec *)
-(* Argh, needs UIP! *)
-(*
-Definition spec_fields m model spec : IsMappedModel m model spec -> list Field.
-  induction spec; unfold IsMappedModel; fold IsMappedModel; intro ism.
-  exact [].
-  destruct (model_proj (m f) model).
-  destruct a. assert (x = T).
-  destruct ism; destruct H; injection H; intros; assumption.
-  revert p ism; rewrite H; intros.
-  assert (IsMappedModel m model (rest p)).
-  destruct ism; 
-*)
-(*
-Fixpoint spec_fields m model spec : IsMappedModel m model spec -> list Field :=
-  match spec with
-    | Spec_Axioms _ => fun _ => []
-    | Spec_DeclOp f T rest =>
-*)
-
-
-Definition unmap_model (m : Field -> Field) (model:Model) (s:Spec) :
-  IsMappedModel m model s -> {model' | IsModel model' s }.
-  induction s; unfold IsMappedModel; fold IsMappedModel;
-  unfold IsModel; fold IsModel; intro ism.
-  exists []; assumption.
-  case_eq (model_proj (m f) model); intros.
-  destruct a. assert (x = T).
-  destruct ism; destruct H0; rewrite H in H0;
-    injection H0; intros; assumption.
-  revert p H; rewrite H0; intros.
-  destruct (X p).
-  
-
-  exists (m f, a).
-
-
-Fixpoint unmap_model (m : Field -> Field) (model:Model) (s:Spec) :
-  IsMappedModel m model s -> Model :=
-  match s with
-    | Spec_Axioms axioms => fun _ => x[]
-    | Spec_DeclOp f T rest =>
-      fun ism =>
-
-
-(*** FIXME: Old stuff below... ***)
-
-Fixpoint spec_model (spec:Spec) : Type :=
-  match spec with
-    | Spec_Axioms axioms =>
-      conjoin_axioms axioms
-    | Spec_DeclOp _ T rest =>
-      { t : T & spec_model (rest t)}
-    | Spec_DefOp _ _ _ rest => spec_model rest
-  end.
-
-
-(*** Project an op from a model of a spec ***)
-
-Fixpoint model_proj f spec : spec_model spec -> { T : Type & T } :=
-  match spec  with
-    | Spec_Axioms _ => fun _ => existT (fun T => T) unit tt
-    | Spec_DeclOp f' T rest =>
-      fun model =>
-        if Field_dec f f' then (existT (fun T => T) T (projT1 model))
-      else model_proj f (rest (projT1 model)) (projT2 model)
-    | Spec_DefOp f' T t rest =>
-      fun model =>
-        if Field_dec f f' then existT _ T t
-        else model_proj f rest model
-  end.
-
-
-(*** Whether a field function defines a morphism ***)
-
-(* Note: the co-domain comes first in IsMorphism, because it does not vary *)
-(*
-Inductive IsMorphism (m : Field -> Field) (s_codom : Spec) : Spec -> Prop :=
-| IsMorphism_Axioms 
-*)
-
-Fixpoint IsMorphModel (m : Field -> Field)
-         (source target : Spec) (t_model : Model) : Prop :=
-  match source with
-    | Spec_Axioms axioms =>
-      conjoin_axioms axioms
-    | Spec_DeclOp f T rest =>
-      
-
-Fixpoint IsMorphism (m : Field -> Field) (source target : Spec) : Prop :=
-  match source with
-    | Spec_Axioms axioms =>
-      conjoin_axioms axioms
-    | Spec_DeclOp f T rest =>
+Lemma is_morphism_id flds spec : IsMorphism fmap_id flds spec flds spec.
+  intro model; induction spec; unfold satisfies_spec; fold satisfies_spec.
+  intros; assumption.
+  intros. destruct (model_proj_opt f model).
