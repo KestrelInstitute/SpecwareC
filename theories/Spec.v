@@ -5,7 +5,6 @@ Require Import List.
 Import ListNotations.
 Require Import String.
 Require Import Coq.Logic.Eqdep_dec.
-Require Import Coq.Logic.EqdepFacts.
 Import EqNotations.
 
 
