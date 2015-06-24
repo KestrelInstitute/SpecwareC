@@ -4,13 +4,9 @@
 Require Import List.
 Import ListNotations.
 Require Import String.
+Require Import Coq.Logic.Eqdep_dec.
+Require Import Coq.Logic.EqdepFacts.
 Import EqNotations.
-Require Export Coq.Logic.Eqdep_dec.
-
-(*
-Add LoadPath "." as Specware.
-Require Import Specware.Util.
-*)
 
 
 (*** Fields ***)
@@ -69,7 +65,6 @@ Lemma in_fl_uniq (f:Field) l (nd:NoDup l) (in1 in2 : In f l) : in1 = in2.
   unfold In in in1,in2; fold (In f l) in in1,in2.
   destruct in1; destruct in2.
   rewrite (UIP_dec Field_dec e e0); reflexivity.
-  Check NoDup_remove_2.
   elimtype False; apply (NoDup_remove_2 [] l a nd); rewrite e; assumption.
   elimtype False; apply (NoDup_remove_2 [] l a nd); rewrite e; assumption.
   f_equal; apply (IHl (NoDup_remove_1 [] l a nd)).
@@ -88,7 +83,7 @@ Definition Field_in_cons f' {l fl not_in} (f: Field_in fl) :
   mk_Field_in _ (proj1_sig f) (in_fl_cons (proj1_sig f) (proj2_sig f)).
 
 (* Build a Field_in f (fcons f not_in fl) *)
-Definition mk_Field_in_cons f {l} fl not_in : Field_in (@fcons f l not_in fl) :=
+Definition Field_in_eq f {l} fl not_in : Field_in (@fcons f l not_in fl) :=
   mk_Field_in _ f (in_fl_eq f not_in fl).
 
 (* Decidable equaltiy on Field_in *)
@@ -158,14 +153,47 @@ Definition anyObj (any:Any) : anyType any := projT2 any.
 Definition Model {l} (fl : flist l) : Type :=
   Field_in fl -> Any.
 
+(* Model equivalence is extensional equality (without needing an axiom) *)
+Definition model_equiv {l fl} (model1 model2 : @Model l fl) : Prop :=
+  forall f, model1 f = model2 f.
+
 (* Whether f has type T in model *)
 Definition has_type_in_model {l fl} f T (model: @Model l fl) : Prop :=
   anyType (model f) = T.
+
+(* has_type_in_model is equal in equivalent models *)
+Lemma has_type_in_model_equiv {l fl} f T model1 model2 :
+  @model_equiv l fl model1 model2 ->
+  has_type_in_model f T model1 = has_type_in_model f T model2.
+  intros equiv; unfold has_type_in_model; rewrite <- (equiv f); reflexivity.
+Qed.
 
 (* Project field f from model *)
 Definition model_proj {l fl} f T (model: @Model l fl)
          (htim: has_type_in_model f T model) : T :=
   rew [id] htim in (anyObj (model f)).
+
+(* model_proj is equal (modulo htim proof) in equivalent models *)
+Lemma model_proj_equiv {l fl} f T model1 model2 htim
+      (equiv: @model_equiv l fl model1 model2) :
+  exists htim', model_proj f T model1 htim = model_proj f T model2 htim'.
+  unfold model_proj; unfold has_type_in_model.
+  rewrite <- (equiv f). exists htim. reflexivity.
+Qed.
+
+(* Take a sub-model, removing the first element *)
+Definition model_tail {f l fl not_in}
+           (model: Model (@fcons f l not_in fl)) : Model fl :=
+  fun f' => model (Field_in_cons f f').
+
+(* model_tail preserves equivalence *)
+Definition model_tail_equiv {f l fl not_in}
+           (model1 model2 : Model (@fcons f l not_in fl)) :
+  model_equiv model1 model2 ->
+  model_equiv (model_tail model1) (model_tail model2).
+  unfold model_equiv; unfold model_tail; intros equiv f'.
+  apply equiv.
+Qed.
 
 (* Build a model with a subset of the fields in flds by mapping each f to the
 corresponding value of (m f) in model *)
@@ -173,10 +201,19 @@ Definition unmap_model {sl s tl t} (m : @FMap sl s tl t)
            (model: Model t) : Model s :=
   fun f => model (apply_fmap m f).
 
-(* Take a sub-model, removing the first element *)
-Definition model_tail {f l fl not_in}
-           (model: Model (@fcons f l not_in fl)) : Model fl :=
-  fun f' => model (Field_in_cons f f').
+(* unmap_model on the identity map yields an equivalent model *)
+Lemma unmap_model_id l fl model :
+  model_equiv model (unmap_model (@fmap_id l fl) model).
+  intro f; unfold unmap_model; rewrite fmap_id_is_id; reflexivity.
+Qed.
+
+(* unmap_model commutes with map composition *)
+Lemma unmap_model_compose l3 fl3 l2 fl2 (m2: @FMap l2 fl2 l3 fl3)
+      l1 fl1 (m1: @FMap l1 fl1 l2 fl2) model :
+  model_equiv (unmap_model (fmap_compose m2 m1) model)
+              (unmap_model m1 (unmap_model m2 model)).
+  intro f; unfold unmap_model; rewrite fmap_compose_composes; reflexivity.
+Qed.
 
 
 (*** Specs ***)
@@ -203,31 +240,72 @@ Fixpoint satisfies_spec {l flds} (spec: @Spec l flds) : Model flds -> Prop :=
     | Spec_DeclOp f flds' not_in T rest =>
       fun model =>
         exists (htim: has_type_in_model
-                        (mk_Field_in_cons f flds' not_in) T model),
+                        (Field_in_eq f flds' not_in) T model),
           satisfies_spec
             (rest (model_proj _ T model htim))
             (model_tail model)
     | Spec_DefOp f flds' not_in T t rest =>
       fun model =>
         (exists (htim: has_type_in_model
-                         (mk_Field_in_cons f flds' not_in) T model),
+                         (Field_in_eq f flds' not_in) T model),
            model_proj _ T model htim = t) /\
         satisfies_spec rest (model_tail model)
   end.
 
+(* satisfies_spec is equivalent on equivalent models *)
+Lemma satisfies_spec_equiv_models {l fl} (spec: @Spec l fl) model1 model2 :
+  model_equiv model1 model2 ->
+  satisfies_spec spec model1 -> satisfies_spec spec model2.
+  intros equiv sats; induction spec.
+  assumption.
+  destruct sats as [htim sats'].
+  destruct (model_proj_equiv (Field_in_eq f flds not_in)
+                             T model1 model2 htim equiv) as [htim' e].
+  exists htim'; rewrite <- e.
+  apply (H _ _ _ (model_tail_equiv _ _ equiv)). assumption.
+  destruct sats as [H sats']; destruct H as [htim e].
+  split.
+  destruct (model_proj_equiv (Field_in_eq f flds not_in)
+                             T model1 model2 htim equiv) as [htim' e2].
+  exists htim'; rewrite <- e2; assumption.
+  apply (IHspec _ _ (model_tail_equiv _ _ equiv)).
+  assumption.
+Qed.
+
 
 (*** Morphisms ***)
 
-Definition IsMorphism {sl s tl t} (m: @FMap sl s tl t) (source: Spec s) (target : Spec t) : Prop :=
+(* m is a morphism from source to target iff it can unmap models of target into
+models of source *)
+Definition is_morphism {l_s fl_s} (source: @Spec l_s fl_s)
+           {l_t fl_t} (target : @Spec l_t fl_t) (m: FMap fl_s fl_t) : Prop :=
   forall model,
     satisfies_spec target model ->
     satisfies_spec source (unmap_model m model).
 
-Lemma is_morphism_id l fl spec : IsMorphism (@fmap_id l fl) spec spec.
-  unfold IsMorphism; unfold unmap_model; induction spec; intros.
+(* A morphism from source to target is an m that is_morphism *)
+Definition Morphism {l_s fl_s l_t fl_t} source target : Type :=
+  { m : @FMap l_s fl_s l_t fl_t | is_morphism source target m }.
+
+(* The identity map on fl is a morphism from any spec on fl to itself *)
+Lemma is_morphism_id l fl spec : is_morphism spec spec (@fmap_id l fl).
+  unfold is_morphism; intros.
+  apply (satisfies_spec_equiv_models spec _ _ (unmap_model_id _ _ model)).
   assumption.
-  destruct H0 as [htim H0]. exists htim. apply H. assumption.
-  destruct H as [H H0]; destruct H as [htim H]. split.
-  exists htim. assumption.
-  apply IHspec. assumption.
 Qed.
+
+(* The identity morphism on spec *)
+Definition id_morphism {l fl} (spec: @Spec l fl) : Morphism spec spec :=
+  exist _ (fmap_id fl) (is_morphism_id l fl spec).
+
+(* Composing maps yields a morphism *)
+Lemma is_morphism_compose {l3 fl3} (s3: @Spec l3 fl3)
+      {l2 fl2} (s2: @Spec l2 fl2) {l1 fl1} (s1: @Spec l1 fl1)
+      (m2: FMap fl2 fl3) (m1: FMap fl1 fl2) :
+  is_morphism s2 s3 m2 -> is_morphism s1 s2 m1 ->
+  is_morphism s1 s3 (fmap_compose m2 m1).
+  induction s1; intros ism2 ism1 model sats.
+  apply (ism1 (unmap_model m2 model)); apply (ism2 model); assumption.
+  unfold satisfies_spec.
+
+  intros ism2 ism1 model sats.
