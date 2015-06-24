@@ -1,6 +1,10 @@
 
 (*** Modeling specs and morphisms as Coq terms ***)
 
+(* This approach defines an inductive type of specs and defines spec_model as a
+recursive function over specs that builds a nested dependent product *)
+
+
 Require Import List.
 Import ListNotations.
 Require Import String.
