@@ -207,10 +207,10 @@ Lemma unmap_model_id l fl model :
 Qed.
 
 (* unmap_model commutes with map composition *)
-Lemma unmap_model_compose l3 fl3 l2 fl2 (m2: @FMap l2 fl2 l3 fl3)
-      l1 fl1 (m1: @FMap l1 fl1 l2 fl2) model :
-  model_equiv (unmap_model (fmap_compose m2 m1) model)
-              (unmap_model m1 (unmap_model m2 model)).
+Lemma unmap_model_compose {l3 fl3 l2 fl2} (m2: @FMap l2 fl2 l3 fl3)
+      {l1 fl1} (m1: @FMap l1 fl1 l2 fl2) model :
+  model_equiv (unmap_model m1 (unmap_model m2 model))
+              (unmap_model (fmap_compose m2 m1) model).
   intro f; unfold unmap_model; rewrite fmap_compose_composes; reflexivity.
 Qed.
 
@@ -294,17 +294,25 @@ Lemma is_morphism_id l fl spec : is_morphism spec spec (@fmap_id l fl).
 Qed.
 
 (* The identity morphism on spec *)
-Definition id_morphism {l fl} (spec: @Spec l fl) : Morphism spec spec :=
+Definition morph_id {l fl} (spec: @Spec l fl) : Morphism spec spec :=
   exist _ (fmap_id fl) (is_morphism_id l fl spec).
 
 (* Composing maps yields a morphism *)
-Lemma is_morphism_compose {l3 fl3} (s3: @Spec l3 fl3)
-      {l2 fl2} (s2: @Spec l2 fl2) {l1 fl1} (s1: @Spec l1 fl1)
+Lemma is_morphism_compose {l3 fl3} {s3: @Spec l3 fl3}
+      {l2 fl2} {s2: @Spec l2 fl2} {l1 fl1} {s1: @Spec l1 fl1}
       (m2: FMap fl2 fl3) (m1: FMap fl1 fl2) :
   is_morphism s2 s3 m2 -> is_morphism s1 s2 m1 ->
   is_morphism s1 s3 (fmap_compose m2 m1).
-  induction s1; intros ism2 ism1 model sats.
-  apply (ism1 (unmap_model m2 model)); apply (ism2 model); assumption.
-  unfold satisfies_spec.
+  unfold is_morphism; intros ism2 ism1 model sats.
+  apply (satisfies_spec_equiv_models _ _ _ (unmap_model_compose m2 m1 model)).
+  apply ism1. apply ism2. assumption.
+Qed.
 
-  intros ism2 ism1 model sats.
+(* Compose morphisms *)
+Definition morph_compose {l3 fl3} {s3: @Spec l3 fl3}
+      {l2 fl2} {s2: @Spec l2 fl2} {l1 fl1} {s1: @Spec l1 fl1}
+      (morph2: Morphism s2 s3) (morph1: Morphism s1 s2) :
+  Morphism s1 s3 :=
+  exist _ (fmap_compose (proj1_sig morph2) (proj1_sig morph1))
+         (is_morphism_compose (proj1_sig morph2) (proj1_sig morph1)
+                              (proj2_sig morph2) (proj2_sig morph1)).
