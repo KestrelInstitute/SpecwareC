@@ -339,13 +339,34 @@ Definition morph_compose {s3 s2 s1}
         (is_morphism_compose s3 s2 s1 (proj1_sig morph2) (proj1_sig morph1)
                              (proj2_sig morph2) (proj2_sig morph1)).
 
+
+(*** Morphisms on the tail of a spec ***)
+
+(* A dependent spec is a spec inside a binder *)
+Definition DepSpec T : Type := {l:_ & {fl:_ & T -> @SpecRepr l fl}}.
+
+(* Project out the SpecRepr of a DepSpec *)
+Definition depSpecRepr T (spec: DepSpec T) :=
+  projT2 (projT2 spec).
+
+(* Add a declared op to the beginning of a DepSpec to get a Spec *)
+Definition depSpec_DeclOp f T (spec: DepSpec T) not_in : Spec :=
+  existT _ _ (existT _ _ (Spec_DeclOp f not_in T (depSpecRepr T spec))).
+
+(* Add a defined op to the beginning of a DepSpec to get a Spec *)
+Definition depSpec_DefOp f T t (spec: DepSpec T) not_in : Spec :=
+  existT _ _ (existT _ _ (Spec_DefOp f not_in T t (depSpecRepr T spec t))).
+
+(* A dependent morphism is morphism inside a binder *)
+Definition DepMorphism T (source target: DepSpec T) :=
+  { m | forall t, is_morphism (depSpecRepr T source t)
+                              (depSpecRepr T target t) m }.
+
 (* A morphism on the tail of two specs extendeds to one on the full specs *)
-Lemma is_morphism_cons_decl f T {l_s fl_s l_t fl_t} not_in_s not_in_t
-           (source: T -> @SpecRepr l_s fl_s) (target: T -> @SpecRepr l_t fl_t)
-           (m: FMap) :
-  (forall t, is_morphism (source t) (target t) m) ->
-  is_morphism (Spec_DeclOp f not_in_s T source)
-              (Spec_DeclOp f not_in_t T target)
+Lemma is_morphism_cons_decl f T (source target: DepSpec T) not_in_s not_in_t m :
+  (forall t, is_morphism (depSpecRepr T source t) (depSpecRepr T target t) m) ->
+  is_morphism (Spec_DeclOp f not_in_s T (depSpecRepr T source))
+              (Spec_DeclOp f not_in_t T (depSpecRepr T target))
               (fmap_cons f m).
   intros ism model sats.
   destruct sats as [htim sats].
@@ -361,6 +382,13 @@ Lemma is_morphism_cons_decl f T {l_s fl_s l_t fl_t} not_in_s not_in_t
   apply ism.
   assumption.
 Qed.
+
+(* Cons a declared op onto the front of a dependent morphism *)
+Definition morph_cons_decl f T {s1 s2} not_in1 not_in2
+           (morph : DepMorphism T s1 s2) :
+  Morphism (depSpec_DeclOp f T s1 not_in1) (depSpec_DeclOp f T s2 not_in2) :=
+  exist _ (fmap_cons f (proj1_sig morph))
+        (is_morphism_cons_decl f T _ _ not_in1 not_in2 (proj1_sig morph) (proj2_sig morph)).
 
 (* A morphism on the tail of two specs extendeds to one on the full specs *)
 Lemma is_morphism_cons_def f T t {l_s fl_s l_t fl_t} not_in_s not_in_t
