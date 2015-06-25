@@ -1,6 +1,8 @@
 
 (*** Modeling specs and morphisms as Coq terms ***)
 
+(* This approach defines models as functions from fields in a given list *)
+
 Require Import List.
 Import ListNotations.
 Require Import String.
