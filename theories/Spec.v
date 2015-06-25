@@ -362,6 +362,30 @@ Lemma is_morphism_cons_decl f T {l_s fl_s l_t fl_t} not_in_s not_in_t
   assumption.
 Qed.
 
+(* A morphism on the tail of two specs extendeds to one on the full specs *)
+Lemma is_morphism_cons_def f T t {l_s fl_s l_t fl_t} not_in_s not_in_t
+           (source: @SpecRepr l_s fl_s) (target: @SpecRepr l_t fl_t)
+           (m: FMap) :
+  is_morphism source target m ->
+  is_morphism (Spec_DefOp f not_in_s T t source)
+              (Spec_DefOp f not_in_t T t target)
+              (fmap_cons f m).
+  intros ism model sats.
+  destruct sats as [H sats]; destruct H as [htim e_proj].
+  destruct (model_proj_equiv_f f T _ (unmap_model (fmap_cons f m) model) htim)
+    as [htim' proj_eq].
+  unfold unmap_model; unfold fmap_cons.
+  destruct (Field_dec_eq f) as [e1 e2]; rewrite e2; reflexivity.
+  split.
+  exists htim'.
+  rewrite <- proj_eq. assumption.
+  apply (satisfies_spec_equiv_on_models
+           _ _ _
+           (unmap_cons_equiv _ _ _ _ not_in_s)).
+  apply ism.
+  assumption.
+Qed.
+
 
 (*** Transformations ***)
 
