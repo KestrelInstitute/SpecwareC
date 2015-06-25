@@ -217,30 +217,40 @@ Qed.
 
 (*** Specs ***)
 
-Inductive Spec : forall {l}, flist l -> Type :=
+(* The inductive representation of specs, indexed by the op fields *)
+Inductive SpecRepr : forall {l}, flist l -> Type :=
 (* The base case contains the names and types of the axioms *)
-| Spec_Axioms (axioms : list (Field * Prop)) : Spec fnil
+| Spec_Axioms (axioms : list (Field * Prop)) : SpecRepr fnil
 (* Declared op: the rest of the spec can refer to the op *)
-| Spec_DeclOp f {l} flds not_in (T : Type) (rest : T -> Spec flds)
-  : Spec (@fcons f l not_in flds)
+| Spec_DeclOp f {l} flds not_in (T : Type) (rest : T -> SpecRepr flds)
+  : SpecRepr (@fcons f l not_in flds)
 (* Defined op: gives an element of the type *)
-| Spec_DefOp f {l} flds not_in (T : Type) (t : T) (rest : Spec flds)
-  : Spec (@fcons f l not_in flds)
+| Spec_DefOp f {l} flds not_in (T : Type) (t : T) (rest : SpecRepr flds)
+  : SpecRepr (@fcons f l not_in flds)
 .
+
+(* A bundled type for specs and their fields *)
+Definition Spec : Type := {l:_ & {fl:_ & @SpecRepr l fl}}.
+
+(* Extract the flist out of a Spec *)
+Definition specFields (spec:Spec) := (projT1 (projT2 spec)).
+
+(* Extract the representation out of a Spec *)
+Definition specRepr (spec:Spec) := projT2 (projT2 spec).
 
 (* Conjoin all the axioms in an axiom list *)
 Definition conjoin_axioms (axioms : list (Field * Prop)) : Prop :=
   fold_left (fun P1 f_P2 => and P1 (snd f_P2)) axioms True.
 
-(* Whether a model satisfies a spec *)
-Fixpoint satisfies_spec {l flds} (spec: @Spec l flds) : Model flds -> Prop :=
-  match spec in @Spec l flds return Model flds -> Prop with
+(* Whether a model satisfies a spec representation *)
+Fixpoint satisfies_specRepr {l flds} (spec: @SpecRepr l flds) : Model flds -> Prop :=
+  match spec in @SpecRepr l flds return Model flds -> Prop with
     | Spec_Axioms axioms => fun _ => conjoin_axioms axioms
     | Spec_DeclOp f flds' not_in T rest =>
       fun model =>
         exists (htim: has_type_in_model
                         (Field_in_eq f flds' not_in) T model),
-          satisfies_spec
+          satisfies_specRepr
             (rest (model_proj _ T model htim))
             (model_tail model)
     | Spec_DefOp f flds' not_in T t rest =>
@@ -248,13 +258,17 @@ Fixpoint satisfies_spec {l flds} (spec: @Spec l flds) : Model flds -> Prop :=
         (exists (htim: has_type_in_model
                          (Field_in_eq f flds' not_in) T model),
            model_proj _ T model htim = t) /\
-        satisfies_spec rest (model_tail model)
+        satisfies_specRepr rest (model_tail model)
   end.
 
+(* The bundled version of satsifeis_spec, operating on the Spec bundle type *)
+Definition satisfies_spec (spec:Spec) model :=
+  satisfies_specRepr (specRepr spec) model.
+
 (* satisfies_spec is equivalent on equivalent models *)
-Lemma satisfies_spec_equiv_models {l fl} (spec: @Spec l fl) model1 model2 :
+Lemma satisfies_spec_equiv_models {l fl} (spec: @SpecRepr l fl) model1 model2 :
   model_equiv model1 model2 ->
-  satisfies_spec spec model1 -> satisfies_spec spec model2.
+  satisfies_specRepr spec model1 -> satisfies_specRepr spec model2.
   intros equiv sats; induction spec.
   assumption.
   destruct sats as [htim sats'].
@@ -276,31 +290,28 @@ Qed.
 
 (* m is a morphism from source to target iff it can unmap models of target into
 models of source *)
-Definition is_morphism {l_s fl_s} (source: @Spec l_s fl_s)
-           {l_t fl_t} (target : @Spec l_t fl_t) (m: FMap fl_s fl_t) : Prop :=
+Definition is_morphism (source target : Spec) m : Prop :=
   forall model,
     satisfies_spec target model ->
     satisfies_spec source (unmap_model m model).
 
 (* A morphism from source to target is an m that is_morphism *)
-Definition Morphism {l_s fl_s l_t fl_t} source target : Type :=
-  { m : @FMap l_s fl_s l_t fl_t | is_morphism source target m }.
+Definition Morphism source target : Type :=
+  { m | is_morphism source target m }.
 
 (* The identity map on fl is a morphism from any spec on fl to itself *)
-Lemma is_morphism_id l fl spec : is_morphism spec spec (@fmap_id l fl).
+Lemma is_morphism_id spec : is_morphism spec spec (fmap_id _).
   unfold is_morphism; intros.
-  apply (satisfies_spec_equiv_models spec _ _ (unmap_model_id _ _ model)).
+  apply (satisfies_spec_equiv_models _ _ _ (unmap_model_id _ _ model)).
   assumption.
 Qed.
 
 (* The identity morphism on spec *)
-Definition morph_id {l fl} (spec: @Spec l fl) : Morphism spec spec :=
-  exist _ (fmap_id fl) (is_morphism_id l fl spec).
+Definition morph_id (spec:Spec) : Morphism spec spec :=
+  exist _ (fmap_id _) (is_morphism_id spec).
 
 (* Composing maps yields a morphism *)
-Lemma is_morphism_compose {l3 fl3} {s3: @Spec l3 fl3}
-      {l2 fl2} {s2: @Spec l2 fl2} {l1 fl1} {s1: @Spec l1 fl1}
-      (m2: FMap fl2 fl3) (m1: FMap fl1 fl2) :
+Lemma is_morphism_compose (s3 s2 s1: Spec) m2 m1 :
   is_morphism s2 s3 m2 -> is_morphism s1 s2 m1 ->
   is_morphism s1 s3 (fmap_compose m2 m1).
   unfold is_morphism; intros ism2 ism1 model sats.
@@ -308,11 +319,17 @@ Lemma is_morphism_compose {l3 fl3} {s3: @Spec l3 fl3}
   apply ism1. apply ism2. assumption.
 Qed.
 
-(* Compose morphisms *)
-Definition morph_compose {l3 fl3} {s3: @Spec l3 fl3}
-      {l2 fl2} {s2: @Spec l2 fl2} {l1 fl1} {s1: @Spec l1 fl1}
-      (morph2: Morphism s2 s3) (morph1: Morphism s1 s2) :
-  Morphism s1 s3 :=
+(* The composition of two morphisms *)
+Definition morph_compose {s3 s2 s1}
+           (morph2: Morphism s2 s3) (morph1: Morphism s1 s2)
+: Morphism s1 s3 :=
   exist _ (fmap_compose (proj1_sig morph2) (proj1_sig morph1))
-         (is_morphism_compose (proj1_sig morph2) (proj1_sig morph1)
-                              (proj2_sig morph2) (proj2_sig morph1)).
+        (is_morphism_compose s3 s2 s1 (proj1_sig morph2) (proj1_sig morph1)
+                             (proj2_sig morph2) (proj2_sig morph1)).
+
+
+(*** Transformations ***)
+
+(* The top-level proof goal of a transformation is always RefinementOf spec *)
+Definition RefinementOf (spec:Spec) : Type :=
+  {spec' : Spec & Morphism spec spec'}.
