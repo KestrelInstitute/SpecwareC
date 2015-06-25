@@ -203,6 +203,15 @@ Qed.
 
 (*** Specs ***)
 
+(* The type of objects required to equal some t *)
+Definition EqObj T t : Type := { x:T | x = t }.
+
+(* Build an EqObj *)
+Definition mkEqObj {T t} x e : EqObj T t := exist _ x e.
+
+(* Extract the value of an EqObj *)
+Definition eqObj_proj {T t} (x:EqObj T t) : T := t.
+
 (* The inductive representation of specs, indexed by the op fields *)
 Inductive SpecRepr : forall {l}, flist l -> Type :=
 (* The base case contains the names and types of the axioms *)
@@ -211,7 +220,8 @@ Inductive SpecRepr : forall {l}, flist l -> Type :=
 | Spec_DeclOp f {l flds} not_in (T : Type) (rest : T -> SpecRepr flds)
   : SpecRepr (@fcons f l not_in flds)
 (* Defined op: gives an element of the type *)
-| Spec_DefOp f {l flds} not_in (T : Type) (t : T) (rest : SpecRepr flds)
+| Spec_DefOp f {l flds} not_in (T : Type) (t : T)
+             (rest : EqObj T t -> SpecRepr flds)
   : SpecRepr (@fcons f l not_in flds)
 .
 
@@ -242,9 +252,9 @@ Fixpoint satisfies_specRepr {l flds} (spec: @SpecRepr l flds) : Model -> Prop :=
           satisfies_specRepr (rest (model_proj f T model htim)) model
     | Spec_DefOp f not_in T t rest =>
       fun model =>
-        (exists (htim: has_type_in_model f T model),
-           model_proj f T model htim = t) /\
-        satisfies_specRepr rest model
+        exists (htim: has_type_in_model f T model)
+               (e: model_proj f T model htim = t),
+          satisfies_specRepr (rest (mkEqObj _ e)) model
   end.
 
 (* The bundled version of satsifeis_spec, operating on the Spec bundle type *)
@@ -262,12 +272,12 @@ Lemma satisfies_spec_equiv_on_models {l fl} (spec: @SpecRepr l fl) model1 model2
                                (equiv f (in_fl_eq _ _ _))) as [htim' e].
   exists htim'; rewrite <- e.
   apply (H _ (model_equiv_on_tail _ _ equiv) sats').
-  destruct sats as [H sats']; destruct H as [htim e].
-  split.
+  destruct sats as [htim H0]; destruct H0 as [e sats].
   destruct (model_proj_equiv_f f T model1 model2 htim
                                (equiv f (in_fl_eq _ _ _))) as [htim' e2].
-  exists htim'; rewrite <- e2; assumption.
-  apply (IHspec (model_equiv_on_tail _ _ equiv) sats').
+  exists htim'; rewrite <- e2.
+  exists e.
+  apply (H _ (model_equiv_on_tail _ _ equiv)). assumption.
 Qed.
 
 (* satisfies_spec is equivalent on equivalent models *)
@@ -354,8 +364,8 @@ Definition depSpec_DeclOp f T (spec: DepSpec T) not_in : Spec :=
   existT _ _ (existT _ _ (Spec_DeclOp f not_in T (depSpecRepr T spec))).
 
 (* Add a defined op to the beginning of a DepSpec to get a Spec *)
-Definition depSpec_DefOp f T t (spec: DepSpec T) not_in : Spec :=
-  existT _ _ (existT _ _ (Spec_DefOp f not_in T t (depSpecRepr T spec t))).
+Definition depSpec_DefOp f T t (spec: DepSpec (EqObj T t)) not_in : Spec :=
+  existT _ _ (existT _ _ (Spec_DefOp f not_in T t (depSpecRepr _ spec))).
 
 (* A dependent morphism is morphism inside a binder *)
 Definition DepMorphism T (source target: DepSpec T) :=
@@ -391,28 +401,33 @@ Definition morph_cons_decl f T {s1 s2} not_in1 not_in2
         (is_morphism_cons_decl f T _ _ not_in1 not_in2 (proj1_sig morph) (proj2_sig morph)).
 
 (* A morphism on the tail of two specs extendeds to one on the full specs *)
-Lemma is_morphism_cons_def f T t {l_s fl_s l_t fl_t} not_in_s not_in_t
-           (source: @SpecRepr l_s fl_s) (target: @SpecRepr l_t fl_t)
-           (m: FMap) :
-  is_morphism source target m ->
-  is_morphism (Spec_DefOp f not_in_s T t source)
-              (Spec_DefOp f not_in_t T t target)
+Lemma is_morphism_cons_def f T t (source target: DepSpec (EqObj T t))
+      not_in_s not_in_t m :
+  (forall x, is_morphism (depSpecRepr _ source x) (depSpecRepr _ target x) m) ->
+  is_morphism (Spec_DefOp f not_in_s T t (depSpecRepr _ source))
+              (Spec_DefOp f not_in_t T t (depSpecRepr _ target))
               (fmap_cons f m).
   intros ism model sats.
-  destruct sats as [H sats]; destruct H as [htim e_proj].
+  destruct sats as [htim H]; destruct H as [e_proj sats].
   destruct (model_proj_equiv_f f T _ (unmap_model (fmap_cons f m) model) htim)
     as [htim' proj_eq].
   unfold unmap_model; unfold fmap_cons.
   destruct (Field_dec_eq f) as [e1 e2]; rewrite e2; reflexivity.
-  split.
   exists htim'.
-  rewrite <- proj_eq. assumption.
+  rewrite <- proj_eq; exists e_proj.
   apply (satisfies_spec_equiv_on_models
            _ _ _
            (unmap_cons_equiv _ _ _ _ not_in_s)).
   apply ism.
   assumption.
 Qed.
+
+(* Cons a defined op onto the front of a dependent morphism *)
+Definition morph_cons_def f T t {s1 s2} not_in1 not_in2
+           (morph : DepMorphism (EqObj T t) s1 s2) :
+  Morphism (depSpec_DefOp f T t s1 not_in1) (depSpec_DefOp f T t s2 not_in2) :=
+  exist _ (fmap_cons f (proj1_sig morph))
+        (is_morphism_cons_def f T _ _ _ not_in1 not_in2 (proj1_sig morph) (proj2_sig morph)).
 
 
 (*** Transformations ***)
