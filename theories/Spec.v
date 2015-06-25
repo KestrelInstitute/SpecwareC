@@ -85,88 +85,18 @@ Ltac solve_not_in_list :=
     | |- ?goal => fail "solve_not_in_list" goal
   end.
 
-(* A field in a field list *)
-Definition Field_in {l} fl : Set := { f : Field | @in_fl f l fl }.
 
-(* Helper for building Field_in's *)
-Definition mk_Field_in {l} fl f in_fl : @Field_in l fl := exist _ f in_fl.
+(*** Maps on fields ***)
 
-(* Cons onto the field list that a Field_in is in *)
-Definition Field_in_cons f' {l fl not_in} (f: Field_in fl) :
-  Field_in (@fcons f' l not_in fl) :=
-  mk_Field_in _ (proj1_sig f) (in_fl_cons (proj1_sig f) (proj2_sig f)).
+Definition FMap := Field -> Field.
 
-(* Remove the head of the field list that a Field_in is in *)
-Definition Field_in_tail {f' l not_in fl} (f: Field_in (@fcons f' l not_in fl))
-           (neq: proj1_sig f <> f') : Field_in fl :=
-  exist _ (proj1_sig f) (in_fl_tail _ neq (proj2_sig f)).
+Definition fmap_id : FMap := id.
 
-(* Build a Field_in f (fcons f not_in fl) *)
-Definition Field_in_eq f {l} not_in fl : Field_in (@fcons f l not_in fl) :=
-  mk_Field_in _ f (in_fl_eq f not_in fl).
-
-(* Decidable equaltiy on Field_in *)
-Definition Field_in_dec {l} fl (f1 f2 : @Field_in l fl) : {f1=f2} + {f1 <> f2}.
-  destruct f1 as [f1 in1]; destruct f2 as [f2 in2]; destruct (Field_dec f1 f2).
-  revert in1 in2; rewrite e; intros; left;
-    f_equal; apply in_fl_uniq; apply flist_NoDup; assumption.
-  right. injection. assumption.
-Qed.
-
-Lemma Field_in_dec_eq {l} fl f1 pf1 f2 pf2
-: f1 = f2 -> { e | @Field_in_dec l fl (exist _ f1 pf1) (exist _ f2 pf2) = left e }.
-  intro e; destruct (Field_in_dec fl (exist _ f1 pf1) (exist _ f2 pf2)).
-  exists e0; reflexivity.
-  revert pf1 pf2 n; rewrite e; intros.
-  elimtype False; apply n; f_equal;
-    apply in_fl_uniq; apply flist_NoDup; assumption.
-Qed.
-
-Lemma Field_in_dec_neq {l} fl f1 pf1 f2 pf2
-: f1 <> f2 -> { neq | @Field_in_dec l fl (exist _ f1 pf1) (exist _ f2 pf2) = right neq }.
-  intro neq; destruct (Field_in_dec fl (exist _ f1 pf1) (exist _ f2 pf2)).
-  elimtype False; apply neq; injection e; intros; assumption.
-  exists n; reflexivity.
-Qed.
-
-
-(*** The category of field maps on field lists ***)
-
-(* A field map is a field function with a specified domain and codomain *)
-Definition FMap {sl} (source : flist sl) {tl} (target : flist tl) :=
-  Field_in source -> Field_in target.
-
-Definition apply_fmap {sl s tl t} (m : @FMap sl s tl t)
-           (f : Field_in s) : Field_in t := m f.
-
-(* Build the identity field map *)
-Definition fmap_id {l} fl : @FMap l fl l fl := fun f => f.
-
-(* Applying fmap_id is the identity *)
-Lemma fmap_id_is_id l fl f : apply_fmap (@fmap_id l fl) f = f.
-  reflexivity.
-Qed.
-
-(* Compose two field map alists *)
-Definition fmap_compose {l3 fl3 l2 fl2 l1 fl1} (m2 : @FMap l2 fl2 l3 fl3)
-         (m1 : @FMap l1 fl1 l2 fl2) : FMap fl1 fl3 :=
+Definition fmap_compose (m2 m1 : FMap) : FMap :=
   fun f => m2 (m1 f).
 
-(* Field map composition commutes with application *)
-Lemma fmap_compose_composes l3 fl3 l2 fl2 l1 fl1 (m2 : FMap fl2 fl3) (m1 : FMap fl1 fl2) f :
-  apply_fmap (@fmap_compose l3 fl3 l2 fl2 l1 fl1 m2 m1) f
-  = apply_fmap m2 (apply_fmap m1 f).
-  reflexivity.
-Qed.
-
-(* Cons an op onto the source of a field map *)
-Definition fmap_cons {l1 fl1 l2 fl2} f not_in1 not_in2 (m: @FMap l1 fl1 l2 fl2) :
-  FMap (fcons f not_in1 fl1) (fcons f not_in2 fl2) :=
-  fun f' =>
-    match Field_dec (proj1_sig f') f with
-      | left _ => Field_in_eq f not_in2 fl2
-      | right neq => Field_in_cons f (m (Field_in_tail f' neq))
-    end.
+Definition fmap_cons f (m:FMap) : FMap :=
+  fun f' => if Field_dec f f' then f else m f'.
 
 
 (*** Models ***)
@@ -177,74 +107,98 @@ Definition mkAny (T:Type) (t:T) : Any := existT (fun T => T) T t.
 Definition anyType (any:Any) : Type := projT1 any.
 Definition anyObj (any:Any) : anyType any := projT2 any.
 
-(* A model is maps fields in a field list to ops for those fields *)
-Definition Model {l} (fl : flist l) : Type :=
-  Field_in fl -> Any.
+(* A model is maps fields to ops for those fields *)
+Definition Model : Type := Field -> Any.
 
 (* Model equivalence is extensional equality (without needing an axiom) *)
-Definition model_equiv {l fl} (model1 model2 : @Model l fl) : Prop :=
+Definition model_equiv (model1 model2 : Model) : Prop :=
   forall f, model1 f = model2 f.
 
+(* Model equivalence on a restricted domain *)
+Definition model_equiv_on {l} fl (model1 model2 : Model) : Prop :=
+  forall f, @in_fl f l fl -> model1 f = model2 f.
+
+(* Model equivalence on fl -> equivalence on the tail of fl *)
+Lemma model_equiv_on_tail {f l not_in fl} (model1 model2 : Model) :
+  model_equiv_on (@fcons f l not_in fl) model1 model2 ->
+  model_equiv_on fl model1 model2.
+  intros equiv f' i; apply equiv; apply in_fl_cons; assumption.
+Qed.
+
+(* General model equivalence -> equivalence on any fl *)
+Lemma model_equiv_on_any {l} fl (model1 model2 : Model) :
+  model_equiv model1 model2 ->
+  @model_equiv_on l fl model1 model2.
+  intros equiv f i; apply equiv.
+Qed.
+
 (* Whether f has type T in model *)
-Definition has_type_in_model {l fl} f T (model: @Model l fl) : Prop :=
+Definition has_type_in_model f T (model: Model) : Prop :=
   anyType (model f) = T.
 
-(* has_type_in_model is equal in equivalent models *)
-Lemma has_type_in_model_equiv {l fl} f T model1 model2 :
-  @model_equiv l fl model1 model2 ->
+(* has_type_in_model is equal in models that are equivalent on it *)
+Lemma has_type_in_model_equiv_f f T model1 model2 :
+  model1 f = model2 f ->
   has_type_in_model f T model1 = has_type_in_model f T model2.
-  intros equiv; unfold has_type_in_model; rewrite <- (equiv f); reflexivity.
+  intros e; unfold has_type_in_model; rewrite <- e; reflexivity.
+Qed.
+
+(* has_type_in_model is equal in equivalent models *)
+Lemma has_type_in_model_equiv f T model1 model2 :
+  model_equiv model1 model2 ->
+  has_type_in_model f T model1 = has_type_in_model f T model2.
+  intros equiv; unfold has_type_in_model; rewrite <- equiv; reflexivity.
 Qed.
 
 (* Project field f from model *)
-Definition model_proj {l fl} f T (model: @Model l fl)
+Definition model_proj f T (model: Model)
          (htim: has_type_in_model f T model) : T :=
   rew [id] htim in (anyObj (model f)).
 
 (* model_proj is equal (modulo htim proof) in equivalent models *)
-Lemma model_proj_equiv {l fl} f T model1 model2 htim
-      (equiv: @model_equiv l fl model1 model2) :
+Lemma model_proj_equiv f T model1 model2 htim :
+  model_equiv model1 model2 ->
   exists htim', model_proj f T model1 htim = model_proj f T model2 htim'.
   unfold model_proj; unfold has_type_in_model.
-  rewrite <- (equiv f). exists htim. reflexivity.
+  intros equiv; rewrite <- (equiv f). exists htim. reflexivity.
 Qed.
 
-(* Take a sub-model, removing the first element *)
-Definition model_tail {f l fl not_in}
-           (model: Model (@fcons f l not_in fl)) : Model fl :=
-  fun f' => model (Field_in_cons f f').
-
-(* model_tail preserves equivalence *)
-Definition model_tail_equiv {f l fl not_in}
-           (model1 model2 : Model (@fcons f l not_in fl)) :
-  model_equiv model1 model2 ->
-  model_equiv (model_tail model1) (model_tail model2).
-  unfold model_equiv; unfold model_tail; intros equiv f'.
-  apply equiv.
+(* model_proj is equal (modulo htim proof) in equivalent models *)
+Lemma model_proj_equiv_f f T model1 model2 htim :
+  model1 f = model2 f ->
+  exists htim', model_proj f T model1 htim = model_proj f T model2 htim'.
+  unfold model_proj; unfold has_type_in_model.
+  intros e; rewrite <- e. exists htim. reflexivity.
 Qed.
 
 (* Build a model with a subset of the fields in flds by mapping each f to the
 corresponding value of (m f) in model *)
-Definition unmap_model {sl s tl t} (m : @FMap sl s tl t)
-           (model: Model t) : Model s :=
-  fun f => model (apply_fmap m f).
+Definition unmap_model (m: FMap) (model: Model) : Model :=
+  fun f => model (m f).
 
 (* unmap_model on the identity map yields an equivalent model *)
-Lemma unmap_model_id l fl model :
-  model_equiv model (unmap_model (@fmap_id l fl) model).
-  intro f; unfold unmap_model; rewrite fmap_id_is_id; reflexivity.
+Lemma unmap_model_id model :
+  model_equiv model (unmap_model fmap_id model).
+  intros f; reflexivity.
 Qed.
 
 (* unmap_model commutes with map composition *)
-Lemma unmap_model_compose {l3 fl3 l2 fl2} (m2: @FMap l2 fl2 l3 fl3)
-      {l1 fl1} (m1: @FMap l1 fl1 l2 fl2) model :
+Lemma unmap_model_compose m2 m1 model :
   model_equiv (unmap_model m1 (unmap_model m2 model))
               (unmap_model (fmap_compose m2 m1) model).
-  intro f; unfold unmap_model; rewrite fmap_compose_composes; reflexivity.
+  intros f. unfold unmap_model; reflexivity.
 Qed.
 
 (* The model_tail of unmap_model FIXME HERE *)
-
+Lemma unmap_cons_equiv {l} fl f m model :
+  ~@in_fl f l fl ->
+  model_equiv_on fl (unmap_model m model) (unmap_model (fmap_cons f m) model).
+  intros not_in f' i.
+  unfold unmap_model; unfold fmap_cons.
+  destruct (Field_dec_neq f f').
+  intro e; apply not_in; rewrite e; assumption.
+  rewrite e. reflexivity.
+Qed.
 
 
 (*** Specs ***)
@@ -279,22 +233,18 @@ Definition conjoin_axioms (axioms : list (Field * Prop)) : Prop :=
   fold_left (fun P1 f_P2 => and P1 (snd f_P2)) axioms True.
 
 (* Whether a model satisfies a spec representation *)
-Fixpoint satisfies_specRepr {l flds} (spec: @SpecRepr l flds) : Model flds -> Prop :=
-  match spec in @SpecRepr l flds return Model flds -> Prop with
+Fixpoint satisfies_specRepr {l flds} (spec: @SpecRepr l flds) : Model -> Prop :=
+  match spec in @SpecRepr l flds with
     | Spec_Axioms axioms => fun _ => conjoin_axioms axioms
     | Spec_DeclOp f not_in T rest =>
       fun model =>
-        exists (htim: has_type_in_model
-                        (Field_in_eq f not_in _) T model),
-          satisfies_specRepr
-            (rest (model_proj _ T model htim))
-            (model_tail model)
+        exists (htim: has_type_in_model f T model),
+          satisfies_specRepr (rest (model_proj f T model htim)) model
     | Spec_DefOp f not_in T t rest =>
       fun model =>
-        (exists (htim: has_type_in_model
-                         (Field_in_eq f not_in _) T model),
-           model_proj _ T model htim = t) /\
-        satisfies_specRepr rest (model_tail model)
+        (exists (htim: has_type_in_model f T model),
+           model_proj f T model htim = t) /\
+        satisfies_specRepr rest model
   end.
 
 (* The bundled version of satsifeis_spec, operating on the Spec bundle type *)
@@ -302,23 +252,30 @@ Definition satisfies_spec (spec:Spec) model :=
   satisfies_specRepr (specRepr spec) model.
 
 (* satisfies_spec is equivalent on equivalent models *)
-Lemma satisfies_spec_equiv_models {l fl} (spec: @SpecRepr l fl) model1 model2 :
-  model_equiv model1 model2 ->
+Lemma satisfies_spec_equiv_on_models {l fl} (spec: @SpecRepr l fl) model1 model2 :
+  model_equiv_on fl model1 model2 ->
   satisfies_specRepr spec model1 -> satisfies_specRepr spec model2.
   intros equiv sats; induction spec.
   assumption.
   destruct sats as [htim sats'].
-  destruct (model_proj_equiv (Field_in_eq f not_in flds)
-                             T model1 model2 htim equiv) as [htim' e].
+  destruct (model_proj_equiv_f f T model1 model2 htim
+                               (equiv f (in_fl_eq _ _ _))) as [htim' e].
   exists htim'; rewrite <- e.
-  apply (H _ _ _ (model_tail_equiv _ _ equiv)). assumption.
+  apply (H _ (model_equiv_on_tail _ _ equiv) sats').
   destruct sats as [H sats']; destruct H as [htim e].
   split.
-  destruct (model_proj_equiv (Field_in_eq f not_in flds)
-                             T model1 model2 htim equiv) as [htim' e2].
+  destruct (model_proj_equiv_f f T model1 model2 htim
+                               (equiv f (in_fl_eq _ _ _))) as [htim' e2].
   exists htim'; rewrite <- e2; assumption.
-  apply (IHspec _ _ (model_tail_equiv _ _ equiv)).
-  assumption.
+  apply (IHspec (model_equiv_on_tail _ _ equiv) sats').
+Qed.
+
+(* satisfies_spec is equivalent on equivalent models *)
+Lemma satisfies_spec_equiv_models {l fl} (spec: @SpecRepr l fl) model1 model2 :
+  model_equiv model1 model2 ->
+  satisfies_specRepr spec model1 -> satisfies_specRepr spec model2.
+  intro equiv; apply satisfies_spec_equiv_on_models.
+  apply model_equiv_on_any. assumption.
 Qed.
 
 (* Helper notation for building specs (FIXME) *)
@@ -354,15 +311,15 @@ Definition Morphism source target : Type :=
   { m | is_morphism (specRepr source) (specRepr target) m }.
 
 (* The identity map on fl is a morphism from any spec on fl to itself *)
-Lemma is_morphism_id spec : is_morphism (specRepr spec) (specRepr spec) (fmap_id _).
+Lemma is_morphism_id spec : is_morphism (specRepr spec) (specRepr spec) fmap_id.
   unfold is_morphism; intros.
-  apply (satisfies_spec_equiv_models _ _ _ (unmap_model_id _ _ model)).
+  apply (satisfies_spec_equiv_models _ _ _ (unmap_model_id model)).
   assumption.
 Qed.
 
 (* The identity morphism on spec *)
 Definition morph_id (spec:Spec) : Morphism spec spec :=
-  exist _ (fmap_id _) (is_morphism_id spec).
+  exist _ fmap_id (is_morphism_id spec).
 
 (* Composing maps yields a morphism *)
 Lemma is_morphism_compose (s3 s2 s1: Spec) m2 m1 :
@@ -385,36 +342,25 @@ Definition morph_compose {s3 s2 s1}
 (* A morphism on the tail of two specs extendeds to one on the full specs *)
 Lemma is_morphism_cons_decl f T {l_s fl_s l_t fl_t} not_in_s not_in_t
            (source: T -> @SpecRepr l_s fl_s) (target: T -> @SpecRepr l_t fl_t)
-           (m: FMap fl_s fl_t) :
+           (m: FMap) :
   (forall t, is_morphism (source t) (target t) m) ->
   is_morphism (Spec_DeclOp f not_in_s T source)
               (Spec_DeclOp f not_in_t T target)
-              (fmap_cons f not_in_s not_in_t m).
+              (fmap_cons f m).
   intros ism model sats.
   destruct sats as [htim sats].
-  assert (has_type_in_model (Field_in_eq f not_in_s fl_s) T
-                            (unmap_model (fmap_cons f not_in_s not_in_t m) model))
-    as htim'.
-  unfold has_type_in_model; unfold unmap_model; unfold apply_fmap; unfold fmap_cons;
-    unfold Field_in_eq at 1; unfold mk_Field_in; unfold proj1_sig.
-  destruct (Field_dec_eq f) as [e1 e2]; rewrite e2; assumption.
+  destruct (model_proj_equiv_f f T _ (unmap_model (fmap_cons f m) model) htim)
+    as [htim' proj_eq].
+  unfold unmap_model; unfold fmap_cons.
+  destruct (Field_dec_eq f) as [e1 e2]; rewrite e2; reflexivity.
   exists htim'.
-  unfold unmap_model; unfold model_proj.
-  
-
-  apply (ism).
-
-  unfold unmap_model; unfold model_proj.
-
-
-  exists htim.
-
-  econstructor. Check ?htim.
-
-
-  unfold satisfies_specRepr. unfold has_type_in_model. unfold unmap_model.
-
-  exists eq_refl.
+  rewrite <- proj_eq.
+  apply (satisfies_spec_equiv_on_models
+           _ _ _
+           (unmap_cons_equiv _ _ _ _ not_in_s)).
+  apply ism.
+  assumption.
+Qed.
 
 
 (*** Transformations ***)
