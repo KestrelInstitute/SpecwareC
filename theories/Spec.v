@@ -204,13 +204,13 @@ Qed.
 (*** Specs ***)
 
 (* The type of objects required to equal some t *)
-Definition EqObj T t : Type := { x:T | x = t }.
+Definition EqObj {T} t : Type := { x:T | x = t }.
 
 (* Build an EqObj *)
-Definition mkEqObj {T t} x e : EqObj T t := exist _ x e.
+Definition mkEqObj {T t} (x:T) e : EqObj t := exist _ x e.
 
 (* Extract the value of an EqObj *)
-Definition eqObj_proj {T t} (x:EqObj T t) : T := t.
+Definition eqObj_proj {T t} (x:EqObj t) : T := t.
 
 (* The inductive representation of specs, indexed by the op fields *)
 Inductive SpecRepr : forall {l}, flist l -> Type :=
@@ -221,7 +221,7 @@ Inductive SpecRepr : forall {l}, flist l -> Type :=
   : SpecRepr (@fcons f l not_in flds)
 (* Defined op: gives an element of the type *)
 | Spec_DefOp f {l flds} not_in (T : Type) (t : T)
-             (rest : EqObj T t -> SpecRepr flds)
+             (rest : EqObj t -> SpecRepr flds)
   : SpecRepr (@fcons f l not_in flds)
 .
 
@@ -364,7 +364,7 @@ Definition depSpec_DeclOp f T (spec: DepSpec T) not_in : Spec :=
   existT _ _ (existT _ _ (Spec_DeclOp f not_in T (depSpecRepr T spec))).
 
 (* Add a defined op to the beginning of a DepSpec to get a Spec *)
-Definition depSpec_DefOp f T t (spec: DepSpec (EqObj T t)) not_in : Spec :=
+Definition depSpec_DefOp f T t (spec: DepSpec (EqObj t)) not_in : Spec :=
   existT _ _ (existT _ _ (Spec_DefOp f not_in T t (depSpecRepr _ spec))).
 
 (* A dependent morphism is morphism inside a binder *)
@@ -401,7 +401,7 @@ Definition morph_cons_decl f T {s1 s2} not_in1 not_in2
         (is_morphism_cons_decl f T _ _ not_in1 not_in2 (proj1_sig morph) (proj2_sig morph)).
 
 (* A morphism on the tail of two specs extendeds to one on the full specs *)
-Lemma is_morphism_cons_def f T t (source target: DepSpec (EqObj T t))
+Lemma is_morphism_cons_def f T t (source target: DepSpec (EqObj t))
       not_in_s not_in_t m :
   (forall x, is_morphism (depSpecRepr _ source x) (depSpecRepr _ target x) m) ->
   is_morphism (Spec_DefOp f not_in_s T t (depSpecRepr _ source))
@@ -424,7 +424,7 @@ Qed.
 
 (* Cons a defined op onto the front of a dependent morphism *)
 Definition morph_cons_def f T t {s1 s2} not_in1 not_in2
-           (morph : DepMorphism (EqObj T t) s1 s2) :
+           (morph : DepMorphism (EqObj t) s1 s2) :
   Morphism (depSpec_DefOp f T t s1 not_in1) (depSpec_DefOp f T t s2 not_in2) :=
   exist _ (fmap_cons f (proj1_sig morph))
         (is_morphism_cons_def f T _ _ _ not_in1 not_in2 (proj1_sig morph) (proj2_sig morph)).
