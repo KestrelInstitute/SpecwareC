@@ -132,19 +132,20 @@ Spec End NatMonoid.
 
 Print NatMonoid.
 
-Set Printing All.
-Print Monoid.m_zero__class.
-Print NatMonoid.m_zero__class.
+Require Import Coq.Arith.Plus.
+
 Spec Morphism NatMonoid_Monoid : Monoid -> NatMonoid.
 constructor.
-unfold Monoid.m_zero_left__class. unfold Monoid.T. fold Group2.T.
-apply Group2.g_zero_left.
+unfold Monoid.m_zero_left__class.
+reflexivity.
 unfold Monoid.m_zero_right__class.
-apply Group2.g_zero_right.
+intros. compute. fold Nat.add. symmetry. apply plus_n_O.
 unfold Monoid.m_plus_assoc__class.
-apply Group2.g_plus_assoc.
+intros. compute. fold Nat.add. apply plus_assoc.
 Qed.
 
+Set Printing All.
+Check NatMonoid_Monoid.
 
 (*
 Spec MonoidImport0.
