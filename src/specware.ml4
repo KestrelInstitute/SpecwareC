@@ -1508,9 +1508,8 @@ let start_morphism morph_name from_ref to_ref xlate =
  *** Building up the current spec
  ***)
 
-(* The currrent spec being defined, if one exists, along with its
-   local name *)
-let current_spec : spec option ref = ref None
+(* The currrent spec being defined, if one exists, along with its module path *)
+let current_spec : (DirPath.t * spec) option ref = ref None
 
 (* There is no current spec *)
 exception NoCurrentSpec
@@ -1521,17 +1520,45 @@ exception IsCurrentSpec
 (* Incorrect name for the current spec *)
 exception WrongCurrentSpecName
 
-(* Get the current spec or throw an exception *)
-let get_current_spec loc =
+(* Check that all the ops and axioms of the current spec still exist *)
+let check_current_spec spec_path spec =
+  { spec with
+    spec_op_ctx =
+      List.filter (fun elem ->
+                   Nametab.exists_cci (make_path spec_path elem.felem_id))
+                  spec.spec_op_ctx;
+    spec_axiom_ctx =
+      List.filter (fun elem ->
+                   Nametab.exists_cci (make_path spec_path elem.felem_id))
+                  spec.spec_axiom_ctx }
+
+(* Get the current spec or throw an exception, making sure we are still in the
+correct module for the spec *)
+let get_current_spec_opt loc =
   match !current_spec with
-  | Some spec -> spec
+  | Some (spec_path, spec) ->
+     if DirPath.equal spec_path (Lib.cwd_except_section ()) then
+       let new_spec = check_current_spec spec_path spec in
+       let _ = current_spec := Some (spec_path, new_spec) in
+       Some (spec_path, new_spec)
+     else if Nametab.exists_dir spec_path then
+       raise loc (Failure "get_current_spec")
+     else
+       (* If the module for the current spec no longer exists, it was
+          probably removed by an Undo, so reset to no current spec *)
+       let _ = current_spec := None in None
+  | None -> raise loc NoCurrentSpec
+
+let get_current_spec loc =
+  match get_current_spec_opt loc with
+  | Some (_, spec) -> spec
   | None -> raise loc NoCurrentSpec
 
 (* Update the current spec, if it exists, by applying f *)
 let update_current_spec loc f =
-  match !current_spec with
-  | Some spec ->
-     current_spec := Some (f spec)
+  match get_current_spec_opt loc with
+  | Some (spec_path, spec) ->
+     current_spec := Some (spec_path, f spec)
   | None -> raise loc NoCurrentSpec
 
 (* The op_ctx of the current spec *)
@@ -1651,7 +1678,7 @@ let add_defined_theorem thm_name thm_type thm_body =
 let complete_spec loc =
   match !current_spec with
   | None -> raise loc NoCurrentSpec
-  | Some spec ->
+  | Some (_, spec) ->
      let class_id = match spec.spec_axiom_class_id with
        | Some id -> id
        | None -> raise loc (Failure "complete_spec")
@@ -1675,8 +1702,9 @@ let complete_spec loc =
 (* Start the interactive definition of a new spec *)
 let begin_new_spec spec_lid =
   if !current_spec = None then
-    (current_spec := Some (empty_named_spec (located_elem spec_lid));
-     begin_module spec_lid)
+    let _ = begin_module spec_lid in
+    let cur_path = Lib.cwd_except_section () in
+    current_spec := Some (cur_path, empty_named_spec (located_elem spec_lid))
   else
     raise (located_loc spec_lid) IsCurrentSpec
 
@@ -1685,7 +1713,7 @@ let begin_new_spec spec_lid =
 let end_new_spec lid =
   let loc = located_loc lid in
   match !current_spec with
-  | Some spec ->
+  | Some (spec_path, spec) ->
      let class_id = match spec.spec_axiom_class_id with
        | Some id -> id
        | None -> raise loc (Failure "complete_spec")
@@ -1704,6 +1732,8 @@ let end_new_spec lid =
    complete or globalize the spec. Unlike begin_new_spec,
    within_named_spec can be nested inside another spec definition *)
 let within_named_spec spec_lid builder =
+  raise (located_loc spec_lid) (Failure "within_named_spec (FIXME HERE NOW)")
+  (*
   let spec_id = located_elem spec_lid in
   let loc = located_loc spec_lid in
   let saved_spec = !current_spec in
@@ -1712,6 +1742,7 @@ let within_named_spec spec_lid builder =
                            (fun () -> builder (); complete_spec loc) in
   let _ = current_spec := saved_spec in
   spec
+   *)
 
 
 (***
