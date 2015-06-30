@@ -242,13 +242,13 @@ Inductive SpecRepr : forall {l}, flist l -> Type :=
 | Spec_Axioms (axioms : list (Field * Prop)) : SpecRepr fnil
 (* The inductive case adds an op named f with zero or more definitions to the
 rest of the spec, that can depend on any f equal to all the definitions *)
-| Spec_ConsOp f {l flds} not_in (T : Type) (defs: list T)
-              (rest : forall t, eq_proofs t defs -> (SpecRepr flds))
+| Spec_ConsOp f {l flds} not_in (T : Type) (defs: list T) (constraint: T -> Prop)
+              (rest : forall t, eq_proofs t defs -> SpecRepr flds)
   : SpecRepr (@fcons f l not_in flds)
 .
 
 (* Make the field argument be parsed by Coq as a string *)
-Arguments Spec_ConsOp f%string l flds not_in T defs rest.
+Arguments Spec_ConsOp f%string l flds not_in T defs constraint rest.
 
 (* A bundled type for specs and their fields *)
 Definition Spec : Type := {l:_ & {fl:_ & @SpecRepr l fl}}.
@@ -267,10 +267,11 @@ Definition conjoin_axioms (axioms : list (Field * Prop)) : Prop :=
 Fixpoint satisfies_specRepr {l flds} (spec: @SpecRepr l flds) : Model -> Prop :=
   match spec in @SpecRepr l flds with
     | Spec_Axioms axioms => fun _ => conjoin_axioms axioms
-    | Spec_ConsOp f not_in T defs rest =>
+    | Spec_ConsOp f not_in T defs constraint rest =>
       fun model =>
         exists (htim: has_type_in_model f T model)
                (eq_pfs: eq_proofs (model_proj f T model htim) defs),
+          constraint (model_proj f T model htim) /\
           satisfies_specRepr (rest (model_proj f T model htim) eq_pfs) model
   end.
 
@@ -284,11 +285,14 @@ Lemma satisfies_spec_equiv_on_models {l fl} (spec: @SpecRepr l fl) model1 model2
   satisfies_specRepr spec model1 -> satisfies_specRepr spec model2.
   intros equiv sats; induction spec.
   assumption.
-  destruct sats as [htim H0]; destruct H0 as [eq_pfs sats].
+  destruct sats as [htim H0]; destruct H0 as [eq_pfs H0];
+    destruct H0 as [constraint_pf sats].
   destruct (model_proj_equiv_f f T model1 model2 htim
                                (equiv f (in_fl_eq _ _ _))) as [htim' e2].
   exists htim'; rewrite <- e2.
   exists eq_pfs.
+  split.
+  assumption.
   apply (H _ _ (model_equiv_on_tail _ _ equiv)). assumption.
 Qed.
 
@@ -317,20 +321,20 @@ Notation "'Axioms f1 t1 ; .. ; fn tn'" :=
 
 (* Example 1:  op n:nat;  axiom gt1: n > 1 *)
 Program Definition spec_repr_example_1 :=
-  Spec_ConsOp "n" _ nat []
+  Spec_ConsOp "n" _ nat [] (fun _ => True)
               (fun n _ => Spec_Axioms [("gt1"%string, n > 1)]).
 
 (* Example 2:  op n:nat := 2;  (no axioms) *)
 Program Definition spec_repr_example_2 :=
-  Spec_ConsOp "n" _ nat [2]
+  Spec_ConsOp "n" _ nat [2] (fun _ => True)
               (fun n _ => Spec_Axioms []).
 
 (* Example 3:  op T:Set := nat;  op n:T__def;  axiom gt1: n > 1 *)
 Program Definition spec_repr_example_3 :=
   Spec_ConsOp
-    "T" _ Set [nat]
+    "T" _ Set [nat] (fun _ => True)
     (fun T T__eq_pfs =>
-       Spec_ConsOp "n" _ (proj_def 0 T__eq_pfs) []
+       Spec_ConsOp "n" _ (proj_def 0 T__eq_pfs) [] (fun _ => True)
                    (fun n _ => Spec_Axioms [("gt1"%string, n > 1)])).
 Next Obligation.
 intro. destruct H. discriminate. assumption.
@@ -385,7 +389,8 @@ Definition morph_compose {s3 s2 s1}
 
 (*** Morphisms on the tail of a spec ***)
 
-(* A dependent spec is a spec inside a binder *)
+(* A dependent spec is a spec inside a binder; note that the field list is not
+inside the scope of the binder *)
 Definition DepSpec T defs : Type :=
   {l:_ & {fl:_ & forall t:T, eq_proofs t defs -> @SpecRepr l fl}}.
 
@@ -394,23 +399,25 @@ Definition depSpecRepr {T defs} (spec: DepSpec T defs) :=
   projT2 (projT2 spec).
 
 (* Add an op to the beginning of a DepSpec to get a Spec *)
-Definition depSpec_ConsOp f T defs (spec: DepSpec T defs) not_in : Spec :=
-  existT _ _ (existT _ _ (Spec_ConsOp f not_in T defs (depSpecRepr spec))).
+Definition depSpec_ConsOp f T defs constraint (spec: DepSpec T defs) not_in : Spec :=
+  existT _ _ (existT _ _ (Spec_ConsOp f not_in T defs constraint (depSpecRepr spec))).
 
-(* A dependent morphism is morphism inside a binder *)
+(* A dependent morphism is morphism inside a binder; note that the mapping is
+not inside the scope of the binder *)
 Definition DepMorphism {T defs} (source target: DepSpec T defs) :=
   { m | forall t eq_pfs, is_morphism (depSpecRepr source t eq_pfs)
                                      (depSpecRepr target t eq_pfs) m }.
 
 (* A morphism on the tail of two specs extendeds to one on the full specs *)
-Lemma is_morphism_cons f T defs (source target: DepSpec T defs) not_in_s not_in_t m :
+Lemma is_morphism_cons f T defs constraint (source target: DepSpec T defs) not_in_s not_in_t m :
   (forall t eq_pfs, is_morphism (depSpecRepr source t eq_pfs)
                                 (depSpecRepr target t eq_pfs) m) ->
-  is_morphism (Spec_ConsOp f not_in_s T defs (depSpecRepr source))
-              (Spec_ConsOp f not_in_t T defs (depSpecRepr target))
+  is_morphism (Spec_ConsOp f not_in_s T defs constraint (depSpecRepr source))
+              (Spec_ConsOp f not_in_t T defs constraint (depSpecRepr target))
               (fmap_cons f m).
   intros ism model sats.
-  destruct sats as [htim H]; destruct H as [eq_pfs sats].
+  destruct sats as [htim H]; destruct H as [eq_pfs H];
+    destruct H as [constraint_pf sats].
   destruct (model_proj_equiv_f f T _ (unmap_model (fmap_cons f m) model) htim)
     as [htim' proj_eq].
   unfold unmap_model; unfold fmap_cons.
@@ -418,6 +425,8 @@ Lemma is_morphism_cons f T defs (source target: DepSpec T defs) not_in_s not_in_
   exists htim'.
   rewrite <- proj_eq.
   exists eq_pfs.
+  split.
+  assumption.
   apply (satisfies_spec_equiv_on_models
            _ _ _
            (unmap_cons_equiv _ _ _ _ not_in_s)).
@@ -426,11 +435,13 @@ Lemma is_morphism_cons f T defs (source target: DepSpec T defs) not_in_s not_in_
 Qed.
 
 (* Cons an op onto the front of a dependent morphism *)
-Definition morph_cons f {T defs s1 s2} not_in1 not_in2
+Definition morph_cons f {T} defs constraint {s1 s2} not_in1 not_in2
            (morph : @DepMorphism T defs s1 s2) :
-  Morphism (depSpec_ConsOp f T defs s1 not_in1) (depSpec_ConsOp f T defs s2 not_in2) :=
+  Morphism (depSpec_ConsOp f T defs constraint s1 not_in1)
+           (depSpec_ConsOp f T defs constraint s2 not_in2) :=
   exist _ (fmap_cons f (proj1_sig morph))
-        (is_morphism_cons f T _ _ _ not_in1 not_in2 (proj1_sig morph) (proj2_sig morph)).
+        (is_morphism_cons f T _ _ _ _ not_in1 not_in2
+                          (proj1_sig morph) (proj2_sig morph)).
 
 
 (*** Transformations ***)
