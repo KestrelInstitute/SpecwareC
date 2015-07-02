@@ -1,4 +1,31 @@
 
+Require Import Coq.Program.Tactics.
+Import EqNotations.
+
+Program Definition foo (T: Set) (T__eq: T = nat) (f: T -> T) : nat :=
+  rew _ in (f (rew _ in 5)).
+Print foo.
+Check foo_obligation_2.
+
+Program Definition foo1 (T: Set) (T__eq: T = nat) (f: T -> T) : nat :=
+  ((rew _ in f) : _ -> _) 5.
+
+Program Definition foo2 (T: Set) (T__eq: T = nat) (f: T -> nat) : nat :=
+  (f (rew _ in 5)).
+  (* this fails: rew _ in (f (rew _ in 5)). *)
+
+Definition eq_proj {A} (a1 a2:A) (e: a1 = a2) := a1.
+(* this does not work at all:
+Program Definition foo3 (T: Set) (T__eq: T = nat) (f: eq_proj _ _ T__eq -> eq_proj _ _ T__eq) : nat :=
+  rew _ in (f (rew _ in 5)).
+*)
+
+Program Definition foo4 (T: Set) (T__eq: T = nat) (f: T -> T) : nat :=
+  ((rew _ in f) : _ -> _) 5.
+
+Program Definition foo4 (T: Set) (T__eq: T = nat) (f: T -> nat) : nat :=
+
+
 Class T__c : Type := T : Set.
 Class m_zero__c {T__p:T__c} : Type := m_zero : T.
 Class m_plus__c {T__p:T__c} {m_zero__p:m_zero__c} : Type := m_plus : T -> T -> T.
