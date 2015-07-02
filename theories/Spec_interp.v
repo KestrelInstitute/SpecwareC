@@ -182,6 +182,18 @@ Fixpoint spec_repr_model {l flds} (spec:@SpecRepr l flds) : Type :=
 
 Definition spec_model (spec:Spec) := spec_repr_model (specRepr spec).
 
+Definition model_elem {f l fl not_in T constraint rest}
+           (model:spec_repr_model (@Spec_ConsOp f l fl not_in T constraint rest))
+: T := projT1 model.
+
+Definition model_pf {f l fl not_in T constraint rest}
+           (model:spec_repr_model (@Spec_ConsOp f l fl not_in T constraint rest))
+: constraint (model_elem model) := projT1 (projT2 model).
+
+Definition model_rest {f l fl not_in T constraint rest}
+           (model:spec_repr_model (@Spec_ConsOp f l fl not_in T constraint rest))
+: spec_repr_model (rest (model_elem model) (model_pf model)) := projT2 (projT2 model).
+
 
 (*** Spec Examples ***)
 
@@ -274,68 +286,79 @@ Definition interp_cons f {T} constraint {s1 s2} not_in1 not_in2
 
 (*** Sub-Specs and Spec Substitution ***)
 
-FIXME HERE NOW: need SubSpecRepr (below), to get the not_in proofs to work for
-spec_subtract; in fact, maybe SubSpecRepr should also indicate the fields in the
-result of the subtraction!
-
-Inductive SubSpec : Spec -> Spec -> Type :=
-| SubSpec_base spec2 axioms :
-    (spec_model spec2 -> conjoin_axioms axioms) ->
-    @SubSpec (mkSpec (Spec_Axioms axioms)) spec2
-| SubSpec_eq {l1 fl1 l2 fl2} f not_in1 not_in2 T
-             (constraint1 constraint2 : T -> Prop) rest1 rest2
-             (* NOTE: next should be <-> if we want SubSpec -> Interpretation *)
-             (pf2_f: forall t, constraint1 t -> constraint2 t) :
-    (forall t pf1,
-       SubSpec (mkSpec (rest1 t pf1)) (mkSpec (rest2 t (pf2_f t pf1)))) ->
-    SubSpec (mkSpec (@Spec_ConsOp f l1 fl1 not_in1 T constraint1 rest1))
-            (mkSpec (@Spec_ConsOp f l2 fl2 not_in2 T constraint2 rest2))
-| SubSpec_neq {l2 fl2} spec1 f not_in2 T
-             (constraint2 : T -> Prop) rest2 :
-    (forall t pf, SubSpec spec1 (mkSpec (rest2 t pf))) ->
-    SubSpec spec1 (mkSpec (@Spec_ConsOp f l2 fl2 not_in2 T constraint2 rest2))
-.
-
-Fixpoint spec_subtract s1 s2 (sub: SubSpec s1 s2) : spec_model s1 -> Spec :=
-  match sub in SubSpec s1 s2 return spec_model s1 -> Spec with
-    | SubSpec_base spec2 axioms pf => fun _ => spec2
-    | SubSpec_eq f not_in1 not_in2 T constraint1 constraint2
-                 rest1 rest2 pf2_f sub' =>
-      fun model =>
-        spec_subtract (mkSpec (rest1 (projT1 model) (projT1 (projT2 model))))
-                      (mkSpec (rest2 (projT1 model) (pf2_f _ (projT1 (projT2 model)))))
-                      (sub' (projT1 model) (projT1 (projT2 model)))
-                      (projT2 (projT2 model))
-    | SubSpec_neq spec1 f not_in2 T constraint2 rest2 sub' =>
-      fun model =>
-        mkSpec (Spec_ConsOp f not_in2 T constraint2
-                            (fun t pf =>
-                               specRepr (spec_subtract spec1 (mkSpec (rest2 t pf))
-                                                       (sub' t pf) model)))
-  end.
-
-
-(* FIXME HERE: old stuff below... *)
-
-(*
-Inductive SubSpecRepr : forall {l1 fl1 l2 fl2},
+(* FIXME HERE: try to make this inductive relation on Spec instead of SpecRepr *)
+Inductive SubSpecRepr : forall {l1 fl1 l2 fl2 l_rest} (fl_rest: flist l_rest),
                           @SpecRepr l1 fl1 -> @SpecRepr l2 fl2 -> Type :=
 | SubSpec_base {l2 fl2} srepr2 axioms :
     (spec_repr_model srepr2 -> conjoin_axioms axioms) ->
-    @SubSpecRepr _ _ l2 fl2 (Spec_Axioms axioms) srepr2
-| SubSpec_eq {l1 fl1 l2 fl2} f not_in1 not_in2 T
-             (constraint1 constraint2 : T -> Prop) rest1 rest2
-             (pf1_f: forall t, constraint2 t -> constraint1 t) :
-    (forall t pf2,
-       @SubSpecRepr l1 fl1 l2 fl2 (rest1 t (pf1_f t pf2)) (rest2 t pf2)) ->
-    SubSpecRepr (Spec_ConsOp f not_in1 T constraint1 rest1)
-                (Spec_ConsOp f not_in2 T constraint2 rest2)
-| SubSpec_neq {l1 fl1 l2 fl2} srepr1 f not_in2 T
+    @SubSpecRepr _ _ l2 fl2 l2 fl2 (Spec_Axioms axioms) srepr2
+| SubSpec_eq {l1 fl1 l2 fl2 l_rest} fl_rest f not_in1 not_in2 T
+             (constraint : T -> Prop) rest1 rest2 :
+    (forall t pf,
+       @SubSpecRepr l1 fl1 l2 fl2 l_rest fl_rest (rest1 t pf) (rest2 t pf)) ->
+    SubSpecRepr fl_rest
+                (Spec_ConsOp f not_in1 T constraint rest1)
+                (Spec_ConsOp f not_in2 T constraint rest2)
+| SubSpec_neq {l1 fl1 l2 fl2 l_rest} fl_rest srepr1 f not_in2 not_in_rest T
              (constraint2 : T -> Prop) rest2 :
-    (forall t pf, @SubSpecRepr l1 fl1 l2 fl2 srepr1 (rest2 t pf)) ->
-    SubSpecRepr srepr1 (Spec_ConsOp f not_in2 T constraint2 rest2)
+    (forall t pf,
+       @SubSpecRepr l1 fl1 l2 fl2 l_rest fl_rest srepr1 (rest2 t pf)) ->
+    SubSpecRepr (fcons f not_in_rest fl_rest)
+                srepr1 (Spec_ConsOp f not_in2 T constraint2 rest2)
 .
-*)
+
+Fixpoint spec_subtract {l1 fl1 l2 fl2 l_rest fl_rest} s1 s2
+         (sub: @SubSpecRepr l1 fl1 l2 fl2 l_rest fl_rest s1 s2) :
+  spec_repr_model s1 -> SpecRepr fl_rest :=
+  match sub in SubSpecRepr fl_rest s1 s2
+        return spec_repr_model s1 -> SpecRepr fl_rest with
+    | SubSpec_base spec2 axioms pf => fun _ => spec2
+    | SubSpec_eq fl_rest f not_in1 not_in2 T constraint rest1 rest2 sub' =>
+      fun model =>
+        spec_subtract (rest1 (projT1 model) (projT1 (projT2 model)))
+                      (rest2 (projT1 model) (projT1 (projT2 model)))
+                      (sub' (projT1 model) (projT1 (projT2 model)))
+                      (projT2 (projT2 model))
+    | SubSpec_neq fl_rest spec1 f not_in2 not_in_rest T constraint2 rest2 sub' =>
+      fun model =>
+        Spec_ConsOp f not_in_rest T constraint2
+                    (fun t pf =>
+                       spec_subtract spec1 (rest2 t pf) (sub' t pf) model)
+  end.
+
+Fixpoint spec_model_add {l1 fl1 l2 fl2 l_rest fl_rest} s1 s2 sub :
+  forall model1, spec_repr_model
+                   (@spec_subtract l1 fl1 l2 fl2
+                                   l_rest fl_rest s1 s2 sub model1) ->
+                 spec_repr_model s2 :=
+  match sub in SubSpecRepr fl_rest s1 s2
+        return forall model1, spec_repr_model (spec_subtract s1 s2 sub model1) ->
+                              spec_repr_model s2
+  with
+    | SubSpec_base spec2 axioms pf =>
+      fun model1 model_sub => model_sub
+    | SubSpec_eq fl_rest f not_in1 not_in2 T constraint rest1 rest2 sub' =>
+      fun model1 model_sub =>
+        existT _ (model_elem model1)
+               (existT _ (model_pf model1)
+                       (spec_model_add _ _ (sub' (model_elem model1) (model_pf model1))
+                                       (model_rest model1) model_sub))
+    | SubSpec_neq fl_rest spec1 f not_in2 not_in_rest T constraint2 rest2 sub' =>
+      fun model1 model_sub =>
+        existT _ (model_elem model_sub)
+               (existT _ (model_pf model_sub)
+                       (spec_model_add _ _ (sub' (model_elem model_sub) (model_pf model_sub))
+                                       model1 (model_rest model_sub)))
+  end.
+
+
+FIXME HERE: write fl_append, so we can write this! (NOTE: fl_append requires a
+proof that the two lists do not overlap...)
+
+Fixpoint spec_repr_append {l1 fl1 l2 fl2} (srepr1: @SpecRepr l1 fl1)
+         (srepr2: @SpecRepr l2 fl2) : SpecRepr (fl_append fl1 fl2)
+
+(* FIXME HERE: old stuff below... *)
 
 (* This holds iff field f has type T and a constraint at least as strong as
 constraint in srepr. We put it in Type so we can recurse on it. *)
