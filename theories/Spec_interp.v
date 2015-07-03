@@ -123,6 +123,24 @@ Definition not_in_cons A (f f':A) l : f<>f' -> ~In f l -> ~In f (f'::l).
   contradiction.
 Qed.
 
+(* Whether fl2 can be appended to the end of fl1 *)
+Fixpoint can_append {l1} (fl1: flist l1) {l2} (fl2: flist l2) : Prop :=
+  match fl1 with
+    | fnil => True
+    | @fcons f l1' _ fl1' =>
+      ~In f (l1' ++ l2) /\ can_append fl1' fl2
+  end.
+
+(* Append two flists that can be appended *)
+Fixpoint fl_append {l1} fl1 {l2} fl2 :
+  @can_append l1 fl1 l2 fl2 -> flist (l1++l2) :=
+  match fl1 in flist l1 return @can_append l1 fl1 l2 fl2 -> flist (l1++l2) with
+    | fnil => fun _ => fl2
+    | fcons f _ fl1' =>
+      fun can_app =>
+        fcons f (proj1 can_app) (fl_append fl1' fl2 (proj2 can_app))
+  end.
+
 (* Tactic for proving a field is not in a list *)
 Ltac solve_not_in_list :=
   match goal with
@@ -193,6 +211,14 @@ Definition model_pf {f l fl not_in T constraint rest}
 Definition model_rest {f l fl not_in T constraint rest}
            (model:spec_repr_model (@Spec_ConsOp f l fl not_in T constraint rest))
 : spec_repr_model (rest (model_elem model) (model_pf model)) := projT2 (projT2 model).
+
+(* Build the type of the models of a spec minus the proofs of the axioms *)
+Fixpoint spec_repr_ops {l flds} (spec:@SpecRepr l flds) : Type :=
+  match spec with
+    | Spec_Axioms axioms => unit
+    | Spec_ConsOp f not_in T constraint rest =>
+      { t : T & {pf: constraint t & spec_repr_ops (rest t pf)}}
+  end.
 
 
 (*** Spec Examples ***)
@@ -309,9 +335,9 @@ Inductive SubSpecRepr : forall {l1 fl1 l2 fl2 l_rest} (fl_rest: flist l_rest),
 
 Fixpoint spec_subtract {l1 fl1 l2 fl2 l_rest fl_rest} s1 s2
          (sub: @SubSpecRepr l1 fl1 l2 fl2 l_rest fl_rest s1 s2) :
-  spec_repr_model s1 -> SpecRepr fl_rest :=
+  spec_repr_ops s1 -> SpecRepr fl_rest :=
   match sub in SubSpecRepr fl_rest s1 s2
-        return spec_repr_model s1 -> SpecRepr fl_rest with
+        return spec_repr_ops s1 -> SpecRepr fl_rest with
     | SubSpec_base spec2 axioms pf => fun _ => spec2
     | SubSpec_eq fl_rest f not_in1 not_in2 T constraint rest1 rest2 sub' =>
       fun model =>
@@ -327,36 +353,75 @@ Fixpoint spec_subtract {l1 fl1 l2 fl2 l_rest fl_rest} s1 s2
   end.
 
 Fixpoint spec_model_add {l1 fl1 l2 fl2 l_rest fl_rest} s1 s2 sub :
-  forall model1, spec_repr_model
+  forall ops1, spec_repr_model
                    (@spec_subtract l1 fl1 l2 fl2
-                                   l_rest fl_rest s1 s2 sub model1) ->
+                                   l_rest fl_rest s1 s2 sub ops1) ->
                  spec_repr_model s2 :=
   match sub in SubSpecRepr fl_rest s1 s2
-        return forall model1, spec_repr_model (spec_subtract s1 s2 sub model1) ->
-                              spec_repr_model s2
+        return forall ops1, spec_repr_model (spec_subtract s1 s2 sub ops1) ->
+                            spec_repr_model s2
   with
     | SubSpec_base spec2 axioms pf =>
-      fun model1 model_sub => model_sub
+      fun ops1 model_sub => model_sub
     | SubSpec_eq fl_rest f not_in1 not_in2 T constraint rest1 rest2 sub' =>
-      fun model1 model_sub =>
-        existT _ (model_elem model1)
-               (existT _ (model_pf model1)
-                       (spec_model_add _ _ (sub' (model_elem model1) (model_pf model1))
-                                       (model_rest model1) model_sub))
+      fun ops1 model_sub =>
+        existT _ (projT1 ops1)
+               (existT _ (projT1 (projT2 ops1))
+                       (spec_model_add _ _ (sub' _ _)
+                                       (projT2 (projT2 ops1)) model_sub))
     | SubSpec_neq fl_rest spec1 f not_in2 not_in_rest T constraint2 rest2 sub' =>
-      fun model1 model_sub =>
+      fun ops1 model_sub =>
         existT _ (model_elem model_sub)
                (existT _ (model_pf model_sub)
                        (spec_model_add _ _ (sub' (model_elem model_sub) (model_pf model_sub))
-                                       model1 (model_rest model_sub)))
+                                       ops1 (model_rest model_sub)))
   end.
 
 
-FIXME HERE: write fl_append, so we can write this! (NOTE: fl_append requires a
-proof that the two lists do not overlap...)
+Fixpoint spec_repr_add_axioms {l fl} (srepr: @SpecRepr l fl)
+         axioms : @SpecRepr l fl :=
+  match srepr with
+    | Spec_Axioms axioms' => Spec_Axioms (axioms' ++ axioms)
+    | Spec_ConsOp f not_in T constraint rest =>
+      Spec_ConsOp f not_in T constraint
+                  (fun t pf => spec_repr_add_axioms (rest t pf) axioms)
+  end.
 
-Fixpoint spec_repr_append {l1 fl1 l2 fl2} (srepr1: @SpecRepr l1 fl1)
-         (srepr2: @SpecRepr l2 fl2) : SpecRepr (fl_append fl1 fl2)
+Fixpoint spec_repr_append {l1 fl1 l2 fl2} (srepr1: @SpecRepr l1 fl1) :
+  forall (srepr2 : spec_repr_ops srepr1 -> @SpecRepr l2 fl2)
+         (can_app:can_append fl1 fl2),
+    SpecRepr (fl_append fl1 fl2 can_app) :=
+  match srepr1 in SpecRepr fl1
+        return forall (srepr2 : spec_repr_ops srepr1 -> @SpecRepr l2 fl2)
+                      (can_app:can_append fl1 fl2),
+                 SpecRepr (fl_append fl1 fl2 can_app)
+  with
+    | Spec_Axioms axioms =>
+      fun srepr2 _ => spec_repr_add_axioms (srepr2 tt) axioms
+    | Spec_ConsOp f not_in T constraint rest =>
+      fun srepr2 can_app =>
+        Spec_ConsOp
+          f (proj1 can_app) T constraint
+          (fun t pf =>
+             spec_repr_append
+               (rest t pf)
+               (fun ops => srepr2 (existT _ t (existT _ pf ops)))
+               (proj2 can_app))
+  end.
+
+Definition spec_subst {l1_sub fl1_sub} (srepr1_sub: @SpecRepr l1_sub fl1_sub)
+           {l1 fl1} (srepr1: @SpecRepr l1 fl1)
+           {l2 fl2} (srepr2: @SpecRepr l2 fl2)
+           l_sub (fl_sub: flist l_sub)
+           (sub: SubSpecRepr fl_sub srepr1_sub srepr1) can_app
+           (interp: spec_repr_ops srepr2 -> spec_repr_ops srepr1_sub) :
+  SpecRepr (fl_append fl2 fl_sub can_app) :=
+  spec_repr_append (fl2:=fl_sub) srepr2
+                   (fun ops => spec_subtract srepr1_sub srepr1 sub (interp ops))
+                   can_app.
+
+FIXME HERE: need to change interpretations to have separate op and proof mappings  
+
 
 (* FIXME HERE: old stuff below... *)
 
