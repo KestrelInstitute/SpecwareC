@@ -57,15 +57,15 @@ Fixpoint spec_ops spec : Type :=
       { t : T & {pf: constraint t & spec_ops (rest t pf)}}
   end.
 
-FIXME HERE: make spec_model be dependent on spec_ops
-
 (* Build the type of the models of spec as a nested dependent pair *)
-Fixpoint spec_model spec : Type :=
-  match spec with
+Fixpoint spec_model spec : spec_ops spec -> Prop :=
+  match spec return spec_ops spec -> Prop with
     | Spec_Axioms axioms =>
-      conjoin_axioms axioms
+      fun _ => conjoin_axioms axioms
     | Spec_ConsOp f T constraint rest =>
-      { t : T & {pf: constraint t & spec_model (rest t pf)}}
+      fun ops =>
+        spec_model (rest (projT1 ops) (projT1 (projT2 ops)))
+                   (projT2 (projT2 ops))
   end.
 
 
@@ -108,5 +108,11 @@ Print spec_repr_example_3.
 
 (*** Interpretations ***)
 
-Definition Interpretation 
+Definition Interpretation spec1 spec2 :=
+  { ops_f: spec_ops spec2 -> spec_ops spec1 |
+    forall ops, spec_model spec2 ops -> spec_model spec1 (ops_f ops) }.
+
+(* The identity interpretation *)
+Definition interp_id (spec:Spec) : Interpretation spec spec :=
+  exist (fun ops_f => forall ops, spec_model spec ops -> spec_model spec (ops_f ops)) (fun x => x) (fun _ model => model).
 
