@@ -174,3 +174,66 @@ Definition interp_cons f T (constraint: T -> Prop)
                        (map_ops (i _ _) (ops_rest ops2)))
            (fun ops2 model2 =>
               map_model (i _ _) _ model2).
+
+
+(*** Sub-Specs and Spec Substitution ***)
+
+(* This states that spec2 has all the ops of spec1 in the same order, with
+possibly some extras in between. We put it in Type so we can recurse on it *)
+Inductive SubSpec : Spec -> Spec -> Type :=
+| SubSpec_base axioms spec2 :
+    (forall ops, spec_model spec2 ops -> conjoin_axioms axioms) ->
+    SubSpec (Spec_Axioms axioms) spec2
+| SubSpec_eq f T (constraint: T -> Prop) rest1 rest2 :
+    (forall t pf, SubSpec (rest1 t pf) (rest2 t pf)) ->
+    SubSpec (Spec_ConsOp f T constraint rest1)
+            (Spec_ConsOp f T constraint rest2)
+| SubSpec_neq spec1 f2 T2 (constraint2: T2 -> Prop) rest2 :
+    (forall t2 pf2, SubSpec spec1 (rest2 t2 pf2)) ->
+    SubSpec spec1 (Spec_ConsOp f2 T2 constraint2 rest2)
+.
+
+Fixpoint spec_subtract spec1 spec2 (sub: SubSpec spec1 spec2) :
+  spec_ops spec1 -> Spec :=
+  match sub in SubSpec spec1 spec2 return spec_ops spec1 -> Spec with
+    | SubSpec_base axioms spec2 axioms_pf => fun _ => spec2
+    | SubSpec_eq f T constraint rest1 rest2 sub' =>
+      fun ops1 =>
+        spec_subtract _ _ (sub' (ops_head ops1) (ops_proof ops1)) (ops_rest ops1)
+    | SubSpec_neq spec1 f2 T2 constraint2 rest2 sub' =>
+      fun ops1 =>
+        Spec_ConsOp f2 T2 constraint2
+                    (fun t2 pf2 =>
+                       spec_subtract spec1 (rest2 t2 pf2) (sub' t2 pf2) ops1)
+  end
+.
+
+Lemma spec_subtract_interp spec1 spec2 sub :
+  forall ops1, Interpretation spec2 (spec_subtract spec1 spec2 sub ops1).
+  induction sub; intros.
+  apply interp_id.
+  destruct (X _ _ (ops_rest ops1)) as [ops_f model_f].
+  exists (fun ops_sub => ops_cons (ops_head ops1) (ops_proof ops1) (ops_f ops_sub)).
+  apply model_f.
+  unfold spec_subtract; fold spec_subtract.
+  apply interp_cons. intros; apply X.
+Qed.
+
+Fixpoint spec_append_axioms spec axioms2 : Spec :=
+  match spec with
+    | Spec_Axioms axioms1 => Spec_Axioms (axioms1 ++ axioms2)
+    | Spec_ConsOp f T constraint rest =>
+      Spec_ConsOp f T constraint (fun t pf => spec_append_axioms (rest t pf) axioms2)
+  end.
+
+Fixpoint spec_append spec1 : (spec_ops spec1 -> Spec) -> Spec :=
+  match spec1 return (spec_ops spec1 -> Spec) -> Spec with
+    | Spec_Axioms axioms1 =>
+      fun spec2 => spec_append_axioms (spec2 tt) axioms1
+    | Spec_ConsOp f T constraint rest =>
+      fun spec2 =>
+        Spec_ConsOp f T constraint
+                    (fun t pf =>
+                       spec_append (rest t pf)
+                                   (fun ops1 => spec2 (ops_cons t pf ops1)))
+  end.
