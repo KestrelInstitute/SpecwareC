@@ -68,6 +68,29 @@ Fixpoint spec_model spec : spec_ops spec -> Prop :=
                    (projT2 (projT2 ops))
   end.
 
+(* Build the ops for a spec from an op for the head and ops for the tail *)
+Definition ops_cons {f T} {constraint:T -> Prop} {rest}
+           (t:T) (pf:constraint t) (ops_rest:spec_ops (rest t pf)) :
+  spec_ops (Spec_ConsOp f T constraint rest) :=
+  existT _ t (existT _ pf ops_rest).
+
+(* Project the first op of a spec *)
+Definition ops_head {f T constraint rest}
+           (ops: spec_ops (Spec_ConsOp f T constraint rest)) : T :=
+  projT1 ops.
+
+(* Project the proof that the first op of a spec meets its constraint *)
+Definition ops_proof {f T constraint rest}
+           (ops: spec_ops (Spec_ConsOp f T constraint rest)) :
+  constraint (ops_head ops) :=
+  projT1 (projT2 ops).
+
+(* Project the tail of the ops of a spec *)
+Definition ops_rest {f T constraint rest}
+           (ops: spec_ops (Spec_ConsOp f T constraint rest)) :
+  spec_ops (rest (ops_head ops) (ops_proof ops)) :=
+  projT2 (projT2 ops).
+
 
 (*** Spec Examples ***)
 
@@ -108,11 +131,46 @@ Print spec_repr_example_3.
 
 (*** Interpretations ***)
 
+(* An interpretation from spec1 into spec2 is a pair of functions that map the
+ops and the models, respectively, of spec2 to those of spec1 *)
 Definition Interpretation spec1 spec2 :=
   { ops_f: spec_ops spec2 -> spec_ops spec1 |
     forall ops, spec_model spec2 ops -> spec_model spec1 (ops_f ops) }.
 
+(* Helper to build an interpretation from spec1 to spec2 *)
+Definition mkInterp {spec1 spec2} ops_f model_f : Interpretation spec1 spec2 :=
+  exist _ ops_f model_f.
+
+(* Apply the ops map of an interpretation *)
+Definition map_ops {spec1 spec2} (i:Interpretation spec1 spec2) :
+  spec_ops spec2 -> spec_ops spec1 :=
+  match i with exist _ ops_f model_f => ops_f end.
+
+(* Apply the model map of an interpretation *)
+Definition map_model {spec1 spec2} (i:Interpretation spec1 spec2) :
+  forall ops2, spec_model spec2 ops2 -> spec_model spec1 (map_ops i ops2) :=
+  match i with exist _ ops_f model_f => model_f end.
+
 (* The identity interpretation *)
 Definition interp_id (spec:Spec) : Interpretation spec spec :=
-  exist (fun ops_f => forall ops, spec_model spec ops -> spec_model spec (ops_f ops)) (fun x => x) (fun _ model => model).
+  mkInterp id (fun _ model => model).
 
+(* Composing interpretations *)
+Definition interp_compose {s1 s2 s3}
+           (i2: Interpretation s2 s3) (i1: Interpretation s1 s2) :
+  Interpretation s1 s3 :=
+  mkInterp (fun ops3 => map_ops i1 (map_ops i2 ops3))
+           (fun ops3 model3 => map_model i1 _ (map_model i2 _ model3)).
+
+(* Build an interpretation between the tails of two specs that have the same
+head into an interpretation between the whole of the two specs *)
+Definition interp_cons f T (constraint: T -> Prop)
+           {spec1 spec2 : forall t, constraint t -> Spec}
+           (i: forall t pfs, Interpretation (spec1 t pfs) (spec2 t pfs)) :
+  Interpretation (Spec_ConsOp f T constraint spec1)
+                 (Spec_ConsOp f T constraint spec2) :=
+  mkInterp (fun ops2 =>
+              ops_cons (ops_head ops2) (ops_proof ops2)
+                       (map_ops (i _ _) (ops_rest ops2)))
+           (fun ops2 model2 =>
+              map_model (i _ _) _ model2).
