@@ -175,6 +175,107 @@ Definition interp_cons f T (constraint: T -> Prop)
            (fun ops2 model2 =>
               map_model (i _ _) _ model2).
 
+(* Take an interpretation from spec1 to spec2 and cons an op onto spec2 *)
+Definition interp_cons_r f T (constraint: T -> Prop)
+           {spec1} {spec2: forall t, constraint t -> Spec}
+           (i: forall t pfs, Interpretation spec1 (spec2 t pfs)) :
+  Interpretation spec1 (Spec_ConsOp f T constraint spec2) :=
+  mkInterp (fun ops2 => map_ops (i (ops_head ops2) (ops_proof ops2)) (ops_rest ops2))
+           (fun ops2 model2 => map_model (i (ops_head ops2) (ops_proof ops2)) _ model2).
+
+
+(*** Appending Specs ***)
+
+(* Append axioms to the end of a spec *)
+Fixpoint spec_append_axioms spec axioms2 : Spec :=
+  match spec with
+    | Spec_Axioms axioms1 => Spec_Axioms (axioms1 ++ axioms2)
+    | Spec_ConsOp f T constraint rest =>
+      Spec_ConsOp f T constraint (fun t pf => spec_append_axioms (rest t pf) axioms2)
+  end.
+
+(* FIXME: get rid of the admit! *)
+Lemma conjoin_axioms_append1 axioms1 axioms2 :
+  conjoin_axioms (axioms1 ++ axioms2) -> conjoin_axioms axioms1.
+  induction axioms1; intros.
+  constructor.
+  admit.
+Qed.
+
+(* FIXME: get rid of the admit! *)
+Lemma conjoin_axioms_append2 axioms1 axioms2 :
+  conjoin_axioms (axioms1 ++ axioms2) -> conjoin_axioms axioms2.
+  induction axioms1; intros.
+  assumption.
+  admit.
+Qed.
+
+(* The interpretation from any spec to the result of appending axioms to it *)
+Fixpoint append_axioms_interp1 spec axioms2 :
+  Interpretation spec (spec_append_axioms spec axioms2) :=
+  match spec return Interpretation spec (spec_append_axioms spec axioms2) with
+    | Spec_Axioms axioms1 =>
+      mkInterp 
+        (spec1:=Spec_Axioms axioms1) (spec2:=Spec_Axioms (axioms1++axioms2))
+        id (fun _ model => conjoin_axioms_append1 axioms1 axioms2 model)
+    | Spec_ConsOp f T constraint rest =>
+      interp_cons f T constraint (fun t pf => append_axioms_interp1 (rest t pf) axioms2)
+  end.
+
+(* The interpretation from axioms to the result of appending them to a spec *)
+Fixpoint append_axioms_interp2 spec axioms2 :
+  Interpretation (Spec_Axioms axioms2) (spec_append_axioms spec axioms2) :=
+  match spec return Interpretation (Spec_Axioms axioms2) (spec_append_axioms spec axioms2) with
+    | Spec_Axioms axioms1 =>
+      mkInterp
+        (spec1:=Spec_Axioms axioms2) (spec2:=Spec_Axioms (axioms1++axioms2))
+        (fun _ => tt)
+        (fun _ model => conjoin_axioms_append2 axioms1 axioms2 model)
+    | Spec_ConsOp f T constraint rest =>
+      interp_cons_r f T constraint
+                    (fun t pf => append_axioms_interp2 (rest t pf) axioms2)
+  end.
+
+(* Append one spec after another, where the spec being appended can depend on
+the ops of the spec it is coming after *)
+Fixpoint spec_append spec1 : (spec_ops spec1 -> Spec) -> Spec :=
+  match spec1 return (spec_ops spec1 -> Spec) -> Spec with
+    | Spec_Axioms axioms1 =>
+      fun spec2 => spec_append_axioms (spec2 tt) axioms1
+    | Spec_ConsOp f T constraint rest =>
+      fun spec2 =>
+        Spec_ConsOp f T constraint
+                    (fun t pf =>
+                       spec_append (rest t pf)
+                                   (fun ops1 => spec2 (ops_cons t pf ops1)))
+  end.
+
+(* The interpretation from a spec to the result of appending another spec to it *)
+Fixpoint interp_append1 spec1 :
+  forall spec2, Interpretation spec1 (spec_append spec1 spec2) :=
+  match spec1 return
+        forall spec2, Interpretation spec1 (spec_append spec1 spec2) with
+    | Spec_Axioms axioms1 =>
+      fun spec2 => append_axioms_interp2 (spec2 tt) axioms1
+    | Spec_ConsOp f T constraint rest =>
+      fun spec2 =>
+        interp_cons f T constraint
+                    (fun t pf =>
+                       interp_append1 (rest t pf)
+                                      (fun ops1 => spec2 (ops_cons t pf ops1)))
+  end.
+
+(* The interpretation from a spec to the result of appending another spec to it *)
+Definition interp_prepend_r spec spec1 :
+  forall spec2, (forall ops1, Interpretation spec (spec2 ops1)) ->
+                Interpretation spec (spec_append spec1 spec2).
+  induction spec1; intros.
+  apply (interp_compose (s2:=spec2 tt)).
+  apply append_axioms_interp1.
+  apply X.
+  apply interp_cons_r; intros; fold spec_append. apply X. intros. apply X0.
+Defined.
+
 
 (*** Sub-Specs and Spec Substitution ***)
 
@@ -193,6 +294,7 @@ Inductive SubSpec : Spec -> Spec -> Type :=
     SubSpec spec1 (Spec_ConsOp f2 T2 constraint2 rest2)
 .
 
+(* Subtract sub-spec spec1 from super-spec spec2, given ops for spec1 *)
 Fixpoint spec_subtract spec1 spec2 (sub: SubSpec spec1 spec2) :
   spec_ops spec1 -> Spec :=
   match sub in SubSpec spec1 spec2 return spec_ops spec1 -> Spec with
@@ -208,6 +310,30 @@ Fixpoint spec_subtract spec1 spec2 (sub: SubSpec spec1 spec2) :
   end
 .
 
+(* There is an interpretation from spec2 to spec2 minus spec1 *)
+Fixpoint spec_subtract_interp spec1 spec2 sub :
+  forall ops1, Interpretation spec2 (spec_subtract spec1 spec2 sub ops1) :=
+  match sub in SubSpec spec1 spec2
+        return forall ops1,
+                 Interpretation spec2 (spec_subtract spec1 spec2 sub ops1) with
+    | SubSpec_base _ _ _ => fun _ => interp_id _
+    | SubSpec_eq f T constraint rest1 rest2 sub' =>
+      fun ops1 =>
+        mkInterp (fun ops_sub =>
+                    ops_cons (ops_head ops1) (ops_proof ops1)
+                             (map_ops (spec_subtract_interp
+                                         _ _ (sub' _ _) (ops_rest ops1))
+                                      ops_sub))
+                 (map_model (spec_subtract_interp _ _ _ (ops_rest ops1)))
+    | SubSpec_neq spec1 f2 T2 constraint2 rest2 sub' =>
+      fun ops1 =>
+        interp_cons f2 T2 constraint2
+                    (fun t2 pf2 =>
+                       spec_subtract_interp _ _ (sub' t2 pf2) ops1)
+  end.
+
+(* Tactics-based proof of the above *)
+(*
 Lemma spec_subtract_interp spec1 spec2 sub :
   forall ops1, Interpretation spec2 (spec_subtract spec1 spec2 sub ops1).
   induction sub; intros.
@@ -218,22 +344,26 @@ Lemma spec_subtract_interp spec1 spec2 sub :
   unfold spec_subtract; fold spec_subtract.
   apply interp_cons. intros; apply X.
 Qed.
+*)
 
-Fixpoint spec_append_axioms spec axioms2 : Spec :=
-  match spec with
-    | Spec_Axioms axioms1 => Spec_Axioms (axioms1 ++ axioms2)
-    | Spec_ConsOp f T constraint rest =>
-      Spec_ConsOp f T constraint (fun t pf => spec_append_axioms (rest t pf) axioms2)
-  end.
+(* Build a spec using spec substitution *)
+Definition spec_subst {spec1sub spec1 spec2}
+           (sub: SubSpec spec1sub spec1) (i: Interpretation spec1sub spec2) : Spec :=
+  spec_append spec2
+              (fun ops2 =>
+                 spec_subtract spec1sub spec1 sub (map_ops i ops2)).
 
-Fixpoint spec_append spec1 : (spec_ops spec1 -> Spec) -> Spec :=
-  match spec1 return (spec_ops spec1 -> Spec) -> Spec with
-    | Spec_Axioms axioms1 =>
-      fun spec2 => spec_append_axioms (spec2 tt) axioms1
-    | Spec_ConsOp f T constraint rest =>
-      fun spec2 =>
-        Spec_ConsOp f T constraint
-                    (fun t pf =>
-                       spec_append (rest t pf)
-                                   (fun ops1 => spec2 (ops_cons t pf ops1)))
-  end.
+(* Build the interpretation from spec1 to the result of applying spec
+substitution to spec1 *)
+Definition spec_subst_interp1 {spec1sub spec1 spec2} sub i :
+  Interpretation spec1 (@spec_subst spec1sub spec1 spec2 sub i).
+  unfold spec_subst.
+  apply interp_prepend_r; intros.
+  apply spec_subtract_interp.
+Defined.
+
+(* Build the interpretation from spec2 to the result of applying any spec
+substitution using an interpretation into spec2 *)
+Definition spec_subst_interp2 {spec1sub spec1 spec2} sub i :
+  Interpretation spec2 (@spec_subst spec1sub spec1 spec2 sub i) :=
+  interp_append1 _ _.
