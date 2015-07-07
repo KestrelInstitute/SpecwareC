@@ -29,16 +29,18 @@ Qed.
 
 (*** Specs ***)
 
-(* An op predicate, where None represents the trivial True predicate *)
+(* A predicate on an op, where None represents the trivial True predicate *)
 Definition OpPred T := option (T -> Prop).
 
+(* Whether an op satisfies an OpPred *)
 Definition sats_op_pred {T} (p: OpPred T) : T -> Prop :=
   match p with
     | Some pred => pred
     | None => fun _ => True
   end.
 
-Coercion sats_op_pred :  OpPred >-> Funclass.
+(* Allows writing "oppred t" instead of "sats_op_pred oppred t" *)
+Coercion sats_op_pred : OpPred >-> Funclass.
 
 (* The inductive representation of specs, indexed by the op fields *)
 Inductive Spec : Type :=
@@ -382,76 +384,43 @@ Definition spec_subst_interp2 {spec1sub spec1 spec2} sub i :
 
 (*** Types / Typeclasses Represented by Specs ***)
 
-(*
-Inductive IsoToSpec A (a:A) : Spec -> Prop :=
-| IsoToSpec_axioms axioms (e: A = Prop) :
-    conjoin_axioms axioms <-> rew e in a ->
-    IsoToSpec A a (Spec_Axioms axioms)
-| IsoToSpec_cons f T rest B (e: A = forall t:T, B t) :
-    (forall t:T, IsoToSpec (B t) ((rew [id] e in a) t) (rest t I)) ->
-    IsoToSpec A a (Spec_ConsOp f T None rest)
-| IsoToSpec_cons_pred f T (pred: T -> Prop) rest B
-                      (e: A = forall t pf, B t pf) :
-    (forall t pf, IsoToSpec (B t pf) ((rew [id] e in a) t pf) (rest t pf)) ->
-    IsoToSpec A a (Spec_ConsOp f T (Some pred) rest)
-.
-*)
-
-(* Captures that type function a is isomorphic to the models of spec *)
-Fixpoint IsoToSpec spec : forall {A}, A -> Prop :=
+(* The type of Curried predicates on the ops of spec *)
+Fixpoint OpsPred spec : Type :=
   match spec with
-    | Spec_Axioms axioms =>
-      fun A a =>
-        exists e:(A = Prop),
-          rew [id] e in a <-> conjoin_axioms axioms
+    | Spec_Axioms _ => Prop
     | Spec_ConsOp f T oppred rest =>
-      match oppred with
-        | None =>
-          fun A a =>
-            exists B (e: A = forall t:T, B t),
-              (forall t pf, IsoToSpec (rest t pf) ((rew [id] e in a) t))
-        | Some pred =>
-          fun A a =>
-            exists B (e: A = forall t pf, B t pf),
-              (forall t pf, IsoToSpec (rest t pf) ((rew [id] e in a) t pf))
-      end
+      (match oppred return (forall t, sats_op_pred oppred t -> Type) -> Type with
+         | None => fun F => forall t, F t I
+         | Some pred => fun F => forall t pf, F t pf
+       end)
+        (fun t pf => OpsPred (rest t pf))
   end.
 
-Definition ex_proj1 {P1:Prop} {P2:P1 -> Prop} (pf: exists pf1:P1, P2 pf1) : P1 :=
-  match pf with
-    | ex_intro _ pf1 pf2 => pf1
+(* Helper: all proofs of True are equal *)
+Definition True_eq (pf1: True) : forall pf2, pf1 = pf2 :=
+  match pf1 return forall pf2, pf1 = pf2 with
+    | I => fun pf2 => match pf2 return I = pf2 with I => eq_refl end end.
+
+(* Apply a Curried predicate to some candidate ops for spec *)
+Fixpoint apply_ops_pred spec : OpsPred spec -> spec_ops spec -> Prop :=
+  match spec return OpsPred spec -> spec_ops spec -> Prop with
+    | Spec_Axioms _ => fun P _ => P
+    | Spec_ConsOp f T oppred rest =>
+      fun P ops =>
+        apply_ops_pred
+          (rest (ops_head ops) (ops_proof ops))
+          ((match oppred return forall t pf rest',
+                                  OpsPred (Spec_ConsOp f T oppred rest') ->
+                                  OpsPred (rest' t pf) with
+              | None => fun t pf rest' F => rew (True_eq _ _) in (F t)
+              | Some pred => fun t pf rest' F => F t pf
+            end) (ops_head ops) (ops_proof ops) rest P)
+          (ops_rest ops)
   end.
 
-Definition ex_proj2 {P1:Prop} {P2:P1 -> Prop} (pf: exists pf1:P1, P2 pf1) :
-  P2 (ex_proj1 pf):=
-  match pf with
-    | ex_intro _ pf1 pf2 => pf2
-  end.
-
-Definition ex_proj2_indep (A:Type) (P:Prop) (pf: exists a:A, P) : P :=
-  match pf with
-    | ex_intro _ _ pf2 => pf2
-  end.
-
-Definition ex_fmap {A} {P1 P2: A -> Prop} (f: forall a, P1 a -> P2 a)
-           (pf: exists a:A, P1 a) :
-  exists a:A, P2 a :=
-  match pf with
-    | ex_intro _ a pf2 =>
-      ex_intro _ a (f a pf2)
-  end.
-
-Fixpoint apply_to_ops spec :
-  forall {A} a, @IsoToSpec spec A a -> spec_ops spec -> Prop :=
-  match spec return forall A a, @IsoToSpec spec A a -> spec_ops spec -> Prop with
-    | Spec_Axioms axioms =>
-      fun A a iso ops =>
-        rew [id] (ex_proj1 iso) in a
-    | Spec_ConsOp 
-
-Class HasSpec {spec} T : Prop := spec_iso: IsoToSpec spec T.
-
-
+(* Whether P is isomorphic to spec *)
+Class IsoToSpec {spec} (P: OpsPred spec) : Prop :=
+  spec_iso: forall ops, apply_ops_pred spec P ops <-> spec_model spec ops.
 
 
 (*** Refinement ***)
@@ -459,4 +428,5 @@ Class HasSpec {spec} T : Prop := spec_iso: IsoToSpec spec T.
 Record RefinementOf spec : Type :=
   {ref_spec: Spec;
    ref_interp: Interpretation spec ref_spec;
-   ref_others: list {spec' : Spec & Interpretation spec' ref_spec}}.
+   ref_others: list {spec' : Spec & Interpretation spec' ref_spec &
+                                  {P:OpsPred spec' | @IsoToSpec spec' P }}}.
