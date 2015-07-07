@@ -384,43 +384,59 @@ Definition spec_subst_interp2 {spec1sub spec1 spec2} sub i :
 
 (*** Types / Typeclasses Represented by Specs ***)
 
-(* The type of Curried predicates on the ops of spec *)
-Fixpoint OpsPred spec : Type :=
+(* The type of Curried functions on the ops of spec *)
+Fixpoint ForallOps spec : (spec_ops spec -> Type) -> Type :=
   match spec with
-    | Spec_Axioms _ => Prop
+    | Spec_Axioms _ => fun body => body tt
     | Spec_ConsOp f T oppred rest =>
-      (match oppred return (forall t, sats_op_pred oppred t -> Type) -> Type with
-         | None => fun F => forall t, F t I
-         | Some pred => fun F => forall t pf, F t pf
-       end)
-        (fun t pf => OpsPred (rest t pf))
+      fun body =>
+        (match oppred return (forall t, sats_op_pred oppred t -> Type) -> Type with
+           | None => fun F => forall t, F t I
+           | Some pred => fun F => forall t pf, F t pf
+         end)
+        (fun t pf => ForallOps (rest t pf) (fun ops => body (ops_cons t pf ops)))
   end.
+
+(* The type of Curried predicates on the ops of spec *)
+Definition OpsPred spec : Type := ForallOps spec (fun _ => Prop).
 
 (* Helper: all proofs of True are equal *)
 Definition True_eq (pf1: True) : forall pf2, pf1 = pf2 :=
   match pf1 return forall pf2, pf1 = pf2 with
     | I => fun pf2 => match pf2 return I = pf2 with I => eq_refl end end.
 
+(* Helper: all elements of type unit are equal *)
+Definition tt_eq (u1: unit) : forall u2, u1 = u2 :=
+  match u1 return forall u2, u1 = u2 with
+    | tt => fun u2 => match u2 return tt = u2 with tt => eq_refl end end.
+
 (* Apply a Curried predicate to some candidate ops for spec *)
-Fixpoint apply_ops_pred spec : OpsPred spec -> spec_ops spec -> Prop :=
-  match spec return OpsPred spec -> spec_ops spec -> Prop with
-    | Spec_Axioms _ => fun P _ => P
+Fixpoint apply_to_ops spec : forall ops body, ForallOps spec body -> body ops :=
+  match spec return forall ops body, ForallOps spec body -> body ops with
+    | Spec_Axioms _ => fun ops body F => rew [body] (tt_eq _ _) in F
     | Spec_ConsOp f T oppred rest =>
-      fun P ops =>
-        apply_ops_pred
-          (rest (ops_head ops) (ops_proof ops))
-          ((match oppred return forall t pf rest',
-                                  OpsPred (Spec_ConsOp f T oppred rest') ->
-                                  OpsPred (rest' t pf) with
-              | None => fun t pf rest' F => rew (True_eq _ _) in (F t)
-              | Some pred => fun t pf rest' F => F t pf
-            end) (ops_head ops) (ops_proof ops) rest P)
-          (ops_rest ops)
+      fun ops =>
+        match ops return forall body, ForallOps (Spec_ConsOp f T oppred rest) body -> body ops with
+          | existT _ t (existT _ pf orest) =>
+            fun body F =>
+              apply_to_ops
+                (rest t pf) orest
+                _
+                ((match oppred
+                        return forall t pf rest' body',
+                                 ForallOps (Spec_ConsOp f T oppred rest') body' ->
+                                 ForallOps (rest' t pf)
+                                           (fun ops => body' (ops_cons t pf ops)) with
+                    | None => fun t pf rest' body' F => rew (True_eq _ _) in (F t)
+                    | Some pred => fun t pf rest' body' F => F t pf
+                  end) t pf rest
+                       body F)
+        end
   end.
 
 (* Whether P is isomorphic to spec *)
 Class IsoToSpec {spec} (P: OpsPred spec) : Prop :=
-  spec_iso: forall ops, apply_ops_pred spec P ops <-> spec_model spec ops.
+  spec_iso: forall ops, apply_to_ops spec ops _ P <-> spec_model spec ops.
 
 
 (*** Refinement ***)
