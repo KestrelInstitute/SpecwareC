@@ -29,18 +29,29 @@ Qed.
 
 (*** Specs ***)
 
+(* An op predicate, where None represents the trivial True predicate *)
+Definition OpPred T := option (T -> Prop).
+
+Definition sats_op_pred {T} (p: OpPred T) : T -> Prop :=
+  match p with
+    | Some pred => pred
+    | None => fun _ => True
+  end.
+
+Coercion sats_op_pred :  OpPred >-> Funclass.
+
 (* The inductive representation of specs, indexed by the op fields *)
 Inductive Spec : Type :=
 (* The base case contains the names and types of the axioms *)
 | Spec_Axioms (axioms : list (Field * Prop)) : Spec
 (* The inductive case adds an op named f with zero or more definitions to the
 rest of the spec, that can depend on any f equal to all the definitions *)
-| Spec_ConsOp (f:Field) (T : Type) (constraint: T -> Prop)
-              (rest : forall t, constraint t -> Spec) : Spec
+| Spec_ConsOp (f:Field) (T : Type) (oppred: OpPred T)
+              (rest : forall t, oppred t -> Spec) : Spec
 .
 
 (* Make the field argument be parsed by Coq as a string *)
-Arguments Spec_ConsOp f%string T constraint rest.
+Arguments Spec_ConsOp f%string T oppred rest.
 
 
 (*** Models ***)
@@ -53,8 +64,8 @@ Fixpoint conjoin_axioms (axioms : list (Field * Prop)) : Prop :=
 Fixpoint spec_ops spec : Type :=
   match spec with
     | Spec_Axioms axioms => unit
-    | Spec_ConsOp f T constraint rest =>
-      { t : T & {pf: constraint t & spec_ops (rest t pf)}}
+    | Spec_ConsOp f T oppred rest =>
+      { t : T & {pf: oppred t & spec_ops (rest t pf)}}
   end.
 
 (* Build the type of the models of spec as a nested dependent pair *)
@@ -62,32 +73,32 @@ Fixpoint spec_model spec : spec_ops spec -> Prop :=
   match spec return spec_ops spec -> Prop with
     | Spec_Axioms axioms =>
       fun _ => conjoin_axioms axioms
-    | Spec_ConsOp f T constraint rest =>
+    | Spec_ConsOp f T oppred rest =>
       fun ops =>
         spec_model (rest (projT1 ops) (projT1 (projT2 ops)))
                    (projT2 (projT2 ops))
   end.
 
 (* Build the ops for a spec from an op for the head and ops for the tail *)
-Definition ops_cons {f T} {constraint:T -> Prop} {rest}
-           (t:T) (pf:constraint t) (ops_rest:spec_ops (rest t pf)) :
-  spec_ops (Spec_ConsOp f T constraint rest) :=
+Definition ops_cons {f T} {oppred: OpPred T} {rest}
+           (t:T) (pf:oppred t) (ops_rest:spec_ops (rest t pf)) :
+  spec_ops (Spec_ConsOp f T oppred rest) :=
   existT _ t (existT _ pf ops_rest).
 
 (* Project the first op of a spec *)
-Definition ops_head {f T constraint rest}
-           (ops: spec_ops (Spec_ConsOp f T constraint rest)) : T :=
+Definition ops_head {f T oppred rest}
+           (ops: spec_ops (Spec_ConsOp f T oppred rest)) : T :=
   projT1 ops.
 
-(* Project the proof that the first op of a spec meets its constraint *)
-Definition ops_proof {f T constraint rest}
-           (ops: spec_ops (Spec_ConsOp f T constraint rest)) :
-  constraint (ops_head ops) :=
+(* Project the proof that the first op of a spec meets its oppred *)
+Definition ops_proof {f T oppred rest}
+           (ops: spec_ops (Spec_ConsOp f T oppred rest)) :
+  oppred (ops_head ops) :=
   projT1 (projT2 ops).
 
 (* Project the tail of the ops of a spec *)
-Definition ops_rest {f T constraint rest}
-           (ops: spec_ops (Spec_ConsOp f T constraint rest)) :
+Definition ops_rest {f T oppred rest}
+           (ops: spec_ops (Spec_ConsOp f T oppred rest)) :
   spec_ops (rest (ops_head ops) (ops_proof ops)) :=
   projT2 (projT2 ops).
 
@@ -108,20 +119,20 @@ Notation "'Axioms f1 t1 ; .. ; fn tn'" :=
 
 (* Example 1:  op n:nat;  axiom gt1: n > 1 *)
 Program Definition spec_repr_example_1 :=
-  Spec_ConsOp "n" nat (fun _ => True)
+  Spec_ConsOp "n" nat None
               (fun n _ => Spec_Axioms [("gt1"%string, n > 1)]).
 
 (* Example 2:  op n:nat := 2;  (no axioms) *)
 Program Definition spec_repr_example_2 :=
-  Spec_ConsOp "n" nat (fun n => n = 2)
+  Spec_ConsOp "n" nat (Some (fun n => n = 2))
               (fun n _ => Spec_Axioms []).
 
 (* Example 3:  op T:Set := nat;  op n:T__def;  axiom gt1: n > 1 *)
 Program Definition spec_repr_example_3 :=
   Spec_ConsOp
-    "T" Set (fun T => T = nat)
+    "T" Set (Some (fun T => T = nat))
     (fun T T__pf =>
-       Spec_ConsOp "n" T (fun _ => True)
+       Spec_ConsOp "n" T None
                    (fun n _ => Spec_Axioms [("gt1"%string, (rew T__pf in n) > 1)])).
 Next Obligation.
 exact x.
@@ -164,11 +175,11 @@ Definition interp_compose {s1 s2 s3}
 
 (* Build an interpretation between the tails of two specs that have the same
 head into an interpretation between the whole of the two specs *)
-Definition interp_cons f T (constraint: T -> Prop)
-           {spec1 spec2 : forall t, constraint t -> Spec}
+Definition interp_cons f T (oppred: OpPred T)
+           {spec1 spec2 : forall t, oppred t -> Spec}
            (i: forall t pfs, Interpretation (spec1 t pfs) (spec2 t pfs)) :
-  Interpretation (Spec_ConsOp f T constraint spec1)
-                 (Spec_ConsOp f T constraint spec2) :=
+  Interpretation (Spec_ConsOp f T oppred spec1)
+                 (Spec_ConsOp f T oppred spec2) :=
   mkInterp (fun ops2 =>
               ops_cons (ops_head ops2) (ops_proof ops2)
                        (map_ops (i _ _) (ops_rest ops2)))
@@ -176,10 +187,10 @@ Definition interp_cons f T (constraint: T -> Prop)
               map_model (i _ _) _ model2).
 
 (* Take an interpretation from spec1 to spec2 and cons an op onto spec2 *)
-Definition interp_cons_r f T (constraint: T -> Prop)
-           {spec1} {spec2: forall t, constraint t -> Spec}
+Definition interp_cons_r f T (oppred: OpPred T)
+           {spec1} {spec2: forall t, oppred t -> Spec}
            (i: forall t pfs, Interpretation spec1 (spec2 t pfs)) :
-  Interpretation spec1 (Spec_ConsOp f T constraint spec2) :=
+  Interpretation spec1 (Spec_ConsOp f T oppred spec2) :=
   mkInterp (fun ops2 => map_ops (i (ops_head ops2) (ops_proof ops2)) (ops_rest ops2))
            (fun ops2 model2 => map_model (i (ops_head ops2) (ops_proof ops2)) _ model2).
 
@@ -190,8 +201,8 @@ Definition interp_cons_r f T (constraint: T -> Prop)
 Fixpoint spec_append_axioms spec axioms2 : Spec :=
   match spec with
     | Spec_Axioms axioms1 => Spec_Axioms (axioms1 ++ axioms2)
-    | Spec_ConsOp f T constraint rest =>
-      Spec_ConsOp f T constraint (fun t pf => spec_append_axioms (rest t pf) axioms2)
+    | Spec_ConsOp f T oppred rest =>
+      Spec_ConsOp f T oppred (fun t pf => spec_append_axioms (rest t pf) axioms2)
   end.
 
 (* FIXME: get rid of the admit! *)
@@ -218,8 +229,8 @@ Fixpoint append_axioms_interp1 spec axioms2 :
       mkInterp 
         (spec1:=Spec_Axioms axioms1) (spec2:=Spec_Axioms (axioms1++axioms2))
         id (fun _ model => conjoin_axioms_append1 axioms1 axioms2 model)
-    | Spec_ConsOp f T constraint rest =>
-      interp_cons f T constraint (fun t pf => append_axioms_interp1 (rest t pf) axioms2)
+    | Spec_ConsOp f T oppred rest =>
+      interp_cons f T oppred (fun t pf => append_axioms_interp1 (rest t pf) axioms2)
   end.
 
 (* The interpretation from axioms to the result of appending them to a spec *)
@@ -231,8 +242,8 @@ Fixpoint append_axioms_interp2 spec axioms2 :
         (spec1:=Spec_Axioms axioms2) (spec2:=Spec_Axioms (axioms1++axioms2))
         (fun _ => tt)
         (fun _ model => conjoin_axioms_append2 axioms1 axioms2 model)
-    | Spec_ConsOp f T constraint rest =>
-      interp_cons_r f T constraint
+    | Spec_ConsOp f T oppred rest =>
+      interp_cons_r f T oppred
                     (fun t pf => append_axioms_interp2 (rest t pf) axioms2)
   end.
 
@@ -242,9 +253,9 @@ Fixpoint spec_append spec1 : (spec_ops spec1 -> Spec) -> Spec :=
   match spec1 return (spec_ops spec1 -> Spec) -> Spec with
     | Spec_Axioms axioms1 =>
       fun spec2 => spec_append_axioms (spec2 tt) axioms1
-    | Spec_ConsOp f T constraint rest =>
+    | Spec_ConsOp f T oppred rest =>
       fun spec2 =>
-        Spec_ConsOp f T constraint
+        Spec_ConsOp f T oppred
                     (fun t pf =>
                        spec_append (rest t pf)
                                    (fun ops1 => spec2 (ops_cons t pf ops1)))
@@ -257,9 +268,9 @@ Fixpoint interp_append1 spec1 :
         forall spec2, Interpretation spec1 (spec_append spec1 spec2) with
     | Spec_Axioms axioms1 =>
       fun spec2 => append_axioms_interp2 (spec2 tt) axioms1
-    | Spec_ConsOp f T constraint rest =>
+    | Spec_ConsOp f T oppred rest =>
       fun spec2 =>
-        interp_cons f T constraint
+        interp_cons f T oppred
                     (fun t pf =>
                        interp_append1 (rest t pf)
                                       (fun ops1 => spec2 (ops_cons t pf ops1)))
@@ -285,13 +296,13 @@ Inductive SubSpec : Spec -> Spec -> Type :=
 | SubSpec_base axioms spec2 :
     (forall ops, spec_model spec2 ops -> conjoin_axioms axioms) ->
     SubSpec (Spec_Axioms axioms) spec2
-| SubSpec_eq f T (constraint: T -> Prop) rest1 rest2 :
+| SubSpec_eq f T (oppred: OpPred T) rest1 rest2 :
     (forall t pf, SubSpec (rest1 t pf) (rest2 t pf)) ->
-    SubSpec (Spec_ConsOp f T constraint rest1)
-            (Spec_ConsOp f T constraint rest2)
-| SubSpec_neq spec1 f2 T2 (constraint2: T2 -> Prop) rest2 :
+    SubSpec (Spec_ConsOp f T oppred rest1)
+            (Spec_ConsOp f T oppred rest2)
+| SubSpec_neq spec1 f2 T2 (oppred2: OpPred T2) rest2 :
     (forall t2 pf2, SubSpec spec1 (rest2 t2 pf2)) ->
-    SubSpec spec1 (Spec_ConsOp f2 T2 constraint2 rest2)
+    SubSpec spec1 (Spec_ConsOp f2 T2 oppred2 rest2)
 .
 
 (* Subtract sub-spec spec1 from super-spec spec2, given ops for spec1 *)
@@ -299,12 +310,12 @@ Fixpoint spec_subtract spec1 spec2 (sub: SubSpec spec1 spec2) :
   spec_ops spec1 -> Spec :=
   match sub in SubSpec spec1 spec2 return spec_ops spec1 -> Spec with
     | SubSpec_base axioms spec2 axioms_pf => fun _ => spec2
-    | SubSpec_eq f T constraint rest1 rest2 sub' =>
+    | SubSpec_eq f T oppred rest1 rest2 sub' =>
       fun ops1 =>
         spec_subtract _ _ (sub' (ops_head ops1) (ops_proof ops1)) (ops_rest ops1)
-    | SubSpec_neq spec1 f2 T2 constraint2 rest2 sub' =>
+    | SubSpec_neq spec1 f2 T2 oppred2 rest2 sub' =>
       fun ops1 =>
-        Spec_ConsOp f2 T2 constraint2
+        Spec_ConsOp f2 T2 oppred2
                     (fun t2 pf2 =>
                        spec_subtract spec1 (rest2 t2 pf2) (sub' t2 pf2) ops1)
   end
@@ -317,7 +328,7 @@ Fixpoint spec_subtract_interp spec1 spec2 sub :
         return forall ops1,
                  Interpretation spec2 (spec_subtract spec1 spec2 sub ops1) with
     | SubSpec_base _ _ _ => fun _ => interp_id _
-    | SubSpec_eq f T constraint rest1 rest2 sub' =>
+    | SubSpec_eq f T oppred rest1 rest2 sub' =>
       fun ops1 =>
         mkInterp (fun ops_sub =>
                     ops_cons (ops_head ops1) (ops_proof ops1)
@@ -325,9 +336,9 @@ Fixpoint spec_subtract_interp spec1 spec2 sub :
                                          _ _ (sub' _ _) (ops_rest ops1))
                                       ops_sub))
                  (map_model (spec_subtract_interp _ _ _ (ops_rest ops1)))
-    | SubSpec_neq spec1 f2 T2 constraint2 rest2 sub' =>
+    | SubSpec_neq spec1 f2 T2 oppred2 rest2 sub' =>
       fun ops1 =>
-        interp_cons f2 T2 constraint2
+        interp_cons f2 T2 oppred2
                     (fun t2 pf2 =>
                        spec_subtract_interp _ _ (sub' t2 pf2) ops1)
   end.
@@ -367,3 +378,85 @@ substitution using an interpretation into spec2 *)
 Definition spec_subst_interp2 {spec1sub spec1 spec2} sub i :
   Interpretation spec2 (@spec_subst spec1sub spec1 spec2 sub i) :=
   interp_append1 _ _.
+
+
+(*** Types / Typeclasses Represented by Specs ***)
+
+(*
+Inductive IsoToSpec A (a:A) : Spec -> Prop :=
+| IsoToSpec_axioms axioms (e: A = Prop) :
+    conjoin_axioms axioms <-> rew e in a ->
+    IsoToSpec A a (Spec_Axioms axioms)
+| IsoToSpec_cons f T rest B (e: A = forall t:T, B t) :
+    (forall t:T, IsoToSpec (B t) ((rew [id] e in a) t) (rest t I)) ->
+    IsoToSpec A a (Spec_ConsOp f T None rest)
+| IsoToSpec_cons_pred f T (pred: T -> Prop) rest B
+                      (e: A = forall t pf, B t pf) :
+    (forall t pf, IsoToSpec (B t pf) ((rew [id] e in a) t pf) (rest t pf)) ->
+    IsoToSpec A a (Spec_ConsOp f T (Some pred) rest)
+.
+*)
+
+(* Captures that type function a is isomorphic to the models of spec *)
+Fixpoint IsoToSpec spec : forall {A}, A -> Prop :=
+  match spec with
+    | Spec_Axioms axioms =>
+      fun A a =>
+        exists e:(A = Prop),
+          rew [id] e in a <-> conjoin_axioms axioms
+    | Spec_ConsOp f T oppred rest =>
+      match oppred with
+        | None =>
+          fun A a =>
+            exists B (e: A = forall t:T, B t),
+              (forall t pf, IsoToSpec (rest t pf) ((rew [id] e in a) t))
+        | Some pred =>
+          fun A a =>
+            exists B (e: A = forall t pf, B t pf),
+              (forall t pf, IsoToSpec (rest t pf) ((rew [id] e in a) t pf))
+      end
+  end.
+
+Definition ex_proj1 {P1:Prop} {P2:P1 -> Prop} (pf: exists pf1:P1, P2 pf1) : P1 :=
+  match pf with
+    | ex_intro _ pf1 pf2 => pf1
+  end.
+
+Definition ex_proj2 {P1:Prop} {P2:P1 -> Prop} (pf: exists pf1:P1, P2 pf1) :
+  P2 (ex_proj1 pf):=
+  match pf with
+    | ex_intro _ pf1 pf2 => pf2
+  end.
+
+Definition ex_proj2_indep (A:Type) (P:Prop) (pf: exists a:A, P) : P :=
+  match pf with
+    | ex_intro _ _ pf2 => pf2
+  end.
+
+Definition ex_fmap {A} {P1 P2: A -> Prop} (f: forall a, P1 a -> P2 a)
+           (pf: exists a:A, P1 a) :
+  exists a:A, P2 a :=
+  match pf with
+    | ex_intro _ a pf2 =>
+      ex_intro _ a (f a pf2)
+  end.
+
+Fixpoint apply_to_ops spec :
+  forall {A} a, @IsoToSpec spec A a -> spec_ops spec -> Prop :=
+  match spec return forall A a, @IsoToSpec spec A a -> spec_ops spec -> Prop with
+    | Spec_Axioms axioms =>
+      fun A a iso ops =>
+        rew [id] (ex_proj1 iso) in a
+    | Spec_ConsOp 
+
+Class HasSpec {spec} T : Prop := spec_iso: IsoToSpec spec T.
+
+
+
+
+(*** Refinement ***)
+
+Record RefinementOf spec : Type :=
+  {ref_spec: Spec;
+   ref_interp: Interpretation spec ref_spec;
+   ref_others: list {spec' : Spec & Interpretation spec' ref_spec}}.
