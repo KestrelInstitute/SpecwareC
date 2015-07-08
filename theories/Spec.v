@@ -127,24 +127,66 @@ Notation "'Axioms f1 t1 ; .. ; fn tn'" :=
 *)
 
 (* Example 1:  op n:nat;  axiom gt1: n > 1 *)
-Program Definition spec_example_1 :=
+Definition spec_example_1 :=
   Spec_ConsOp "n" nat None
               (fun n _ => Spec_Axioms [("gt1"%string, n > 1)]).
 
 (* Example 2:  op n:nat := 2;  (no axioms) *)
-Program Definition spec_example_2 :=
+Definition spec_example_2 :=
   Spec_ConsOp "n" nat (Some (fun n => n = 2))
               (fun n _ => Spec_Axioms []).
 
 (* Example 3:  op T:Set := nat;  op n:T__def;  axiom gt1: n > 1 *)
-Program Definition spec_example_3 :=
+Definition spec_example_3 :=
   Spec_ConsOp
     "T" Set (Some (fun T => T = nat))
     (fun T T__pf =>
        Spec_ConsOp "n" (unfold_def T T__pf) None
                    (fun n _ => Spec_Axioms [("gt1"%string, n > 1)])).
 
-(* Example 4:  op  *)
+(* Example 4: Monoids *)
+Definition spec_example_monoid :=
+  Spec_ConsOp
+    "T" Set None
+    (fun T _ =>
+       Spec_ConsOp
+         "m_zero" T None
+         (fun m_zero _ =>
+            Spec_ConsOp
+              "m_plus" (T -> T -> T) None
+              (fun m_plus _ =>
+                 Spec_Axioms
+                   [("m_zero_left"%string, (forall x, m_plus m_zero x = x));
+                     ("m_zero_right"%string, (forall x, m_plus x m_zero = x));
+                     ("m_plus_assoc"%string,
+                      (forall x y z,
+                         m_plus x (m_plus y z) = m_plus (m_plus x y) z))]))).
+
+(* Example 5: Groups *)
+Definition spec_example_group :=
+  Spec_ConsOp
+    "T" Set None
+    (fun T _ =>
+       Spec_ConsOp
+         "g_zero" T None
+         (fun g_zero _ =>
+            Spec_ConsOp
+              "g_plus" (T -> T -> T) None
+              (fun g_plus _ =>
+                 Spec_ConsOp
+                   "g_inv" (T -> T) None
+                   (fun g_inv _ =>
+                        Spec_Axioms
+                          [("g_zero_left"%string, (forall x, g_plus g_zero x = x));
+                            ("g_zero_right"%string, (forall x, g_plus x g_zero = x));
+                            ("g_plus_assoc"%string,
+                             (forall x y z,
+                                g_plus x (g_plus y z) = g_plus (g_plus x y) z));
+                            ("g_inv_left"%string,
+                             (forall (x:T), g_plus (g_inv x) x = g_zero));
+                            ("g_inv_right"%string,
+                             (forall (x:T), g_plus x (g_inv x) = g_zero))
+    ])))).
 
 
 (*** Interpretations ***)
@@ -209,8 +251,18 @@ Program Definition interp_example_3_2 : Interpretation spec_example_3 spec_examp
   fun ops2 =>
     (ops_cons (oppred:= Some (fun T => T = nat)) nat eq_refl
               (ops_cons (oppred:=None) (ops_head ops2) I (tt : spec_ops (Spec_Axioms _)))) : spec_ops spec_example_3.
-Print interp_example_3_2.
-Check interp_example_3_2_obligation_1.
+
+(* Interpret monoids in groups *)
+(* FIXME: this sucks! *)
+(*
+Program Definition interp_example_monoid_group :
+  Interpretation spec_example_monoid spec_example_group :=
+  fun ops_g =>
+    (ops_cons
+       (oppred:=None) (ops_head ops_g) (ops_proof ops_g)
+       (ops_cons
+          (oppred:=None) ))
+*)
 
 
 (*** Appending Specs ***)
@@ -223,7 +275,6 @@ Fixpoint spec_append_axioms spec axioms2 : Spec :=
       Spec_ConsOp f T oppred (fun t pf => spec_append_axioms (rest t pf) axioms2)
   end.
 
-(* FIXME: get rid of the admit! *)
 Lemma conjoin_axioms_append1 axioms1 axioms2 :
   conjoin_axioms (axioms1 ++ axioms2) -> conjoin_axioms axioms1.
   induction axioms1.
@@ -237,7 +288,6 @@ Lemma conjoin_axioms_append1 axioms1 axioms2 :
   apply IHaxioms1; assumption.
 Qed.
 
-(* FIXME: get rid of the admit! *)
 Lemma conjoin_axioms_append2 axioms1 axioms2 :
   conjoin_axioms (axioms1 ++ axioms2) -> conjoin_axioms axioms2.
   induction axioms1; intros.
@@ -536,13 +586,23 @@ Fixpoint ApplyOps spec : forall A, (ForallOps spec A) ->
 (*** Types / Typeclasses Represented by Specs ***)
 
 (* Whether P is isomorphic to spec *)
-Class IsoToSpec {spec} (P: OpsPred spec) : Prop :=
+Class IsoToSpec spec (P: OpsPred spec) : Prop :=
   spec_iso: forall ops, ApplyOps spec _ P ops <-> spec_model spec ops.
+
+(* FIXME HERE: figure out how to define IsoInterpretations *)
+
+(* An IsoInterpretation is an interpretation between type classes / type
+functions that are isomorphic to specs *)
+Definition IsoInterpretation {spec1 P1} (iso1: IsoToSpec spec1 P1)
+           {spec2 P2} (iso2: IsoToSpec spec2 P2) : Type :=
+  { ops_f : _ &
+    ForallOps spec2 (fun ops2 => ApplyOps spec2 _ P2 ops2 ->
+                                 ApplyOps spec1 _ P1 (ops_f ops2)) }.
 
 (* Turn an interpretation from spec1 to spec2 into a function from a predicate
 isomorphic to spec2 to a predicate ismorphic to spec1 *)
-Definition mkIsoInterp {spec1 P1} {iso1: @IsoToSpec spec1 P1}
-           {spec2 P2} {iso2: @IsoToSpec spec2 P2}
+Definition toIsoInterp {spec1 P1} {iso1: IsoToSpec spec1 P1}
+           {spec2 P2} {iso2: IsoToSpec spec2 P2}
            (i: Interpretation spec1 spec2) :
   ForallOps spec2 (fun ops2 => ApplyOps spec2 _ P2 ops2 ->
                                ApplyOps spec1 _ P1 (map_ops i ops2)) :=
@@ -553,48 +613,75 @@ Definition mkIsoInterp {spec1 P1} {iso1: @IsoToSpec spec1 P1}
 
 (*** Examples of Isomorphic Interpretations ***)
 
-(* FIXME: automate more of the IsoToSpec proofs (for more axioms) *)
+(* Tactic to prove IsoToSpec instances *)
 Ltac prove_spec_iso :=
   intro ops;
   repeat (let t := fresh "t" in
           let pf := fresh "pf" in
           destruct ops as [t ops]; destruct ops as [pf ops];
           try destruct pf);
-  destruct ops; split; compute.
+  destruct ops; split; compute;
+  [ intro H; destruct H;
+    repeat (first [ assumption | split; [assumption|] | apply I])
+  | intro H; repeat (let Hi := fresh "H" in
+                     destruct H as [Hi H]); constructor; assumption ].
 
 (* Example 1:  op n:nat;  axiom gt1: n > 1 *)
 Class spec_example_1_class (n:nat) : Prop :=
   { example_1__gt1 : n > 1 }.
 
 (* Isomorphism between spec_example_1 and spec_example_1_class *)
-Instance iso_example_1 : @IsoToSpec spec_example_1 spec_example_1_class.
+Instance iso_example_1 : IsoToSpec spec_example_1 spec_example_1_class.
 prove_spec_iso.
-intro H; destruct H; assumption.
-intro; constructor; assumption.
 Qed.
 
 (* Example 2:  op n:nat := 2;  (no axioms) *)
 Class spec_example_2_class (n:nat) (n__pf: n = 2) : Prop := { }.
 
-Instance iso_example_2 : @IsoToSpec spec_example_2 spec_example_2_class.
+Instance iso_example_2 : IsoToSpec spec_example_2 spec_example_2_class.
 prove_spec_iso.
-intro H; destruct H; constructor.
-intro H; constructor.
 Qed.
 
 (* Example 3:  op T:Set := nat;  op n:T__def;  axiom gt1: n > 1 *)
 Class spec_example_3_class (T:Set) (T__pf: T = nat) (n: unfold_def T T__pf) : Prop :=
   { example_3__gt1 : n > 1 }.
 
-Instance iso_example_3 : @IsoToSpec spec_example_3 spec_example_3_class.
+Instance iso_example_3 : IsoToSpec spec_example_3 spec_example_3_class.
 prove_spec_iso.
-intro H; destruct H; assumption.
-intro; constructor; assumption.
 Qed.
 
 (* Example: lift the spec3 -> spec2 interpretation to an instance function *)
 Instance iso_interp_example_3_2 : forall `{spec_example_2_class}, spec_example_3_class _ _ _ :=
-  mkIsoInterp (interp_example_3_2).
+  toIsoInterp (interp_example_3_2).
+
+(* Example 4: monoids *)
+Class Monoid {T:Set} {m_zero:T} {m_plus:T -> T -> T} : Prop :=
+  {m_zero_left : (forall x, m_plus m_zero x = x);
+   m_zero_right : (forall x, m_plus x m_zero = x);
+   m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z)}.
+
+Instance iso_example_monoid : IsoToSpec spec_example_monoid (@Monoid).
+prove_spec_iso.
+Qed.
+
+(* Example 4: groups *)
+Class Group {T:Set} {g_zero:T} {g_plus:T -> T -> T} {g_inv:T -> T} : Prop :=
+  {g_zero_left : (forall x, g_plus g_zero x = x);
+   g_zero_right : (forall x, g_plus x g_zero = x);
+   g_plus_assoc : (forall x y z, g_plus x (g_plus y z) = g_plus (g_plus x y) z);
+   g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero);
+   g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero)}.
+
+Instance iso_example_group : IsoToSpec spec_example_group (@Group).
+prove_spec_iso.
+Qed.
+
+(* Interpretation from Monoid to Group type classes *)
+Program Instance group_as_monoid `{Group} :
+  Monoid (m_zero:=g_zero) (m_plus:=g_plus).
+Next Obligation. apply g_zero_left. Qed.
+Next Obligation. apply g_zero_right. Qed.
+Next Obligation. apply g_plus_assoc. Qed.
 
 
 (*** Refinement ***)
