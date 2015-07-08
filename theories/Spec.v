@@ -62,8 +62,12 @@ Definition unfold_def {T x} (t:T) (t__pf: t = x) : T := x.
 (*** Models ***)
 
 (* Helper for conjoining all the axioms in an axiom list *)
-Definition conjoin_axioms (axioms : list (Field * Prop)) : Prop :=
-  fold_right (fun f_P1 P2 => and (snd f_P1) P2) True axioms.
+Fixpoint conjoin_axioms (axioms : list (Field * Prop)) : Prop :=
+  match axioms with
+    | [] => True
+    | [p] => snd p
+    | p :: axioms' => snd p /\ conjoin_axioms axioms'
+  end.
 
 (* Build the type of the op of a spec *)
 Fixpoint spec_ops spec : Type :=
@@ -139,6 +143,8 @@ Program Definition spec_example_3 :=
     (fun T T__pf =>
        Spec_ConsOp "n" (unfold_def T T__pf) None
                    (fun n _ => Spec_Axioms [("gt1"%string, n > 1)])).
+
+(* Example 4:  op  *)
 
 
 (*** Interpretations ***)
@@ -220,11 +226,15 @@ Fixpoint spec_append_axioms spec axioms2 : Spec :=
 (* FIXME: get rid of the admit! *)
 Lemma conjoin_axioms_append1 axioms1 axioms2 :
   conjoin_axioms (axioms1 ++ axioms2) -> conjoin_axioms axioms1.
-  induction axioms1; intros.
-  constructor.
-  destruct H; split.
+  induction axioms1.
+  intros; constructor.
+  destruct axioms1.
+  destruct axioms2.
+  intros; assumption.
+  intro H; destruct H; assumption.
+  intro H; destruct H; split.
   assumption.
-  apply IHaxioms1. assumption.
+  apply IHaxioms1; assumption.
 Qed.
 
 (* FIXME: get rid of the admit! *)
@@ -232,7 +242,10 @@ Lemma conjoin_axioms_append2 axioms1 axioms2 :
   conjoin_axioms (axioms1 ++ axioms2) -> conjoin_axioms axioms2.
   induction axioms1; intros.
   assumption.
-  apply IHaxioms1. destruct H. assumption.
+  apply IHaxioms1.
+  destruct axioms1.
+  destruct axioms2; [ constructor | destruct H; assumption ].
+  destruct H; assumption.
 Qed.
 
 (* The interpretation from any spec to the result of appending axioms to it *)
@@ -422,6 +435,13 @@ Definition True_eq (pf1: True) : forall pf2, pf1 = pf2 :=
   match pf1 return forall pf2, pf1 = pf2 with
     | I => fun pf2 => match pf2 return I = pf2 with I => eq_refl end end.
 
+(* Helper: all elements of unit are equal *)
+Definition unit_eq (u1: unit) : forall u2, u1 = u2 :=
+  match u1 return forall u2, u1 = u2 with
+    | tt => fun u2 => match u2 return tt = u2 with tt => eq_refl end end.
+ 
+(* Replacing an op proof yields an equal proof (because a proof of True is a
+proof of True) *)
 Definition replace_op_proof_eq T (oppred: OpPred T) :
   forall t pf, pf = replace_op_proof T oppred t pf :=
   match oppred return forall t pf, pf = replace_op_proof T oppred t pf with
@@ -429,6 +449,7 @@ Definition replace_op_proof_eq T (oppred: OpPred T) :
     | Some pred => fun t pf => eq_refl
   end.
 
+(* Apply an op function to an op and its proof *)
 Definition ApplyOp T (oppred: OpPred T) :
   forall body_tp, ForallOp T oppred body_tp ->
                   forall t pf, body_tp t (replace_op_proof T oppred t pf) :=
@@ -468,26 +489,44 @@ Fixpoint LambdaOps spec : forall body_tp, (forall ops, body_tp ops) ->
   end.
 
 (* Replace all the trivial True proofs in a spec_ops with I *)
-(* FIXME: think about some way to make this work... *)
-(*
 Fixpoint replace_op_proofs spec : spec_ops spec -> spec_ops spec :=
   match spec with
     | Spec_Axioms _ => fun ops => ops
     | Spec_ConsOp f T oppred rest =>
-      fun ops => ops_cons (ops_head ops)
-                          (replace_op_proof T oppred _ (ops_proof ops))
-                          (replace_op_proofs (rest t _))
-*)
+      fun ops =>
+        ops_cons (ops_head ops)
+                 (replace_op_proof T oppred _ (ops_proof ops))
+                 (replace_op_proofs (rest _ _)
+                                    (rew [fun pf => spec_ops (rest _ pf)]
+                                         replace_op_proof_eq T oppred _ _
+                                         in (ops_rest ops)))
+  end.
+
+(* Replacing all the trivial proofs yields an equal ops list *)
+Lemma replace_op_proofs_eq spec ops : replace_op_proofs spec ops = ops.
+  induction spec.
+  reflexivity.
+  unfold replace_op_proofs; fold replace_op_proofs.
+  destruct oppred; unfold replace_op_proof; unfold replace_op_proof_eq;
+  rewrite H; unfold eq_rect;
+  destruct ops as [t ops]; destruct ops as [pf ops].
+  reflexivity.
+  destruct pf. reflexivity.
+Qed.
 
 (* Apply a Curried predicate to some candidate ops for spec *)
-Fixpoint ApplyOps_indep spec A : (ForallOps spec (fun _ => A)) -> spec_ops spec -> A :=
-  match spec return (ForallOps spec (fun _ => A)) -> spec_ops spec -> A with
-    | Spec_Axioms _ => fun body ops => body
+Fixpoint ApplyOps spec : forall A, (ForallOps spec A) ->
+                                   forall ops, A (replace_op_proofs spec ops) :=
+  match spec return forall A, (ForallOps spec A) ->
+                              forall ops, A (replace_op_proofs spec ops) with
+    | Spec_Axioms _ =>
+      fun A body ops => rew [A] (unit_eq _ _) in body
     | Spec_ConsOp f T oppred rest =>
-      fun body ops =>
-        ApplyOps_indep
+      fun A body ops =>
+        ApplyOps
           (rest (ops_head ops)
-                (replace_op_proof T oppred _ (ops_proof ops))) A
+                (replace_op_proof T oppred _ (ops_proof ops)))
+          (fun ops => A (ops_cons _ _ ops))
           (ApplyOp T oppred _ body (ops_head ops) (ops_proof ops))
           (rew [fun pf => spec_ops (rest _ pf)]
                replace_op_proof_eq T oppred _ _ in ops_rest ops)
@@ -498,43 +537,49 @@ Fixpoint ApplyOps_indep spec A : (ForallOps spec (fun _ => A)) -> spec_ops spec 
 
 (* Whether P is isomorphic to spec *)
 Class IsoToSpec {spec} (P: OpsPred spec) : Prop :=
-  spec_iso: forall ops, ApplyOps_indep spec _ P ops <-> spec_model spec ops.
+  spec_iso: forall ops, ApplyOps spec _ P ops <-> spec_model spec ops.
 
 (* Turn an interpretation from spec1 to spec2 into a function from a predicate
 isomorphic to spec2 to a predicate ismorphic to spec1 *)
 Definition mkIsoInterp {spec1 P1} {iso1: @IsoToSpec spec1 P1}
            {spec2 P2} {iso2: @IsoToSpec spec2 P2}
            (i: Interpretation spec1 spec2) :
-  ForallOps spec2 (fun ops2 => spec_model spec2 ops2 ->
-                               spec_model spec1 (map_ops i ops2)) :=
-  LambdaOps spec2 _ (fun ops2 model2 => map_model i ops2 model2).
-
-FIXME HERE: model2 above should be an element of type P2!
+  ForallOps spec2 (fun ops2 => ApplyOps spec2 _ P2 ops2 ->
+                               ApplyOps spec1 _ P1 (map_ops i ops2)) :=
+  LambdaOps spec2 _ (fun ops2 p2 =>
+                       proj2 (spec_iso (map_ops i ops2))
+                             (map_model i ops2 (proj1 (spec_iso ops2) p2))).
 
 
 (*** Examples of Isomorphic Interpretations ***)
+
+(* FIXME: automate more of the IsoToSpec proofs (for more axioms) *)
+Ltac prove_spec_iso :=
+  intro ops;
+  repeat (let t := fresh "t" in
+          let pf := fresh "pf" in
+          destruct ops as [t ops]; destruct ops as [pf ops];
+          try destruct pf);
+  destruct ops; split; compute.
 
 (* Example 1:  op n:nat;  axiom gt1: n > 1 *)
 Class spec_example_1_class (n:nat) : Prop :=
   { example_1__gt1 : n > 1 }.
 
+(* Isomorphism between spec_example_1 and spec_example_1_class *)
 Instance iso_example_1 : @IsoToSpec spec_example_1 spec_example_1_class.
-  intro ops; destruct ops as [n ops]; destruct ops as [pf_n ops]; destruct ops.
-  destruct pf_n.
-  compute.
-  split.
-  intro H; split; [ apply H | constructor ].
-  intro H; destruct H. constructor. apply H.
+prove_spec_iso.
+intro H; destruct H; assumption.
+intro; constructor; assumption.
 Qed.
 
 (* Example 2:  op n:nat := 2;  (no axioms) *)
 Class spec_example_2_class (n:nat) (n__pf: n = 2) : Prop := { }.
 
 Instance iso_example_2 : @IsoToSpec spec_example_2 spec_example_2_class.
-  intro ops; destruct ops as [n ops]; destruct ops as [n__pf ops]; destruct ops.
-  compute. split.
-  intro; constructor.
-  intro; constructor.
+prove_spec_iso.
+intro H; destruct H; constructor.
+intro H; constructor.
 Qed.
 
 (* Example 3:  op T:Set := nat;  op n:T__def;  axiom gt1: n > 1 *)
@@ -542,15 +587,12 @@ Class spec_example_3_class (T:Set) (T__pf: T = nat) (n: unfold_def T T__pf) : Pr
   { example_3__gt1 : n > 1 }.
 
 Instance iso_example_3 : @IsoToSpec spec_example_3 spec_example_3_class.
-  intro ops; destruct ops as [T ops]; destruct ops as [T__pf ops];
-  destruct ops as [n ops]; destruct ops as [n__pf ops]; destruct ops.
-  destruct n__pf.
-  compute. split.
-  intro H; split; [ destruct H; assumption | constructor ].
-  intro H; destruct H; constructor; assumption.
+prove_spec_iso.
+intro H; destruct H; assumption.
+intro; constructor; assumption.
 Qed.
 
-
+(* Example: lift the spec3 -> spec2 interpretation to an instance function *)
 Instance iso_interp_example_3_2 : forall `{spec_example_2_class}, spec_example_3_class _ _ _ :=
   mkIsoInterp (interp_example_3_2).
 
