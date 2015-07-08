@@ -55,12 +55,15 @@ rest of the spec, that can depend on any f equal to all the definitions *)
 (* Make the field argument be parsed by Coq as a string *)
 Arguments Spec_ConsOp f%string T oppred rest.
 
+(* Unfold a definition *)
+Definition unfold_def {T x} (t:T) (t__pf: t = x) : T := x.
+
 
 (*** Models ***)
 
 (* Helper for conjoining all the axioms in an axiom list *)
-Fixpoint conjoin_axioms (axioms : list (Field * Prop)) : Prop :=
-  fold_left (fun P1 f_P2 => and P1 (snd f_P2)) axioms True.
+Definition conjoin_axioms (axioms : list (Field * Prop)) : Prop :=
+  fold_right (fun f_P1 P2 => and (snd f_P1) P2) True axioms.
 
 (* Build the type of the op of a spec *)
 Fixpoint spec_ops spec : Type :=
@@ -120,26 +123,22 @@ Notation "'Axioms f1 t1 ; .. ; fn tn'" :=
 *)
 
 (* Example 1:  op n:nat;  axiom gt1: n > 1 *)
-Program Definition spec_repr_example_1 :=
+Program Definition spec_example_1 :=
   Spec_ConsOp "n" nat None
               (fun n _ => Spec_Axioms [("gt1"%string, n > 1)]).
 
 (* Example 2:  op n:nat := 2;  (no axioms) *)
-Program Definition spec_repr_example_2 :=
+Program Definition spec_example_2 :=
   Spec_ConsOp "n" nat (Some (fun n => n = 2))
               (fun n _ => Spec_Axioms []).
 
 (* Example 3:  op T:Set := nat;  op n:T__def;  axiom gt1: n > 1 *)
-Program Definition spec_repr_example_3 :=
+Program Definition spec_example_3 :=
   Spec_ConsOp
     "T" Set (Some (fun T => T = nat))
     (fun T T__pf =>
-       Spec_ConsOp "n" T None
-                   (fun n _ => Spec_Axioms [("gt1"%string, (rew T__pf in n) > 1)])).
-Next Obligation.
-exact x.
-Defined.
-Print spec_repr_example_3.
+       Spec_ConsOp "n" (unfold_def T T__pf) None
+                   (fun n _ => Spec_Axioms [("gt1"%string, n > 1)])).
 
 
 (*** Interpretations ***)
@@ -197,6 +196,17 @@ Definition interp_cons_r f T (oppred: OpPred T)
            (fun ops2 model2 => map_model (i (ops_head ops2) (ops_proof ops2)) _ model2).
 
 
+(*** Example Interpretations ***)
+
+(* Interpret T as nat and n as n for spec_example_3 into spec_example_2 *)
+Program Definition interp_example_3_2 : Interpretation spec_example_3 spec_example_2 :=
+  fun ops2 =>
+    (ops_cons (oppred:= Some (fun T => T = nat)) nat eq_refl
+              (ops_cons (oppred:=None) (ops_head ops2) I (tt : spec_ops (Spec_Axioms _)))) : spec_ops spec_example_3.
+Print interp_example_3_2.
+Check interp_example_3_2_obligation_1.
+
+
 (*** Appending Specs ***)
 
 (* Append axioms to the end of a spec *)
@@ -212,7 +222,9 @@ Lemma conjoin_axioms_append1 axioms1 axioms2 :
   conjoin_axioms (axioms1 ++ axioms2) -> conjoin_axioms axioms1.
   induction axioms1; intros.
   constructor.
-  admit.
+  destruct H; split.
+  assumption.
+  apply IHaxioms1. assumption.
 Qed.
 
 (* FIXME: get rid of the admit! *)
@@ -220,7 +232,7 @@ Lemma conjoin_axioms_append2 axioms1 axioms2 :
   conjoin_axioms (axioms1 ++ axioms2) -> conjoin_axioms axioms2.
   induction axioms1; intros.
   assumption.
-  admit.
+  apply IHaxioms1. destruct H. assumption.
 Qed.
 
 (* The interpretation from any spec to the result of appending axioms to it *)
@@ -394,11 +406,35 @@ Fixpoint ForallOps spec : (spec_ops spec -> Type) -> Type :=
            | None => fun F => forall t, F t I
            | Some pred => fun F => forall t pf, F t pf
          end)
-        (fun t pf => ForallOps (rest t pf) (fun ops => body (ops_cons t pf ops)))
+          (fun t pf =>
+             ForallOps (rest t pf) (fun ops => body (ops_cons t pf ops)))
   end.
 
 (* The type of Curried predicates on the ops of spec *)
 Definition OpsPred spec : Type := ForallOps spec (fun _ => Prop).
+
+(* Build a ForallOps function *)
+Fixpoint LambdaOps spec : forall body_tp, (forall ops, body_tp ops) ->
+                                          ForallOps spec body_tp :=
+  match spec return forall body_tp, (forall ops, body_tp ops) ->
+                                    ForallOps spec body_tp with
+    | Spec_Axioms _ =>
+      fun body_tp body => body tt
+    | Spec_ConsOp f T oppred rest =>
+      fun body_tp body =>
+        (match oppred return forall rest' body_tp',
+                               (forall t (pf:sats_op_pred oppred t),
+                                  ForallOps (rest' t pf)
+                                            (fun ops => body_tp' (ops_cons t pf ops))) ->
+                               ForallOps (Spec_ConsOp f T oppred rest') body_tp'
+         with
+           | None => fun rest' body_tp' body' => fun t => body' t I
+           | Some pred => fun rest' body_tp' body' => fun t pf => body' t pf
+         end)
+          rest body_tp
+          (fun t pf =>
+             LambdaOps (rest t pf) _ (fun ops => body (ops_cons t pf ops)))
+  end.
 
 (* Helper: all proofs of True are equal *)
 Definition True_eq (pf1: True) : forall pf2, pf1 = pf2 :=
@@ -437,6 +473,60 @@ Fixpoint apply_to_ops spec : forall ops body, ForallOps spec body -> body ops :=
 (* Whether P is isomorphic to spec *)
 Class IsoToSpec {spec} (P: OpsPred spec) : Prop :=
   spec_iso: forall ops, apply_to_ops spec ops _ P <-> spec_model spec ops.
+
+(* Turn an interpretation from spec1 to spec2 into a function from a predicate
+isomorphic to spec2 to a predicate ismorphic to spec1 *)
+Definition mkIsoInterp {spec1 P1} {iso1: @IsoToSpec spec1 P1}
+           {spec2 P2} {iso2: @IsoToSpec spec2 P2}
+           (i: Interpretation spec1 spec2) :
+  ForallOps spec2 (fun ops2 => spec_model spec2 ops2 ->
+                               spec_model spec1 (map_ops i ops2)) :=
+  LambdaOps spec2 _ (fun ops2 model2 => map_model i ops2 model2).
+
+
+(*** Examples of Isomorphic Interpretations ***)
+
+(* Example 1:  op n:nat;  axiom gt1: n > 1 *)
+Class spec_example_1_class (n:nat) : Prop :=
+  { example_1__gt1 : n > 1 }.
+
+Instance iso_example_1 : @IsoToSpec spec_example_1 spec_example_1_class.
+  intro ops; destruct ops as [n ops]; destruct ops as [pf_n ops]; destruct ops.
+  destruct pf_n.
+  compute.
+  split.
+  intro H; split; [ apply H | constructor ].
+  intro H; destruct H. constructor. apply H.
+Qed.
+
+(* Example 2:  op n:nat := 2;  (no axioms) *)
+Class spec_example_2_class (n:nat) (n__pf: n = 2) : Prop := { }.
+
+Instance iso_example_2 : @IsoToSpec spec_example_2 spec_example_2_class.
+  intro ops; destruct ops as [n ops]; destruct ops as [n__pf ops]; destruct ops.
+  compute. split.
+  intro; constructor.
+  intro; constructor.
+Qed.
+
+(* Example 3:  op T:Set := nat;  op n:T__def;  axiom gt1: n > 1 *)
+Class spec_example_3_class (T:Set) (T__pf: T = nat) (n: unfold_def T T__pf) : Prop :=
+  { example_3__gt1 : n > 1 }.
+
+Instance iso_example_3 : @IsoToSpec spec_example_3 spec_example_3_class.
+  intro ops; destruct ops as [T ops]; destruct ops as [T__pf ops];
+  destruct ops as [n ops]; destruct ops as [n__pf ops]; destruct ops.
+  destruct n__pf.
+  compute. split.
+  intro H; split; [ destruct H; assumption | constructor ].
+  intro H; destruct H; constructor; assumption.
+Qed.
+
+
+FIXME HERE: this needs work!
+
+Instance iso_interp_example_3_2 : forall `{spec_example_2_class}, spec_example_3_class _ _ _ :=
+  mkIsoInterp (interp_example_3_2).
 
 
 (*** Refinement ***)
