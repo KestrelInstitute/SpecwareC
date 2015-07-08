@@ -396,18 +396,70 @@ Definition spec_subst_interp2 {spec1sub spec1 spec2} sub i :
 
 (*** Types / Typeclasses Represented by Specs ***)
 
+Definition ForallOp_indep T (oppred: OpPred T) (A:Type) : Type :=
+  match oppred with
+    | None => forall (t:T), A
+    | Some pred => forall (t:T) (pf:oppred t), A
+  end.
+
+Definition LambdaOp_indep T oppred A :
+  (forall t, sats_op_pred oppred t -> A) -> ForallOp_indep T oppred A :=
+  match oppred return (forall t, sats_op_pred oppred t -> A) ->
+                      ForallOp_indep T oppred A with
+    | None => fun body t => body t I
+    | Some pred => fun body t pf => body t pf
+  end.
+
+Definition ApplyOp_indep T (oppred: OpPred T) A : (forall t, oppred t -> A) ->
+                                                  forall t, oppred t -> A :=
+  match oppred return (forall t, sats_op_pred oppred t -> A) ->
+                      forall t, sats_op_pred oppred t -> A with
+    | None => fun F t pf => F t I
+    | Some pred => fun F t pf => F t pf
+  end.
+
+Definition ForallOp T (oppred: OpPred T) : (forall t, oppred t -> Type) -> Type :=
+  match oppred return (forall t, sats_op_pred oppred t -> Type) -> Type with
+    | None => fun A => forall t, A t I 
+    | Some pred => fun A => forall t pf, A t pf
+  end.
+
+Definition LambdaOp T oppred : forall body_tp, (forall t pf, body_tp t pf) ->
+                                               ForallOp T oppred body_tp :=
+  match oppred return forall body_tp, (forall t pf, body_tp t pf) ->
+                                      ForallOp T oppred body_tp with
+    | None => fun body_tp body => fun t => body t I
+    | Some pred => fun body_tp body => fun t pf => body t pf
+  end.
+
+Definition ApplyOp_type T (oppred: OpPred T) : (forall t, oppred t -> Type) ->
+                                               forall t, oppred t -> Type :=
+  match oppred return (forall t, sats_op_pred oppred t -> Type) ->
+                      forall t, sats_op_pred oppred t -> Type with
+    | None => fun body_tp t pf => body_tp t I
+    | Some pred => fun body_tp t pf => body_tp t pf
+  end.
+
+Definition ApplyOp T (oppred: OpPred T) :
+  forall body_tp, (forall t pf, body_tp t pf) ->
+                  forall t pf,
+                    ApplyOp_type T oppred body_tp t pf :=
+  match oppred return forall body_tp, (forall t pf, body_tp t pf) ->
+                                      forall t pf,
+                                        ApplyOp_type T oppred body_tp t pf with
+    | None => fun body_tp body t pf => body t I
+    | Some pred => fun body_tp body t pf => body t pf
+  end.
+
 (* The type of Curried functions on the ops of spec *)
 Fixpoint ForallOps spec : (spec_ops spec -> Type) -> Type :=
   match spec with
-    | Spec_Axioms _ => fun body => body tt
+    | Spec_Axioms _ => fun body_tp => body_tp tt
     | Spec_ConsOp f T oppred rest =>
-      fun body =>
-        (match oppred return (forall t, sats_op_pred oppred t -> Type) -> Type with
-           | None => fun F => forall t, F t I
-           | Some pred => fun F => forall t pf, F t pf
-         end)
-          (fun t pf =>
-             ForallOps (rest t pf) (fun ops => body (ops_cons t pf ops)))
+      fun body_tp =>
+        ForallOp T oppred
+                 (fun t pf => ForallOps (rest t pf)
+                                        (fun ops => body_tp (ops_cons t pf ops)))
   end.
 
 (* The type of Curried predicates on the ops of spec *)
@@ -422,18 +474,30 @@ Fixpoint LambdaOps spec : forall body_tp, (forall ops, body_tp ops) ->
       fun body_tp body => body tt
     | Spec_ConsOp f T oppred rest =>
       fun body_tp body =>
-        (match oppred return forall rest' body_tp',
-                               (forall t (pf:sats_op_pred oppred t),
-                                  ForallOps (rest' t pf)
-                                            (fun ops => body_tp' (ops_cons t pf ops))) ->
-                               ForallOps (Spec_ConsOp f T oppred rest') body_tp'
-         with
-           | None => fun rest' body_tp' body' => fun t => body' t I
-           | Some pred => fun rest' body_tp' body' => fun t pf => body' t pf
-         end)
-          rest body_tp
-          (fun t pf =>
-             LambdaOps (rest t pf) _ (fun ops => body (ops_cons t pf ops)))
+        LambdaOp T oppred _
+                 (fun t pf =>
+                    LambdaOps (rest t pf) _ (fun ops => body (ops_cons t pf ops)))
+  end.
+
+(* Apply a Curried predicate to some candidate ops for spec *)
+Fixpoint ApplyOps_indep spec A : (ForallOps spec (fun _ => A)) -> spec_ops spec -> A :=
+  match spec return (ForallOps spec (fun _ => A)) -> spec_ops spec -> A with
+    | Spec_Axioms _ => fun body ops => body
+    | Spec_ConsOp f T oppred rest =>
+      fun body ops =>
+        FIXME HERE
+
+        ApplyOps_indep
+          (rest (ops_head ops) (ops_proof ops)) A
+          ((match oppred return ForallOp T oppred (fun _ _ => A) -> A with
+              | None => fun F => F (ops_head ops)
+              | Some pred => fun F => F (ops_head ops) (ops_proof ops)
+            end))
+
+        ApplyOp_indep T oppred _
+                     (fun t pf => ApplyOps_indep (rest t pf) A
+                                                 (fun ops => body (ops_cons t pf ops))
+                                                 (ops_rest ops))
   end.
 
 (* Helper: all proofs of True are equal *)
@@ -447,27 +511,27 @@ Definition tt_eq (u1: unit) : forall u2, u1 = u2 :=
     | tt => fun u2 => match u2 return tt = u2 with tt => eq_refl end end.
 
 (* Apply a Curried predicate to some candidate ops for spec *)
-Fixpoint apply_to_ops spec : forall ops body, ForallOps spec body -> body ops :=
-  match spec return forall ops body, ForallOps spec body -> body ops with
-    | Spec_Axioms _ => fun ops body F => rew [body] (tt_eq _ _) in F
+Fixpoint apply_to_ops spec : forall body_tp, ForallOps spec body_tp ->
+                                             forall ops, body_tp ops :=
+  match spec return forall body_tp, ForallOps spec body_tp ->
+                                    forall ops, body_tp ops with
+    | Spec_Axioms _ =>
+      fun body_tp F ops => rew [body_tp] (tt_eq _ _) in F
     | Spec_ConsOp f T oppred rest =>
-      fun ops =>
-        match ops return forall body, ForallOps (Spec_ConsOp f T oppred rest) body -> body ops with
-          | existT _ t (existT _ pf orest) =>
-            fun body F =>
-              apply_to_ops
-                (rest t pf) orest
-                _
-                ((match oppred
-                        return forall t pf rest' body',
-                                 ForallOps (Spec_ConsOp f T oppred rest') body' ->
-                                 ForallOps (rest' t pf)
-                                           (fun ops => body' (ops_cons t pf ops)) with
-                    | None => fun t pf rest' body' F => rew (True_eq _ _) in (F t)
-                    | Some pred => fun t pf rest' body' F => F t pf
-                  end) t pf rest
-                       body F)
-        end
+      fun body_tp F ops =>
+        apply_to_ops
+          (rest (ops_head ops) (ops_proof ops))
+          _
+          ((match oppred return forall rest' body_tp',
+                                  ForallOps (Spec_ConsOp f T oppred rest') body_tp' ->
+                                  (forall t (pf:sats_op_pred oppred t),
+                                     ForallOps (rest' t pf)
+                                               (fun ops => body_tp' (ops_cons t pf ops)))
+            with
+              | None => fun rest' body_tp' body' => fun t pf => body' t
+              | Some pred => fun rest' body_tp' body' => fun t pf => body' t pf
+            end) rest body_tp F (ops_head ops) (ops_proof ops))
+          (ops_rest ops)
   end.
 
 (* Whether P is isomorphic to spec *)
