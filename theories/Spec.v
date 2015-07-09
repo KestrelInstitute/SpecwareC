@@ -594,21 +594,34 @@ Class IsoToSpec spec (P: OpsPred spec) : Prop :=
 (* An IsoInterpretation is an interpretation between type classes / type
 functions that are isomorphic to specs *)
 Definition IsoInterpretation {spec1 P1} (iso1: IsoToSpec spec1 P1)
-           {spec2 P2} (iso2: IsoToSpec spec2 P2) : Type :=
-  { ops_f : _ &
-    ForallOps spec2 (fun ops2 => ApplyOps spec2 _ P2 ops2 ->
-                                 ApplyOps spec1 _ P1 (ops_f ops2)) }.
+           {spec2 P2} (iso2: IsoToSpec spec2 P2)
+           (ops_f: spec_ops spec2 -> spec_ops spec1) : Type :=
+  ForallOps spec2 (fun ops2 => ApplyOps spec2 _ P2 ops2 ->
+                               ApplyOps spec1 _ P1 (ops_f ops2)).
 
 (* Turn an interpretation from spec1 to spec2 into a function from a predicate
 isomorphic to spec2 to a predicate ismorphic to spec1 *)
 Definition toIsoInterp {spec1 P1} {iso1: IsoToSpec spec1 P1}
            {spec2 P2} {iso2: IsoToSpec spec2 P2}
            (i: Interpretation spec1 spec2) :
-  ForallOps spec2 (fun ops2 => ApplyOps spec2 _ P2 ops2 ->
-                               ApplyOps spec1 _ P1 (map_ops i ops2)) :=
+  IsoInterpretation iso1 iso2 (map_ops i) :=
   LambdaOps spec2 _ (fun ops2 p2 =>
                        proj2 (spec_iso (map_ops i ops2))
                              (map_model i ops2 (proj1 (spec_iso ops2) p2))).
+
+(* Turn an IsoInterpretation into an Interpretation *)
+Definition fromIsoInterp {spec1 P1} {iso1: IsoToSpec spec1 P1}
+           {spec2 P2} {iso2: IsoToSpec spec2 P2} {ops_f}
+           (i: IsoInterpretation iso1 iso2 ops_f) :
+  Interpretation spec1 spec2 :=
+  mkInterp ops_f (fun ops2 model2 =>
+                    proj1 (spec_iso (ops_f ops2))
+                          (rew [fun ops => ApplyOps spec1 _ P1 (ops_f ops)]
+                               (replace_op_proofs_eq _ _)
+                            in ApplyOps _ _ i ops2
+                                        (rew [ApplyOps spec2 _ P2]
+                                             (eq_sym (replace_op_proofs_eq _ _))
+                                          in proj2 (spec_iso ops2) model2))).
 
 
 (*** Examples of Isomorphic Interpretations ***)
@@ -682,6 +695,15 @@ Program Instance group_as_monoid `{Group} :
 Next Obligation. apply g_zero_left. Qed.
 Next Obligation. apply g_zero_right. Qed.
 Next Obligation. apply g_plus_assoc. Qed.
+
+(*
+FIXME HERE: the below loops forever!
+
+Check (@group_as_monoid : IsoInterpretation iso_example_monoid iso_example_group _).
+Check (fromIsoInterp (iso1:=iso_example_monoid)
+                     (iso2:=iso_example_group)
+                     (@group_as_monoid)).
+*)
 
 
 (*** Refinement ***)
