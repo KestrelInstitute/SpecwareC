@@ -1,4 +1,39 @@
 
+
+Module Monoid.
+Section Monoid.
+
+Class T__c : Type := T : Set.
+Context {T__p : T__c}.
+
+Class m_zero__c : Type := m_zero : T.
+Context {m_zero__p : m_zero__c}.
+
+Class m_plus__c : Type := m_plus : T -> T -> T.
+Context {m_plus__p : m_plus__c}.
+
+Definition m_zero_left__tp : Prop :=
+  forall x, m_plus m_zero x = x.
+
+Definition m_zero_right__tp : Prop :=
+  forall x, m_plus x m_zero = x.
+
+Definition m_plus_assoc__tp : Prop :=
+  forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z.
+
+Class Monoid : Prop :=
+  { m_zero_left: m_zero_left__tp;
+    m_zero_right: m_zero_right__tp;
+    m_plus_assoc: m_plus_assoc__tp }.
+
+End Monoid.
+End Monoid.
+
+Set Printing All.
+Print Monoid.Monoid.
+
+
+
 Require Import Coq.Program.Tactics.
 Import EqNotations.
 
