@@ -679,6 +679,32 @@ let lookup_spec locref = fst (lookup_spec_and_globref locref)
 
 
 (***
+ *** Representing Specs as Inductive Objects
+ ***)
+
+(* FIXME HERE: maybe tp should just be f__class and oppred should be similar? *)
+let repr_cons_op loc f tp oppred rest =
+  mkAppC (mk_reference ["Specware"] (Id.of_string "Spec_ConsOp"),
+          [CPrim (loc, String (Id.to_string f)); tp;
+           (match oppred with
+            | None -> mk_reference ["Coq"; "Init"; "Datatypes"]
+                                   (Id.of_string "None")
+            | Some pred ->
+               mkAppC (mk_reference ["Coq"; "Init"; "Datatypes"]
+                                    (Id.of_string "Some"),
+                       [pred]));
+           (mkCLambdaN loc
+                       [LocalRawAssum ([loc, Name f], Default Explicit, tp);
+                        LocalRawAssum ([loc, Name (field_proof_id f)], Default Explicit,
+                                       CHole (loc, None, IntroAnonymous, None))]
+                       rest)
+          ])
+
+(* Build a term of thype Spec that represents a spec *)
+let build_spec_repr spec = ()
+
+
+(***
  *** Building Up the Current Spec
  ***)
 
@@ -766,9 +792,10 @@ let add_spec_field axiom_p field_name tp pred_opt =
        in
        { spec with spec_ops = (f,pred_opt)::spec.spec_ops })
 
-(* Complete the current spec, by creating its axiom type-class and registering
-   it in the global spec table. NOTE: this needs to be called after the spec's
-   section is closed, but before its module is closed. *)
+(* Complete the current spec, by creating its axiom type-class, registering it
+   in the global spec table, and creating representation as a Spec object. NOTE:
+   this needs to be called after the spec's section is closed, but before its
+   module is closed. *)
 let complete_spec loc =
   let spec = get_current_spec loc in
   (* First, build the axioms into fields for the axiom type-class *)
@@ -800,7 +827,10 @@ let complete_spec loc =
   let spec_globref =
     global_modpath (Nametab.locate (qualid_of_ident spec.spec_name))
   in
-  register_spec spec_globref spec
+  let _ = register_spec spec_globref spec in
+  (* FIXME HERE: build the Spec object for the spec *)
+  (* FIXME HERE: build the IsoToSpec instance with the prove_spec_iso tactic *)
+  ()
 
 (* Start the interactive definition of a new spec *)
 let begin_new_spec spec_lid =
@@ -875,7 +905,7 @@ VERNAC COMMAND EXTEND Spec
                            (Some (mk_equality (mk_var (dummy_loc,id)) body))) ]
 
   (* Add a defined op without a type *)
-  (* FIXME HERE: figure out how to handle this... *)
+  (* FIXME: figure out how to handle defs with no type... *)
 (*
   | [ "Spec" "Definition" ident(id) ":=" constr(body) ]
     => [ (Vernacexpr.VtSideff [id], Vernacexpr.VtLater) ]
