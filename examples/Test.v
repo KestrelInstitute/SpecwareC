@@ -1,4 +1,7 @@
 
+Add LoadPath "../theories" as Specware.
+Require Import Specware.Spec.
+Add ML Path "../src".
 Declare ML Module "specware".
 
 Spec Monoid.
