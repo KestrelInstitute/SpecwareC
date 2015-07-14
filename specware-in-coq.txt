@@ -1,0 +1,329 @@
+
+Re-Hosting Specware In Coq
+
+The goal of this work is to capture the "Specware approach" to program synthesis
+in the Coq proof assistant. This will not only ease interoperability with other
+teams who are performing verification using Coq, but will also, as a broader
+impact, help to disseminate the ideas about program synthesis developed at
+Kestrel.
+
+The starting point for our approach is Spitters and van der Weegen, "Type
+Classes for Mathematics in Type Theory", which has been embraced by the Coq
+community to the point that one of the features of type classes in Coq,
+operational type classes, was implemented in order to support this paper. This
+paper presents an approach to formalizing mathematical structure types, such as
+monoids, groups, etc., in Coq. Although the straightforward way to represent
+such structure types is as dependent record types, the paper argues that this
+approach, which it calls "bundling", leads to problems when one tries to define
+a library of sub-classes and super-classes of such structure types;
+specifically, it is especially cumbersome to formalize sharing between structure
+types. For example, the paper considers reflexive relations, which can be
+formalized in a "bundled" way as follows:
+
+Class ReflexiveRelation :=
+{
+ rr_T : Set;
+ rr_R: rr_T -> rr_T -> Prop;
+ rr_reflexive: forall x, rr_R x x
+}.
+
+Intuitively, this says that a reflexive relation is a bundle of a carrier type
+T, a binary relation R over T, and a proof that R is reflexive. The difficulty
+comes when we try to define equivalence relations as a sub-class of reflexive
+relations, symmetric relations, and transitive relations. In order to do this in
+a bundled fashion, proofs are required that the T and R of each of the
+super-classes are equal. This would look something like the following:
+
+Class EquivalenceRelation :=
+{
+ er_T : Set;
+ er_R: er_T -> er_T -> Prop;
+ er_refl: ReflexiveRelation;
+ er_refl_eq_T: rr_T = er_T;
+ er_refl_eq_R: (eq_rect _ (fun (T:Set) => T -> T -> Prop) rr_R _  er_refl_eq_T) = er_R;
+ er_sym: SymmetricRelation;
+ er_sym_eq_T: sr_T = er_T;
+ er_sym_eq_R: (eq_rect _ (fun (T:Set) => T -> T -> Prop) sr_R _  er_sym_eq_T) = er_R;
+ er_trans: TransitiveRelation;
+ er_trans_eq_T: tr_T = er_T;
+ er_trans_eq_R: (eq_rect _ (fun (T:Set) => T -> T -> Prop) tr_R _  er_sym_eq_T) = er_R
+}.
+
+Note that, since the type of each R depends on the associated carrier type T,
+the proofs of equality for R require explicit casts, which are written using the
+equality elimination principle eq_rect. This already demonstrates how cumbersome
+a bundled representation can be. As the height of the class hierarchy grows, the
+bundled representation only becomes more complex, with more equalities required
+every time there is any sharing.
+
+Instead of using a bundled approach, Spitters and van der Weegen suggest an
+alternative that views mathematical structures as predicates. Their approach
+separates each such structure into the predicative and the impredicative
+portions of the structure, where the former includes the types and the
+operations of the structure while the latter includes the properties of the
+structure. Each type or operation then becomes its own type class, with a final
+type class containing all the properties of these types and operations. (An
+example follows momentarily.)
+
+This approach is, in fact, very similar to the Specware notion of a "spec",
+which is simply a collection of types and operations on those types along with a
+set of axioms about these types and operations. Thus, we are designing a Coq
+plugin that allows the user to enter a sequence of types, operations, and axioms
+and converts them into type classes using the Spitters and van der Weegen
+method. For example, one might define the ReflexiveRelation spec using our
+Specware plugin as follows:
+
+
+Spec ReflexiveRelation.
+
+Spec Variable T : Set.
+Spec Variable R : T -> T -> Prop.
+Spec Axioms reflexive : forall x, R x x.
+
+Spec End ReflexiveRelation.
+
+
+The Specware plugin translates a spec declaration such as the above into a
+series of type class definitions, one for each "Variable" declaration (which, in
+Coq, can define either a type or an operation) and a final class that collects
+all the "Axiom" declaration. In Specware parlance, the "Variable" declarations
+are called "ops" (short for "operation"), while the "Axiom" declarations are
+called axioms. For instance, the above example is translated (modulo some
+details that are not essential for this discussion) to the following:
+
+
+Module ReflexiveRelation.
+
+Class T__class := T : Set.
+Class R__class {T__param:T__class} := R : T -> T -> Prop.
+
+Class ReflexiveRelation {T__param:T__class} {R__param:R__class} : Prop :=
+{
+ reflexive : forall x, R x x
+}.
+
+End ReflexiveRelation.
+
+
+This creates a new Coq module, ReflexiveRelation, to use as a new namespace, so
+that other specs can also contain, for instance, "T" and "R". This Coq module
+contains a type class T__class with a single accessor, T, which is a type. It
+also contains a type class R__class, which is a dependent type class, meaning
+here that R__class is a function from its dependencies to a type. Specifically,
+R__class takes as argument an element T__param of the class T__class, which
+gives the carrier type T. For any given T__param, the R__class class contains a
+single accessor, R, that gives a binary relation over the T field of T__param.
+Finally, the module contains the ReflexiveRelation type class, which defines a
+predicate on elements T__param of T__class and R__param of R__class. Predicates
+in Coq are represented as functions that return propositions, or elements of
+type Prop. This predicate contains a field for each axiom of the spec; here
+there is just the one, reflexive, stating that R is reflexive.
+
+To prove a theorem about reflexive relations, one uses Coq's back tick notation
+to add an instance of the ReflexiveRelation type class to the current scope. For
+instance, the following theorem (proof omitted) states that any reflexive
+relation has an infinite chain starting at any element x:
+
+
+Theorem Reflexive_Infinite_Chain `{ReflexiveRelation} :
+        forall x:T, exists (chain: nat -> T), forall n, R (chain n) (chain (S n)).
+
+ 
+The benefit of the Spitters and van der Weegen method of formalizing structure
+types, over the bundling approach, is that this approach makes it much easier to
+define sub-structures via inheritance. For instance, our plugin allows
+equivalence relations to then be defined as follows, assuming that the
+SymmetricRelation and TransitiveRelation specs have already been defined in a
+manner similar to ReflexiveRelation:
+
+
+Spec EquivalenceRelation.
+
+Spec Import ReflexiveRelation.
+Spec Import SymmetricRelation.
+Spec Import TransitiveRelation.
+
+Spec End EquivalenceRelation.
+
+
+The Specware plugin translates this syntax into the following (again ignoring
+inessential details):
+
+
+Module EquivalenceRelation.
+
+Class T__class := T : Set.
+Class R__class {T__param:T__class} := R : T -> T -> Prop.
+
+Class EquivalenceRelation {T__param:T__class} {R__param:R__class} : Prop :=
+{
+ Spec__import1 :> ReflexiveRelation (T__param:=T__param) (R__param:=R__param);
+ Spec__import2 :> SymmetricRelation (T__param:=T__param) (R__param:=R__param);
+ Spec__import3 :> TransitiveRelation (T__param:=T__param) (R__param:=R__param)
+}.
+
+End EquivalenceRelation.
+
+
+Each Spec Import adds all the ops of the named spec to the current spec, merging
+any that have the same name. Thus, for instance, T__class and R__class are
+defined only once, even though they occur in all three imported specs. (It is an
+error if the types of these ops are not the same.) Each Spec Import also adds a
+single axiom to the current spec, stating that the given ops satisfy the
+predicate of the imported spec. This is stated as the application of the spec's
+predicate to the ops. (The notation "ReflexiveRelation (T__param:=T__param)
+(R__param:=R__param)" indicates the application of ReflexiveRelation to named
+optional arguments T__param and R__param.) Thus, the EquivalenceRelation type
+class contains three fields, stating that its arguments T__param and R__param
+satisfy the ReflexiveRelation, SymmetricRelation, and TransitiveRelation
+predicates. These fields are declared using ":>" in place of the standard colon,
+telling Coq to view the EquivalenceRelation type class as a sub-class of the
+class on the right-hand side. This means that a user can use any axiom in, for
+instance, the ReflexiveRelation class, as well as any theorem proved about
+reflexive relations, in the context of a proof or definition about equivalence
+relations, and Coq will automatically infer the ReflexiveRelation instance.
+
+
+The Specware notion of program refinement can be directly mapped to this
+setting, as parameterized type class instances. For example, we can refine the
+EquivalenceRelation spec to use a specific equivalence relation, such as the
+reflexive-symmetric-transitive closure of an arbitrary relation. To do this, we
+might first proceed by defining a spec containing a type T and a relation R that
+have no restrictions on them, as follows:
+
+
+Spec ArbitraryRelation.
+Spec Variable T : Set.
+Spec Variable R : T -> T -> Prop.
+End Spec ArbitraryRelation.
+
+
+We could then state that EquivalenceRelation can be refined to ArbitraryRelation
+by substituting the reflexive-symmetric-transitive closure of the R in
+ArbitraryRelation for the R in EquivalenceRelation, as follows, assuming we have
+already defined rst_clos as the reflexive-symmetric-transitive closure operator:
+
+
+Spec Interpretation equiv_to_arbitrary :
+     EquivalenceRelation -> ArbitraryRelation
+     { R |-> rst_clos R }.
+
+
+This translates to the following Coq statement:
+
+
+Program Instance equiv_to_arbitrary `{ArbitraryRelation} : EquivalenceRelation
+(T__param:=T__param) (R__param:= rst_clos ArbitraryRelation.R).
+
+
+This pops up proof goals to the user, requiring proofs that (rst_clos R) is
+reflexive, symmetric, and transitive; i.e., requiring that (rst_clos R)
+satisfies the axioms of EquivalenceRelation. Once these goals are proven, the
+instance statement tells Coq to treat ArbitraryRelation as a sub-class of
+EquivalenceRelation, using the equiv_to_arbitrary function to coerce from the
+former to the latter when necessary.
+
+A key feature of the Specware plugin for Coq, however, is that it also provides
+capabilities for reflection, by defining an inductive representation of each
+spec. This is the key feature that allows the Specware transformations, such as
+finalize co-type and finalize inductive type, to be implemented in the Coq
+system, because it gives these transformations a representation over which to
+operate. This inductive representaton of specs is defined as follows:
+
+
+Inductive Spec : Type :=
+| Spec_Axioms (axioms : list (string * Prop))
+| Spec_ConsOp (f:string) (T : Type) (oppred: option (T -> Prop))
+              (rest : forall t, sats_op_pred oppred t -> Spec)
+.
+
+
+This defines the Spec type using two constructors, Spec_Axioms, which takes a
+list of axiom names and their associated propositions, and Spec_ConsOp, which
+takes an op named f of type T with optional subtype predicate oppred on T, and
+adds this op to the front of an existing spec rest. Note that the existance of
+the subtype predicate oppred means that our approach is actually a
+generalization of the Spitters and van der Weegen method, as it allows optional
+predicate subtypes to be combined with each op. We defer discussion of these
+predicate subtypes to a later time. The spec type is a higher-order
+representation, meaning that rest can refer to the value of op f by defining it
+as a function that takes in the value of f as an argument, along with a proof
+that f satisfies oppred. This last concept is defined by the following auxiliary
+function, which maps Some pred to pred and None to the trivial true predicate:
+
+
+Definition sats_op_pred {T} (p: option (T -> Prop)) : T -> Prop :=
+  match p with
+    | Some pred => pred
+    | None => fun _ => True
+  end.
+
+
+The Specware module for Coq automatically generates an element of Spec for each
+spec that is defined. (This was one of te "inessential details" above.) For
+instance, the ReflexiveRelation spec given above also generates the following
+definition:
+
+
+Spec_ConsOp "T" Set None (fun T__param _ =>
+  Spec_ConsOp "R" (T -> T -> Prop) None (fun R__param _ =>
+    Spec_Axioms [("reflexive", forall x, R x x)]
+  )
+)
+
+
+In order to define the Specware notion of refinement over Spec objects, we first
+define the set of ops for a spec by the following recursive definition:
+
+
+Fixpoint spec_ops spec : Type :=
+  match spec with
+    | Spec_Axioms axioms => unit
+    | Spec_ConsOp f T oppred rest =>
+      { t : T & {pf: oppred t & spec_ops (rest t pf)}}
+  end.
+
+
+This states that the type (spec_ops spec) is a nested sequence of dependent
+pairs, containing a value for each op defined in spec along with a proof that
+each op satisfies its subtype predicate. We also define the predicate for when a
+set of op values satisfies a spec, as follows, given the function conjoin_axioms
+(omitted here) to conjoin all the propositions in an axiom list:
+
+
+Fixpoint satisfies_spec spec : spec_ops spec -> Prop :=
+  match spec return spec_ops spec -> Prop with
+    | Spec_Axioms axioms =>
+      fun _ => conjoin_axioms axioms
+    | Spec_ConsOp f T oppred rest =>
+      fun ops =>
+        satisfies_spec (rest (projT1 ops) (projT1 (projT2 ops)))
+                   (projT2 (projT2 ops))
+  end.
+
+
+This states that any set ops of ops values satisfies spec iff substituting each
+op value into the axioms of the spec yields a provable proposition. Finally, we
+define an interpretation from spec1 to spec2 as an element of the following
+type:
+
+
+Definition Interpretation spec1 spec2 :=
+  { ops_f: spec_ops spec2 -> spec_ops spec1 |
+    forall ops, satisfies_spec spec2 ops -> satisfies_spec spec1 (ops_f ops) }.
+
+
+This states that an interpretation from spec1 to spec2 is a pair of a function,
+ops_f, from the ops of spec2 to those of spec1, along with a proof that any ops
+for spec2 that satisfy the spec2 predicate can be mapped by ops_f to a set of
+ops for spec1 that satisfy the spec1 predicate. Using this definition, program
+synthesis for a given specification spec can be defined as the problem of
+finding an interpretation whose co-domain is the object spec.
+
+
+Current Progress: As of the writing of this document, the Specware plugin is
+about halfway implemented. The basic translation of specs into module
+definitions as described above is implemented and tested, while the Spec Import
+statements and the capabilities for reflection are only partly complete. The
+remaining work to be done will then be to port the existing Specware
+transformations into Coq tactics.
