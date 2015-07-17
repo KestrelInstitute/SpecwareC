@@ -55,6 +55,12 @@ rest of the spec, that can depend on any f equal to all the definitions *)
 (* Make the field argument be parsed by Coq as a string *)
 Arguments Spec_ConsOp f%string T oppred rest.
 
+(* Helper for building axiom pairs *)
+Definition ax_pair (f:Field) (P:Prop) : (Field * Prop) :=
+  pair f P.
+
+Arguments ax_pair f%string P.
+
 (* Unfold a definition *)
 Definition unfold_def {T x} (t:T) (t__pf: t = x) : T := x.
 
@@ -129,7 +135,7 @@ Notation "'Axioms f1 t1 ; .. ; fn tn'" :=
 (* Example 1:  op n:nat;  axiom gt1: n > 1 *)
 Definition spec_example_1 :=
   Spec_ConsOp "n" nat None
-              (fun n _ => Spec_Axioms [("gt1"%string, n > 1)]).
+              (fun n _ => Spec_Axioms [ax_pair "gt1" (n > 1)]).
 
 (* Example 2:  op n:nat := 2;  (no axioms) *)
 Definition spec_example_2 :=
@@ -142,7 +148,7 @@ Definition spec_example_3 :=
     "T" Set (Some (fun T => T = nat))
     (fun T T__pf =>
        Spec_ConsOp "n" (unfold_def T T__pf) None
-                   (fun n _ => Spec_Axioms [("gt1"%string, n > 1)])).
+                   (fun n _ => Spec_Axioms [ax_pair "gt1" (n > 1)])).
 
 (* Example 4: Monoids *)
 Definition spec_example_monoid :=
@@ -156,11 +162,11 @@ Definition spec_example_monoid :=
               "m_plus" (T -> T -> T) None
               (fun m_plus _ =>
                  Spec_Axioms
-                   [("m_zero_left"%string, (forall x, m_plus m_zero x = x));
-                     ("m_zero_right"%string, (forall x, m_plus x m_zero = x));
-                     ("m_plus_assoc"%string,
-                      (forall x y z,
-                         m_plus x (m_plus y z) = m_plus (m_plus x y) z))]))).
+                   [ax_pair "m_zero_left" (forall x, m_plus m_zero x = x);
+                     ax_pair "m_zero_right" (forall x, m_plus x m_zero = x);
+                     ax_pair "m_plus_assoc"
+                             (forall x y z,
+                                m_plus x (m_plus y z) = m_plus (m_plus x y) z)]))).
 
 (* Example 5: Groups *)
 Definition spec_example_group :=
@@ -177,15 +183,15 @@ Definition spec_example_group :=
                    "g_inv" (T -> T) None
                    (fun g_inv _ =>
                         Spec_Axioms
-                          [("g_zero_left"%string, (forall x, g_plus g_zero x = x));
-                            ("g_zero_right"%string, (forall x, g_plus x g_zero = x));
-                            ("g_plus_assoc"%string,
-                             (forall x y z,
-                                g_plus x (g_plus y z) = g_plus (g_plus x y) z));
-                            ("g_inv_left"%string,
-                             (forall (x:T), g_plus (g_inv x) x = g_zero));
-                            ("g_inv_right"%string,
-                             (forall (x:T), g_plus x (g_inv x) = g_zero))
+                          [ax_pair "g_zero_left" (forall x, g_plus g_zero x = x);
+                            ax_pair "g_zero_right" (forall x, g_plus x g_zero = x);
+                            ax_pair "g_plus_assoc"
+                                    (forall x y z,
+                                       g_plus x (g_plus y z) = g_plus (g_plus x y) z);
+                            ax_pair "g_inv_left"
+                                    (forall (x:T), g_plus (g_inv x) x = g_zero);
+                            ax_pair "g_inv_right"
+                                    (forall (x:T), g_plus x (g_inv x) = g_zero)
     ])))).
 
 

@@ -267,6 +267,15 @@ let mk_equality t1 t2 =
 let mk_ident_equality id1 id2 =
   mk_equality (mk_var id1) (mk_var id2)
 
+(* Build the expression t1::t2::...::tn::nil *)
+let mk_list loc ts =
+  List.fold_right
+    (fun t rest ->
+     mkAppC (mk_reference ["Coq"; "Init"; "Datatypes"] (Id.of_string "cons"),
+             [t; rest]))
+    ts
+    (mk_reference ["Coq"; "Init"; "Datatypes"] (Id.of_string "nil"))
+
 (* Make (the syntactic representation of) a single record field,
    filling in default (None) values for all the extra information such
    as notations, priority, etc. The coercion_p flag indicates whether
@@ -612,6 +621,12 @@ let field_inst_id f = add_suffix f "inst"
 (* The axiom typeclass field pointing to an instance of this axiom *)
 let field_axelem_id f = add_suffix f "axiom"
 
+(* The name of the Spec representation of a spec named s_id *)
+let spec_repr_id s_id = add_suffix s_id "repr"
+
+(* The name of the IsoToSpec proof for a spec named s_id *)
+let spec_iso_id s_id = add_suffix s_id "iso"
+
 (* The variable name for the implicit spec argument of a morphism instance *)
 let morph_spec_arg_id = Id.of_string "Spec"
 
@@ -626,8 +641,8 @@ stored in reverse order, for efficiency of adding new ones. *)
 type spec = {
   spec_name : Id.t;
   spec_path : DirPath.t;
-  spec_ops : (Id.t * constr_expr option) list;
-  spec_axioms : Id.t list
+  spec_ops : (Id.t * constr_expr * constr_expr option) list;
+  spec_axioms : (Id.t * constr_expr) list
 }
 
 (* Create an empty spec with the given name *)
@@ -637,8 +652,8 @@ let make_empty_spec spec_id =
 
 (* Whether spec contains an op or axiom named f *)
 let contains_field spec f =
-  List.exists (fun (f',_) -> Id.equal f f') spec.spec_ops ||
-    List.exists (Id.equal f) spec.spec_axioms
+  List.exists (fun (f',_,_) -> Id.equal f f') spec.spec_ops ||
+    List.exists (fun (f', _) -> Id.equal f f') spec.spec_axioms
 
 (* Check that a field (op or axiom) of the given name exists in spec *)
 let spec_field_exists ?(suffix="class") spec f =
@@ -649,9 +664,9 @@ let spec_field_exists ?(suffix="class") spec f =
 (* Remove fields that no longer exist (because of potential Undos) *)
 let filter_nonexistent_fields spec =
   { spec with
-    spec_ops = List.filter (fun (id, _) ->
+    spec_ops = List.filter (fun (id, _,_) ->
                             spec_field_exists spec id) spec.spec_ops;
-    spec_axioms = List.filter (spec_field_exists spec) spec.spec_axioms }
+    spec_axioms = List.filter (fun (id,_) -> spec_field_exists spec id) spec.spec_axioms }
 
 
 (***
@@ -682,9 +697,9 @@ let lookup_spec locref = fst (lookup_spec_and_globref locref)
  *** Representing Specs as Inductive Objects
  ***)
 
-(* FIXME HERE: maybe tp should just be f__class and oppred should be similar? *)
-let repr_cons_op loc f tp oppred rest =
-  mkAppC (mk_reference ["Specware"] (Id.of_string "Spec_ConsOp"),
+(* Create the term (Spec_ConsOp f tp oppred (fun (f:f__class) f__pf => rest)) *)
+let repr_cons_op loc rest (f, tp, oppred) : constr_expr =
+  mkAppC (mk_reference ["Specware"; "Spec"] (Id.of_string "Spec_ConsOp"),
           [CPrim (loc, String (Id.to_string f)); tp;
            (match oppred with
             | None -> mk_reference ["Coq"; "Init"; "Datatypes"]
@@ -694,14 +709,29 @@ let repr_cons_op loc f tp oppred rest =
                                     (Id.of_string "Some"),
                        [pred]));
            (mkCLambdaN loc
-                       [LocalRawAssum ([loc, Name f], Default Explicit, tp);
+                       [LocalRawAssum ([loc, Name f], Default Explicit,
+                                       mk_var (loc, field_class_id f));
                         LocalRawAssum ([loc, Name (field_proof_id f)], Default Explicit,
                                        CHole (loc, None, IntroAnonymous, None))]
                        rest)
           ])
 
+(* Create the term Spec_Axioms [("ax1",ax_tp1), ...] *)
+let repr_axioms loc axioms : constr_expr =
+  mkAppC (mk_reference ["Specware"; "Spec"] (Id.of_string "Spec_Axioms"),
+          [mk_list loc
+                   (List.rev_map
+                      (fun (ax_id,ax_tp) ->
+                       mkAppC (mk_reference ["Specware"; "Spec"]
+                                            (Id.of_string "ax_pair"),
+                               [CPrim (loc, String (Id.to_string ax_id));
+                                ax_tp]))
+                      axioms)])
+
 (* Build a term of thype Spec that represents a spec *)
-let build_spec_repr spec = ()
+let build_spec_repr loc spec : constr_expr =
+  List.fold_left (repr_cons_op loc)
+                 (repr_axioms loc spec.spec_axioms) spec.spec_ops
 
 
 (***
@@ -773,7 +803,7 @@ let add_spec_field axiom_p field_name tp pred_opt =
      in
      if axiom_p then
        (* For axioms, just add the field name to the list of axioms *)
-       { spec with spec_axioms = f::spec.spec_axioms }
+       { spec with spec_axioms = (f,tp)::spec.spec_axioms }
      else
        (* For ops, add f__params : f__class to the context *)
        let _ =
@@ -790,7 +820,7 @@ let add_spec_field axiom_p field_name tp pred_opt =
             in true
          | None -> false
        in
-       { spec with spec_ops = (f,pred_opt)::spec.spec_ops })
+       { spec with spec_ops = (f,tp,pred_opt)::spec.spec_ops })
 
 (* Complete the current spec, by creating its axiom type-class, registering it
    in the global spec table, and creating representation as a Spec object. NOTE:
@@ -801,9 +831,9 @@ let complete_spec loc =
   (* First, build the axioms into fields for the axiom type-class *)
   let ax_fields =
     List.rev_map
-      (fun ax_id -> ((loc, field_axelem_id ax_id),
-                     mk_var (loc, field_class_id ax_id),
-                     true))
+      (fun (ax_id, ax_tp) -> ((loc, field_axelem_id ax_id),
+                              mk_var (loc, field_class_id ax_id),
+                              true))
       spec.spec_axioms
   in
   (* Next, build parameters for all the ops and their subtype predicates. NOTE:
@@ -812,7 +842,7 @@ let complete_spec loc =
   let op_params =
     List.concat
       (List.rev_map
-         (fun (op_id, pred_opt) ->
+         (fun (op_id, op_tp, pred_opt) ->
           let op_param =
             mk_implicit_assum (field_param_id op_id)
                               (mk_var (loc, field_class_id op_id)) in
@@ -828,8 +858,27 @@ let complete_spec loc =
     global_modpath (Nametab.locate (qualid_of_ident spec.spec_name))
   in
   let _ = register_spec spec_globref spec in
-  (* FIXME HERE: build the Spec object for the spec *)
-  (* FIXME HERE: build the IsoToSpec instance with the prove_spec_iso tactic *)
+  let _ = add_definition (loc, spec_repr_id spec.spec_name) [] None
+                         (build_spec_repr loc spec) in
+  let _ = add_term_instance
+            (loc, Name spec_iso_id spec.spec_name) []
+            (mkAppC (mk_reference ["Specware"; "Spec"]
+                                  (Id.of_string "IsoToSpec"),
+                     [mk_var (loc, spec_repr_id spec.spec_name);
+                      CAppExpl
+                        (loc, (None, Ident (loc, spec.spec_name), None), [])]))
+            (CHole (loc, None, IntroAnonymous,
+                    Some (Genarg.in_gen
+                            (Genarg.rawwit Constrarg.wit_tactic)
+                            (Tacexpr.TacArg
+                               (loc,
+                                Tacexpr.TacCall
+                                  (loc,
+                                   Qualid (loc,
+                                           mk_qualid ["Specware"; "Spec"]
+                                                     (Id.of_string "prove_spec_iso")),
+                                   []))))))
+  in
   ()
 
 (* Start the interactive definition of a new spec *)
