@@ -257,25 +257,6 @@ let qualify_identifier id =
   let _ = debug_printf 2 "@[qualify_identifier: %s@]\n" (Id.to_string id) in
   qualid_of_global (Nametab.locate (qualid_of_ident id))
 
-(* Build the expression t1 = t2 *)
-let mk_equality t1 t2 =
-  CApp (dummy_loc,
-        (None, mk_reference ["Coq"; "Init"; "Logic"] (Id.of_string "eq")),
-        [(t1, None); (t2, None)])
-
-(* Build the expression id1 = id2 for identifiers id1 and id2 *)
-let mk_ident_equality id1 id2 =
-  mk_equality (mk_var id1) (mk_var id2)
-
-(* Build the expression t1::t2::...::tn::nil *)
-let mk_list loc ts =
-  List.fold_right
-    (fun t rest ->
-     mkAppC (mk_reference ["Coq"; "Init"; "Datatypes"] (Id.of_string "cons"),
-             [t; rest]))
-    ts
-    (mk_reference ["Coq"; "Init"; "Datatypes"] (Id.of_string "nil"))
-
 (* Make (the syntactic representation of) a single record field,
    filling in default (None) values for all the extra information such
    as notations, priority, etc. The coercion_p flag indicates whether
@@ -391,31 +372,17 @@ let within_module mod_name f =
   let _ = end_module mod_name in
   ret
 
-(* Check that two terms are definitionally equal relative to the given
-   parameter list, by checking that (forall params, eq_refl : t1=t2)
-   is well-typed (eq_refl is the constructor for the equality type) *)
-let check_equal_term params t1 t2 =
-  let cmd = VernacCheckMayEval
-              (None, None,
-               (mkCLambdaN
-                  dummy_loc
-                  params
-                  (CCast (dummy_loc,
-                          CApp (dummy_loc,
-                                (None, mk_reference ["Coq"; "Init"; "Logic"]
-                                                    (Id.of_string "eq_refl")),
-                                [(t1, None)]),
-                          CastConv (mk_equality t1 t2)))))
-  in
-  let _ = debug_printf 2 "@[check_equal_term command:@ %a@]\n" pp_vernac cmd in
-  try interp (dummy_loc, cmd); true
-  with Type_errors.TypeError (env, err) ->
-       let _ = debug_printf 1 "@[check_equal_term:@ %a@]\n" (pp_type_error env) err in
-       false
-     | Pretype_errors.PretypeError (env, evd, err) ->
-       let _ = debug_printf 1 "@[check_equal_term:@ %a@]\n"
-                            (pp_pretype_error env evd) err in
-       false
+(* Reduce a constr using a list of reduction expressions *)
+let reduce_constr reds constr =
+  let apply_redexpr c r =
+    let (evd,r_interp) = Tacinterp.interp_redexp env !evdref r in
+    let _ = evdref := evd in
+    snd (fst (Redexpr.reduction_of_red_expr env r_interp) env !evdref c) in
+  List.fold_left apply_redexpr constr reds
+
+(* Reduce a constr to head normal form *)
+let hnf_constr constr =
+  reduce_constr [Hnf] constr
 
 (* Apply a series of reductions to a term in a parameter context, by
    interpreting the term to a constr, applying the reductions in order, and then
@@ -524,6 +491,99 @@ let unfold_fold_term params unfolds folds t =
   let _ = debug_printf 2 "@[unfold_fold_term: returning@ %a@]\n"
                        pp_constr_expr res in
   res
+
+(* Test if constr is a constant equal to const *)
+let constr_is_constant const constr =
+  match Term.kind_of_constr constr with
+  | Term.Const (c, _) -> Constant.equal c const
+  | _ -> false
+
+(* Destruct a string literal, returning None if constr is not a string *)
+let destruct_string_constr constr =
+  raise dummy_loc (Failure "FIXME HERE: destruct_string_constr")
+
+(* Destruct pair constr into a pair of constrs, returning None for non-pairs *)
+let destruct_pair_constr constr =
+  let constr_hnf = hnf_constr constr in
+  match Term.kind_of_constr constr_hnf with
+  | Term.App (ctor, [arg1, arg2]) ->
+     if constr_is_constant ctor
+                           (lookup_constant
+                              (mk_qualid ["Coq"; "Init"; "Datatypes"]
+                                         (Id.of_string "pair")))
+     then Some (arg1, arg2)
+     else None
+  | _ -> None
+
+(* Build the expression t1 = t2 *)
+let mk_equality t1 t2 =
+  CApp (dummy_loc,
+        (None, mk_reference ["Coq"; "Init"; "Logic"] (Id.of_string "eq")),
+        [(t1, None); (t2, None)])
+
+(* Build the expression id1 = id2 for identifiers id1 and id2 *)
+let mk_ident_equality id1 id2 =
+  mk_equality (mk_var id1) (mk_var id2)
+
+(* Build the expression t1::t2::...::tn::nil *)
+let mk_list loc ts =
+  List.fold_right
+    (fun t rest ->
+     mkAppC (mk_reference ["Coq"; "Init"; "Datatypes"] (Id.of_string "cons"),
+             [t; rest]))
+    ts
+    (mk_reference ["Coq"; "Init"; "Datatypes"] (Id.of_string "nil"))
+
+(* Destruct a constr t1::t2::...::tn::t_rest into ([t1,...,tn], opt), where opt
+is None when t_rest = nil or opt = Some t_rest otherwise *)
+let rec destruct_list_constr constr =
+  let constr_hnf = hnf_constr constr in
+  match Term.kind_of_constr constr_hnf with
+  | Term.App (ctor, [arg1, arg2]) ->
+     if constr_is_constant ctor
+                           (lookup_constant
+                              (mk_qualid ["Coq"; "Init"; "Datatypes"]
+                                         (Id.of_string "cons")))
+     then
+       let (constrs, opt) = destruct_list_constr arg2 in
+       (arg1::constrs, opt)
+     else
+       ([], Some constr_hnf)
+  | Term.Const (c, _) ->
+     if Constant.equal
+          c
+          (lookup_constant (mk_qualid ["Coq"; "Init"; "Datatypes"]
+                                      (Id.of_string "nil")))
+     then ([], None)
+     else ([], Some constr_hnf)
+  | _ -> ([], Some constr_hnf)
+
+(* Check that two terms are definitionally equal relative to the given
+   parameter list, by checking that (forall params, eq_refl : t1=t2)
+   is well-typed (eq_refl is the constructor for the equality type) *)
+let check_equal_term params t1 t2 =
+  let cmd = VernacCheckMayEval
+              (None, None,
+               (mkCLambdaN
+                  dummy_loc
+                  params
+                  (CCast (dummy_loc,
+                          CApp (dummy_loc,
+                                (None, mk_reference ["Coq"; "Init"; "Logic"]
+                                                    (Id.of_string "eq_refl")),
+                                [(t1, None)]),
+                          CastConv (mk_equality t1 t2)))))
+  in
+  let _ = debug_printf 2 "@[check_equal_term command:@ %a@]\n" pp_vernac cmd in
+  try interp (dummy_loc, cmd); true
+  with Type_errors.TypeError (env, err) ->
+       let _ = debug_printf 1 "@[check_equal_term:@ %a@]\n" (pp_type_error env) err in
+       false
+     | Pretype_errors.PretypeError (env, evd, err) ->
+       let _ = debug_printf 1 "@[check_equal_term:@ %a@]\n"
+                            (pp_pretype_error env evd) err in
+       false
+
 
 (***
  *** Global and local references to specs
@@ -728,10 +788,45 @@ let repr_axioms loc axioms : constr_expr =
                                 ax_tp]))
                       axioms)])
 
-(* Build a term of thype Spec that represents a spec *)
+(* Build a term of type Spec that represents a spec *)
 let build_spec_repr loc spec : constr_expr =
   List.fold_left (repr_cons_op loc)
                  (repr_axioms loc spec.spec_axioms) spec.spec_ops
+
+exception MalformedSpec of constr
+
+(* Destruct a constr of type list(Field*Prop) into a list of axioms *)
+let constr_to_axiom_list constr =
+  match destruct_list_constr constr with
+  | (_, Some _) -> raise dummy_loc (MalformedSpec ax_list_constr)
+  | (elems, None) ->
+     List.map (fun c ->
+               match destruct_pair_constr c with
+               | Some (f_constr, tp) ->
+                  (match destruct_string_constr f_constr with
+                   | Some f -> (Id.of_string f, tp)
+                   | None ->
+                      raise dummy_loc (MalformedSpec ax_list_constr))
+               | None -> raise dummy_loc (MalformedSpec ax_list_constr))
+              elems
+
+(* Destruct a term of type Spec into a list of ops and axioms *)
+let rec constr_to_ops_and_axioms constr =
+  let constr_hnf = hnf_constr constr in
+  match Term.kind_of_term constr_hnf with
+  | Term.App (ctor, [f_c, t_c, oppred_c, rest_c]) ->
+     if constr_is_constant ctor
+                           (lookup_constant
+                              (mk_qualid ["Specware"; "Spec"]
+                                         (Id.of_string "Spec_ConsOp"))) then
+       FIXME HERE
+  | Term.App (ctor, [axioms_c]) ->
+     if constr_is_constant ctor
+                           (lookup_constant
+                              (mk_qualid ["Specware"; "Spec"]
+                                         (Id.of_string "Spec_Axioms"))) then
+       ([], constr_to_axiom_list axioms_c)
+  | _ -> raise dummy_loc (MalformedSpec constr)
 
 
 (***
@@ -967,6 +1062,13 @@ VERNAC COMMAND EXTEND Spec
     => [ (Vernacexpr.VtSideff [id], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
            (fun () -> add_spec_field true (dummy_loc,id) tp None) ]
+
+(*
+  | [ "Spec" "Import" "Term" constr(tm) ]
+    => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () -> import_spec_constr dummy_loc tm) ]
+ *)
 
   (* Import a spec term *)
   (* FIXME HERE: add imports!! *)
