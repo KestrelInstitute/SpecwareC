@@ -250,7 +250,8 @@ let mk_global_expl gr =
 let lookup_constant loc qualid =
   match Nametab.locate qualid with
   | ConstRef c -> c
-  | _ -> raise loc Not_found
+  | _ -> user_err_loc (dummy_loc, "_",
+                       str ("Could not find " ^ string_of_qualid qualid))
 
 (* Look up an identifier in the current module and make it fully qualified *)
 let qualify_identifier id =
@@ -386,6 +387,12 @@ let reduce_constr reds constr =
 let hnf_constr constr =
   reduce_constr [Hnf] constr
 
+(* Reduce a constr using the "compute" reduction (which is call-by-value) *)
+let compute_constr constr =
+  reduce_constr
+    [Cbv (Redops.make_red_flag [FBeta;FIota;FZeta;FDeltaBut []])]
+    constr
+
 (* Apply a series of reductions to a term in a parameter context, by
    interpreting the term to a constr, applying the reductions in order, and then
    going back to a term *)
@@ -500,46 +507,6 @@ let constr_is_constant const constr =
   | Term.Const (c, _) -> Constant.equal c const
   | _ -> false
 
-(* Destruct a string literal, returning None if constr is not a string *)
-let destruct_string_constr constr =
-  raise dummy_loc (Failure "FIXME HERE: destruct_string_constr")
-
-(* Destruct pair constr into a pair of constrs, returning None for non-pairs *)
-let destruct_pair_constr constr =
-  let constr_hnf = hnf_constr constr in
-  match Term.kind_of_term constr_hnf with
-  | Term.App (ctor, [| arg1; arg2 |]) ->
-     if constr_is_constant (lookup_constant
-                              dummy_loc
-                              (mk_qualid ["Coq"; "Init"; "Datatypes"]
-                                         (Id.of_string "pair")))
-                           ctor
-     then Some (arg1, arg2)
-     else None
-  | _ -> None
-
-(* Destruct a constr of type Option a into Some optional constr of type a, or
-into None if constr is not a value *)
-let destruct_option_constr constr =
-  let constr_hnf = hnf_constr constr in
-  match Term.kind_of_term constr_hnf with
-  | Term.App (ctor, [| arg |]) ->
-     if constr_is_constant (lookup_constant
-                              dummy_loc
-                              (mk_qualid ["Coq"; "Init"; "Datatypes"]
-                                         (Id.of_string "Some")))
-                           ctor
-     then Some (Some arg)
-     else None
-  | _ ->
-     if constr_is_constant (lookup_constant
-                              dummy_loc
-                              (mk_qualid ["Coq"; "Init"; "Datatypes"]
-                                         (Id.of_string "None")))
-                           constr_hnf
-     then Some None
-     else None
-
 (* Build the expression t1 = t2 *)
 let mk_equality t1 t2 =
   CApp (dummy_loc,
@@ -558,31 +525,6 @@ let mk_list loc ts =
              [t; rest]))
     ts
     (mk_reference ["Coq"; "Init"; "Datatypes"] (Id.of_string "nil"))
-
-(* Destruct a constr t1::t2::...::tn::t_rest into ([t1,...,tn], opt), where opt
-is None when t_rest = nil or opt = Some t_rest otherwise *)
-let rec destruct_list_constr constr =
-  let constr_hnf = hnf_constr constr in
-  match Term.kind_of_term constr_hnf with
-  | Term.App (ctor, [| arg1; arg2 |]) ->
-     if constr_is_constant (lookup_constant
-                              dummy_loc
-                              (mk_qualid ["Coq"; "Init"; "Datatypes"]
-                                         (Id.of_string "cons")))
-                           ctor
-     then
-       let (constrs, opt) = destruct_list_constr arg2 in
-       (arg1::constrs, opt)
-     else
-       ([], Some constr_hnf)
-  | Term.Const (c, _) ->
-     if Constant.equal
-          c
-          (lookup_constant dummy_loc (mk_qualid ["Coq"; "Init"; "Datatypes"]
-                                                (Id.of_string "nil")))
-     then ([], None)
-     else ([], Some constr_hnf)
-  | _ -> ([], Some constr_hnf)
 
 (* Check that two terms are definitionally equal relative to the given
    parameter list, by checking that (forall params, eq_refl : t1=t2)
@@ -609,6 +551,124 @@ let check_equal_term params t1 t2 =
        let _ = debug_printf 1 "@[check_equal_term:@ %a@]\n"
                             (pp_pretype_error env evd) err in
        false
+
+
+(***
+ *** Destructing Coq Inductive Objects
+ ***)
+
+(* A description of a Coq inductive type, given as a list of constructors along
+with functions to try to interpret constructor arguments at type 'a *)
+type 'a ind_type_descr = (constant * (Constr.t array -> 'a option)) list
+
+(* Destruct a constr of an inductive type using an ind_type_descr *)
+let destruct_ind_constr descr constr =
+  let rec apply_descr cur_descr f args =
+    match cur_descr with
+    | [] -> None
+    | (ctor, interp_f) :: cur_descr' ->
+       if constr_is_constant ctor f then
+         (match interp_f args with
+          | Some ret -> Some ret
+          | None -> apply_descr cur_descr' f args)
+       else
+         apply_descr cur_descr' f args
+  in
+  match Term.kind_of_term constr with
+  | Term.App (f, args) -> apply_descr descr f args
+  | Term.Const _ -> apply_descr descr constr [| |]
+  | _ -> None
+
+(* Helper to build an ind_type_descr *)
+let make_descr ctor_mod d : 'a ind_type_descr =
+  List.map (fun (ctor,interp_f) ->
+            (lookup_constant dummy_loc (mk_qualid ctor_mod (Id.of_string ctor)),
+             interp_f)) d
+
+(* Helpers to build ind_type_descrs for different sorts of constructors *)
+let nullary_ctor_descr ctor ret =
+  (ctor,function [| |] -> Some ret | _ -> None)
+let unary_ctor_descr ctor ret_f =
+  (ctor,function [| arg |] -> ret_f arg | _ -> None)
+let binary_ctor_descr ctor ret_f =
+  (ctor,function [| arg1;arg2 |] -> ret_f arg1 arg2 | _ -> None)
+let trinary_ctor_descr ctor ret_f =
+  (ctor,function [| arg1;arg2;arg3 |] -> ret_f arg1 arg2 arg3 | _ -> None)
+let quaternary_ctor_descr ctor ret_f =
+  (ctor,function [| arg1;arg2;arg3;arg4 |] -> ret_f arg1 arg2 arg3 arg4 | _ -> None)
+let unary_ind_ctor_descr ctor descr =
+  (ctor,function [| arg |] -> destruct_ind_constr descr arg | _ -> None)
+
+(* Descriptions of a number of Coq types *)
+let datatypes_mod = ["Coq"; "Init"; "Datatypes"]
+let bool_descr = make_descr datatypes_mod [(nullary_ctor_descr "true" true);
+                                           (nullary_ctor_descr "false" false)]
+let pair_descr left_f right_f =
+  make_descr datatypes_mod
+             [binary_ctor_descr
+                "pair"
+                (fun arg1 arg2 ->
+                 match (left_f arg1, right_f arg2) with
+                 | (Some l, Some r) -> Some (l,r)
+                 | _ -> None)]
+let option_descr elem_f =
+  make_descr datatypes_mod
+             [(unary_ctor_descr "Some" (fun x -> Some (elem_f x)));
+              (nullary_ctor_descr "None" None)]
+let rec list_descr elem_f =
+  make_descr datatypes_mod
+             [(binary_ctor_descr
+                 "cons"
+                 (fun elem rest ->
+                  match (elem_f elem,
+                         destruct_ind_constr (list_descr elem_f) rest) with
+                  | (Some elem_res, Some l) -> Some (elem_res :: l)
+                  | _ -> None));
+              (nullary_ctor_descr "nil" [])]
+
+(* Decode a little-endian list of booleans into an int *)
+let rec decode_ascii_bits bits =
+  match bits with
+  | [] -> 0
+  | b :: bits' -> (if b then 1 else 0) + 2 * decode_ascii_bits bits'
+
+(* Description for the Coq Ascii character type *)
+let ascii_descr =
+  make_descr ["Coq"; "Strings"; "Ascii"]
+             [("Ascii",
+               fun args ->
+               if Array.length args = 8 then
+                 match
+                   (Array.fold_right
+                      (fun bit_c bits_opt ->
+                       match (destruct_ind_constr bool_descr bit_c, bits_opt) with
+                       | (Some b, Some bits) -> Some (b::bits)
+                       | _ -> None)
+                      args (Some []))
+                 with
+                 | Some bits -> Some (char_of_int (decode_ascii_bits bits))
+                 | None -> None
+               else None)]
+
+(* Description for the Coq string type as a list of characters *)
+let rec string_descr_thunk () =
+  make_descr ["Coq"; "Strings"; "String"]
+             [(nullary_ctor_descr "EmptyString" []);
+              (binary_ctor_descr
+                 "String"
+                 (fun hd tl ->
+                  match (destruct_ind_constr ascii_descr hd,
+                         destruct_ind_constr (string_descr_thunk ()) tl) with
+                  | (Some c, Some l) -> Some (c::l)
+                  | _ -> None))]
+let string_descr = string_descr_thunk ()
+
+(* Destruct a string literal, returning None if constr is not a string *)
+let destruct_string_constr constr =
+  let constr_red = compute_constr constr in
+  match destruct_ind_constr string_descr constr_red with
+  | Some chars -> Some (String.init (List.length chars) (List.nth chars))
+  | None -> None
 
 
 (***
@@ -821,56 +881,45 @@ let build_spec_repr loc spec : constr_expr =
 
 exception MalformedSpec of Constr.t
 
-(* Destruct a constr of type list(Field*Prop) into a list of axioms *)
-let constr_to_axiom_list constr =
-  match destruct_list_constr constr with
-  | (_, Some _) -> raise dummy_loc (MalformedSpec constr)
-  | (elems, None) ->
-     List.map (fun c ->
-               match destruct_pair_constr c with
-               | Some (f_constr, tp) ->
-                  (match destruct_string_constr f_constr with
-                   | Some f -> (Id.of_string f, tp)
-                   | None ->
-                      raise dummy_loc (MalformedSpec constr))
-               | None -> raise dummy_loc (MalformedSpec constr))
-              elems
+(* A description of the Spec type *)
+let rec spec_descr_thunk () =
+  make_descr ["Specware"; "Spec"]
+             [(unary_ctor_descr
+                 "Spec_Axioms"
+                 (fun arg ->
+                  map_opt
+                    (fun axioms -> ([], axioms))
+                    (destruct_ind_constr
+                       (list_descr
+                          (destruct_ind_constr
+                             (pair_descr
+                                destruct_string_constr
+                                (fun x -> Some x)))) arg)));
+              (quaternary_ctor_descr
+                 "Spec_ConsOp"
+                 (fun f_c tp_c oppred_c rest_c ->
+                  match (destruct_string_constr f_c,
+                         destruct_ind_constr (option_descr (fun x -> Some x))
+                                             oppred_c) with
+                  | (Some f, Some oppred) ->
+                     map_opt
+                       (fun (ops,axioms) -> ((f, tp_c, oppred)::ops, axioms))
+                       (destruct_ind_constr
+                          (spec_descr_thunk ())
+                          (hnf_constr
+                             (Term.mkApp
+                                (rest_c,
+                                 [| Term.mkVar (Id.of_string f);
+                                    Term.mkVar (field_proof_id (Id.of_string f)) |]))))
+                  | _ -> None))]
 
-(* Destruct a term of type Spec into a list of ops and axioms *)
-let rec constr_to_ops_and_axioms constr =
-  let constr_hnf = hnf_constr constr in
-  match Term.kind_of_term constr_hnf with
-  | Term.App (ctor, [| f_c; tp; oppred_c; rest_c |]) ->
-     if constr_is_constant (lookup_constant
-                              dummy_loc
-                              (mk_qualid ["Specware"; "Spec"]
-                                         (Id.of_string "Spec_ConsOp")))
-                           ctor then
-       match (destruct_string_constr f_c,
-              destruct_option_constr oppred_c) with
-       | (Some f, Some oppred) ->
-          let (ops, axioms) =
-            constr_to_ops_and_axioms
-              (Term.mkApp (rest_c,
-                           [| Term.mkVar (Id.of_string f);
-                              Term.mkVar (field_proof_id (Id.of_string f)) |]))
-          in
-          (ops @ [Id.of_string f, tp, oppred], axioms)
-       | _ ->
-          raise dummy_loc (MalformedSpec constr)
-     else
-       raise dummy_loc (MalformedSpec constr)
-  | Term.App (ctor, [| axioms_c |]) ->
-     if constr_is_constant (lookup_constant
-                              dummy_loc
-                              (mk_qualid ["Specware"; "Spec"]
-                                         (Id.of_string "Spec_Axioms")))
-                           ctor
-     then
-       ([], constr_to_axiom_list axioms_c)
-     else
-       raise dummy_loc (MalformedSpec constr)
-  | _ -> raise dummy_loc (MalformedSpec constr)
+let spec_type_descr = spec_descr_thunk ()
+
+(* Destruct a constr of type Spec into a list of ops and axioms *)
+let destruct_spec_repr constr =
+  match destruct_ind_constr spec_type_descr (hnf_constr constr) with
+  | Some res -> res
+  | None -> raise dummy_loc (MalformedSpec constr)
 
 
 (***
@@ -1051,6 +1100,38 @@ let end_new_spec spec_lid =
 
 
 (***
+ *** Spec Imports
+ ***)
+
+(* Import all the ops and axioms given in a Spec representation object *)
+let import_spec_constr loc constr =
+  let (evd,env) = Lemmas.get_current_context () in
+  let (ops,axioms) = destruct_spec_repr constr in
+  let _ =
+    List.iter (fun (f,tp,oppred) ->
+               add_spec_field
+                 false
+                 (loc, Id.of_string f)
+                 (Constrextern.extern_constr true env evd tp)
+                 (map_opt (Constrextern.extern_constr true env evd) oppred)) ops
+  in
+  List.iter
+    (fun (ax_name,ax_tp) ->
+     add_spec_field true
+                    (loc, Id.of_string ax_name)
+                    (Constrextern.extern_constr true env evd ax_tp)
+                    None)
+    axioms
+
+
+(* Same as above, but take in a term for a Spec representation object *)
+let import_spec_constr_expr loc constr_expr =
+  let (evd,env) = Lemmas.get_current_context () in
+  let (constr,_) = Constrintern.interp_constr env evd constr_expr in
+  import_spec_constr loc constr
+
+
+(***
  *** Additions to the Coq parser
  ***)
 
@@ -1107,12 +1188,10 @@ VERNAC COMMAND EXTEND Spec
     -> [ reporting_exceptions
            (fun () -> add_spec_field true (dummy_loc,id) tp None) ]
 
-(*
-  | [ "Spec" "Import" "Term" constr(tm) ]
+  | [ "Spec" "Import" "Repr" constr(tm) ]
     => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () -> import_spec_constr dummy_loc tm) ]
- *)
+           (fun () -> import_spec_constr_expr dummy_loc tm) ]
 
   (* Import a spec term *)
   (* FIXME HERE: add imports!! *)
