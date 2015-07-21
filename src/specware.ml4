@@ -374,6 +374,8 @@ let within_module mod_name f =
 
 (* Reduce a constr using a list of reduction expressions *)
 let reduce_constr reds constr =
+  let env = Global.env () in
+  let evdref = ref Evd.empty in
   let apply_redexpr c r =
     let (evd,r_interp) = Tacinterp.interp_redexp env !evdref r in
     let _ = evdref := evd in
@@ -494,7 +496,7 @@ let unfold_fold_term params unfolds folds t =
 
 (* Test if constr is a constant equal to const *)
 let constr_is_constant const constr =
-  match Term.kind_of_constr constr with
+  match Term.kind_of_term constr with
   | Term.Const (c, _) -> Constant.equal c const
   | _ -> false
 
@@ -505,15 +507,38 @@ let destruct_string_constr constr =
 (* Destruct pair constr into a pair of constrs, returning None for non-pairs *)
 let destruct_pair_constr constr =
   let constr_hnf = hnf_constr constr in
-  match Term.kind_of_constr constr_hnf with
-  | Term.App (ctor, [arg1, arg2]) ->
-     if constr_is_constant ctor
-                           (lookup_constant
+  match Term.kind_of_term constr_hnf with
+  | Term.App (ctor, [| arg1; arg2 |]) ->
+     if constr_is_constant (lookup_constant
+                              dummy_loc
                               (mk_qualid ["Coq"; "Init"; "Datatypes"]
                                          (Id.of_string "pair")))
+                           ctor
      then Some (arg1, arg2)
      else None
   | _ -> None
+
+(* Destruct a constr of type Option a into Some optional constr of type a, or
+into None if constr is not a value *)
+let destruct_option_constr constr =
+  let constr_hnf = hnf_constr constr in
+  match Term.kind_of_term constr_hnf with
+  | Term.App (ctor, [| arg |]) ->
+     if constr_is_constant (lookup_constant
+                              dummy_loc
+                              (mk_qualid ["Coq"; "Init"; "Datatypes"]
+                                         (Id.of_string "Some")))
+                           ctor
+     then Some (Some arg)
+     else None
+  | _ ->
+     if constr_is_constant (lookup_constant
+                              dummy_loc
+                              (mk_qualid ["Coq"; "Init"; "Datatypes"]
+                                         (Id.of_string "None")))
+                           constr_hnf
+     then Some None
+     else None
 
 (* Build the expression t1 = t2 *)
 let mk_equality t1 t2 =
@@ -538,12 +563,13 @@ let mk_list loc ts =
 is None when t_rest = nil or opt = Some t_rest otherwise *)
 let rec destruct_list_constr constr =
   let constr_hnf = hnf_constr constr in
-  match Term.kind_of_constr constr_hnf with
-  | Term.App (ctor, [arg1, arg2]) ->
-     if constr_is_constant ctor
-                           (lookup_constant
+  match Term.kind_of_term constr_hnf with
+  | Term.App (ctor, [| arg1; arg2 |]) ->
+     if constr_is_constant (lookup_constant
+                              dummy_loc
                               (mk_qualid ["Coq"; "Init"; "Datatypes"]
                                          (Id.of_string "cons")))
+                           ctor
      then
        let (constrs, opt) = destruct_list_constr arg2 in
        (arg1::constrs, opt)
@@ -552,8 +578,8 @@ let rec destruct_list_constr constr =
   | Term.Const (c, _) ->
      if Constant.equal
           c
-          (lookup_constant (mk_qualid ["Coq"; "Init"; "Datatypes"]
-                                      (Id.of_string "nil")))
+          (lookup_constant dummy_loc (mk_qualid ["Coq"; "Init"; "Datatypes"]
+                                                (Id.of_string "nil")))
      then ([], None)
      else ([], Some constr_hnf)
   | _ -> ([], Some constr_hnf)
@@ -793,12 +819,12 @@ let build_spec_repr loc spec : constr_expr =
   List.fold_left (repr_cons_op loc)
                  (repr_axioms loc spec.spec_axioms) spec.spec_ops
 
-exception MalformedSpec of constr
+exception MalformedSpec of Constr.t
 
 (* Destruct a constr of type list(Field*Prop) into a list of axioms *)
 let constr_to_axiom_list constr =
   match destruct_list_constr constr with
-  | (_, Some _) -> raise dummy_loc (MalformedSpec ax_list_constr)
+  | (_, Some _) -> raise dummy_loc (MalformedSpec constr)
   | (elems, None) ->
      List.map (fun c ->
                match destruct_pair_constr c with
@@ -806,26 +832,44 @@ let constr_to_axiom_list constr =
                   (match destruct_string_constr f_constr with
                    | Some f -> (Id.of_string f, tp)
                    | None ->
-                      raise dummy_loc (MalformedSpec ax_list_constr))
-               | None -> raise dummy_loc (MalformedSpec ax_list_constr))
+                      raise dummy_loc (MalformedSpec constr))
+               | None -> raise dummy_loc (MalformedSpec constr))
               elems
 
 (* Destruct a term of type Spec into a list of ops and axioms *)
 let rec constr_to_ops_and_axioms constr =
   let constr_hnf = hnf_constr constr in
   match Term.kind_of_term constr_hnf with
-  | Term.App (ctor, [f_c, t_c, oppred_c, rest_c]) ->
-     if constr_is_constant ctor
-                           (lookup_constant
+  | Term.App (ctor, [| f_c; tp; oppred_c; rest_c |]) ->
+     if constr_is_constant (lookup_constant
+                              dummy_loc
                               (mk_qualid ["Specware"; "Spec"]
-                                         (Id.of_string "Spec_ConsOp"))) then
-       FIXME HERE
-  | Term.App (ctor, [axioms_c]) ->
-     if constr_is_constant ctor
-                           (lookup_constant
+                                         (Id.of_string "Spec_ConsOp")))
+                           ctor then
+       match (destruct_string_constr f_c,
+              destruct_option_constr oppred_c) with
+       | (Some f, Some oppred) ->
+          let (ops, axioms) =
+            constr_to_ops_and_axioms
+              (Term.mkApp (rest_c,
+                           [| Term.mkVar (Id.of_string f);
+                              Term.mkVar (field_proof_id (Id.of_string f)) |]))
+          in
+          (ops @ [Id.of_string f, tp, oppred], axioms)
+       | _ ->
+          raise dummy_loc (MalformedSpec constr)
+     else
+       raise dummy_loc (MalformedSpec constr)
+  | Term.App (ctor, [| axioms_c |]) ->
+     if constr_is_constant (lookup_constant
+                              dummy_loc
                               (mk_qualid ["Specware"; "Spec"]
-                                         (Id.of_string "Spec_Axioms"))) then
+                                         (Id.of_string "Spec_Axioms")))
+                           ctor
+     then
        ([], constr_to_axiom_list axioms_c)
+     else
+       raise dummy_loc (MalformedSpec constr)
   | _ -> raise dummy_loc (MalformedSpec constr)
 
 
