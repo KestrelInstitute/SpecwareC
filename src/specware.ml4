@@ -246,12 +246,18 @@ let mk_global_expl gr =
             [])
 
 (* Look up a defined constant by qualid *)
-(* FIXME: raise a different exception if the qualid is not a constant... *)
 let lookup_constant loc qualid =
   match Nametab.locate qualid with
   | ConstRef c -> c
   | _ -> user_err_loc (dummy_loc, "_",
-                       str ("Could not find " ^ string_of_qualid qualid))
+                       str ("Not a constant: " ^ string_of_qualid qualid))
+
+(* Look up a constructor by qualid *)
+let lookup_constructor loc qualid =
+  match Nametab.locate qualid with
+  | ConstructRef c -> c
+  | _ -> user_err_loc (dummy_loc, "_",
+                       str ("Not a constructor: " ^ string_of_qualid qualid))
 
 (* Look up an identifier in the current module and make it fully qualified *)
 let qualify_identifier id =
@@ -507,6 +513,12 @@ let constr_is_constant const constr =
   | Term.Const (c, _) -> Constant.equal c const
   | _ -> false
 
+(* Test if constr is a constructor equal to ctor *)
+let constr_is_constructor ctor constr =
+  match Term.kind_of_term constr with
+  | Term.Construct (c, _) -> eq_constructor c ctor
+  | _ -> false
+
 (* Build the expression t1 = t2 *)
 let mk_equality t1 t2 =
   CApp (dummy_loc,
@@ -559,30 +571,40 @@ let check_equal_term params t1 t2 =
 
 (* A description of a Coq inductive type, given as a list of constructors along
 with functions to try to interpret constructor arguments at type 'a *)
-type 'a ind_type_descr = (constant * (Constr.t array -> 'a option)) list
+type 'a ind_type_descr = (constructor * (Constr.t array -> 'a option)) list
 
 (* Destruct a constr of an inductive type using an ind_type_descr *)
 let destruct_ind_constr descr constr =
   let rec apply_descr cur_descr f args =
     match cur_descr with
-    | [] -> None
+    | [] ->
+       let _ =
+         debug_printf 2 "@[destruct_ind_constr: no more cases left for@ %a@]\n"
+                      pp_constr constr
+       in
+       None
     | (ctor, interp_f) :: cur_descr' ->
-       if constr_is_constant ctor f then
+       let _ =
+         debug_printf 2 "@[destruct_ind_constr: testing for constructor@ %a@]\n"
+                      pp_constr (Term.mkConstruct ctor)
+       in
+       if constr_is_constructor ctor f then
          (match interp_f args with
           | Some ret -> Some ret
           | None -> apply_descr cur_descr' f args)
        else
          apply_descr cur_descr' f args
   in
+  let _ = debug_printf 2 "@[destruct_ind_constr called on@ %a@]\n" pp_constr constr in
   match Term.kind_of_term constr with
   | Term.App (f, args) -> apply_descr descr f args
-  | Term.Const _ -> apply_descr descr constr [| |]
+  | Term.Construct _ -> apply_descr descr constr [| |]
   | _ -> None
 
 (* Helper to build an ind_type_descr *)
 let make_descr ctor_mod d : 'a ind_type_descr =
   List.map (fun (ctor,interp_f) ->
-            (lookup_constant dummy_loc (mk_qualid ctor_mod (Id.of_string ctor)),
+            (lookup_constructor dummy_loc (mk_qualid ctor_mod (Id.of_string ctor)),
              interp_f)) d
 
 (* Helpers to build ind_type_descrs for different sorts of constructors *)
@@ -605,26 +627,26 @@ let bool_descr = make_descr datatypes_mod [(nullary_ctor_descr "true" true);
                                            (nullary_ctor_descr "false" false)]
 let pair_descr left_f right_f =
   make_descr datatypes_mod
-             [binary_ctor_descr
+             [quaternary_ctor_descr
                 "pair"
-                (fun arg1 arg2 ->
+                (fun tp1 tp2 arg1 arg2 ->
                  match (left_f arg1, right_f arg2) with
                  | (Some l, Some r) -> Some (l,r)
                  | _ -> None)]
 let option_descr elem_f =
   make_descr datatypes_mod
-             [(unary_ctor_descr "Some" (fun x -> Some (elem_f x)));
-              (nullary_ctor_descr "None" None)]
+             [(binary_ctor_descr "Some" (fun tp x -> Some (elem_f x)));
+              (unary_ctor_descr "None" (fun tp -> Some None))]
 let rec list_descr elem_f =
   make_descr datatypes_mod
-             [(binary_ctor_descr
+             [(trinary_ctor_descr
                  "cons"
-                 (fun elem rest ->
+                 (fun tp elem rest ->
                   match (elem_f elem,
                          destruct_ind_constr (list_descr elem_f) rest) with
                   | (Some elem_res, Some l) -> Some (elem_res :: l)
                   | _ -> None));
-              (nullary_ctor_descr "nil" [])]
+              (unary_ctor_descr "nil" (fun tp -> Some []))]
 
 (* Decode a little-endian list of booleans into an int *)
 let rec decode_ascii_bits bits =
@@ -891,10 +913,12 @@ let rec spec_descr_thunk () =
                     (fun axioms -> ([], axioms))
                     (destruct_ind_constr
                        (list_descr
-                          (destruct_ind_constr
+                          (fun ax_pair ->
+                           destruct_ind_constr
                              (pair_descr
                                 destruct_string_constr
-                                (fun x -> Some x)))) arg)));
+                                (fun x -> Some x))
+                             (hnf_constr ax_pair))) arg)));
               (quaternary_ctor_descr
                  "Spec_ConsOp"
                  (fun f_c tp_c oppred_c rest_c ->
