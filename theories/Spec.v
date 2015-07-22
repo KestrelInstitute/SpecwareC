@@ -714,8 +714,48 @@ Check (fromIsoInterp (iso1:=iso_example_monoid)
 
 (*** Refinement ***)
 
+(* A refinement import into spec is some spec', an interpretation from spec' to
+spec, and a type that is isomorphic to spec' *)
+Record RefinementImport spec : Type :=
+  {ref_import_fromspec: Spec;
+   ref_import_interp: Interpretation ref_import_fromspec spec;
+   ref_import_class: OpsPred ref_import_fromspec;
+   ref_import_iso: IsoToSpec ref_import_fromspec ref_import_class}.
+
+(* A refinement of spec is some ref_spec, an interpretation from spec to
+ref_spec, and a list of simple refinements to ref_spec *)
 Record RefinementOf spec : Type :=
   {ref_spec: Spec;
    ref_interp: Interpretation spec ref_spec;
-   ref_others: list {spec' : Spec & Interpretation spec' ref_spec &
-                                  {P:OpsPred spec' | @IsoToSpec spec' P }}}.
+   ref_imports: list (RefinementImport ref_spec)}.
+
+(* The identity refinement of a spec to itself, with no other specs *)
+Definition refinement_id spec : RefinementOf spec :=
+  {| ref_spec := spec;
+     ref_interp := interp_id spec;
+     ref_imports := [] |}.
+
+(* Compose an interpretation with a simple refinement *)
+Definition simple_refinement_interp {spec spec'}
+           (imp: RefinementImport spec)
+           (i: Interpretation spec spec') : RefinementImport spec' :=
+  {| ref_import_fromspec := ref_import_fromspec _ imp;
+     ref_import_interp := interp_compose i (ref_import_interp _ imp);
+     ref_import_class := ref_import_class _ imp;
+     ref_import_iso := ref_import_iso _ imp |}.
+
+(* Compose an interpretation with a refinement *)
+Definition refinement_interp {spec spec'}
+           (R: RefinementOf spec)
+           (i: Interpretation (ref_spec _ R) spec') : RefinementOf spec :=
+  {| ref_spec := spec';
+     ref_interp := interp_compose i (ref_interp _ R);
+     ref_imports := map (fun imp => simple_refinement_interp imp i)
+                         (ref_imports _ R) |}.
+
+(* Add a simple refinement to a refinement *)
+Definition refinement_cons_import {spec} (R: RefinementOf spec)
+           (imp: RefinementImport (ref_spec _ R)) : RefinementOf spec :=
+  {| ref_spec := ref_spec _ R;
+     ref_interp := ref_interp _ R;
+     ref_imports := imp :: ref_imports _ R |}.
