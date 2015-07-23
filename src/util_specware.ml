@@ -228,9 +228,8 @@ let global_modpath gr =
   | ConstructRef ((i, _), _) -> MutInd.modpath i
 
 (* Turn a global reference into a local one *)
-(* FIXME: find a better way than using strings! *)
 let qualid_of_global gr =
-  qualid_of_string (global_to_string gr)
+  Nametab.shortest_qualid_of_global Id.Set.empty gr
 
 (* Build an expression for a global applied to named implicit args *)
 let mk_global_app_named_args gr args =

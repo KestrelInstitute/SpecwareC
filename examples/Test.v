@@ -2,6 +2,7 @@
 Add LoadPath "../theories" as Specware.
 Require Import Specware.Spec.
 Add ML Path "../src".
+Declare ML Module "util_specware".
 Declare ML Module "specware".
 
 Spec Monoid.
@@ -15,8 +16,6 @@ Spec Axiom m_zero_right : (forall x, m_plus x m_zero = x).
 Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z).
 
 Spec End Monoid.
-
-Print Monoid.
 
 
 Section Monoid_Thms.

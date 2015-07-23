@@ -244,11 +244,12 @@ let spec_descr : ((Id.t * Constr.t * Constr.t option) list *
 
 (* Build a term of type Spec that represents a spec *)
 let build_spec_repr loc spec : constr_expr =
-  build_constr_expr spec_descr (spec.spec_ops, spec.spec_axioms)
+  build_constr_expr spec_descr (List.rev spec.spec_ops, spec.spec_axioms)
 
 exception MalformedSpec of Constr.t
 
-(* Destruct a constr of type Spec into a list of ops and axioms *)
+(* Destruct a constr of type Spec into a list of ops and axioms; NOTE: this
+returns the ops in non-reversed order, unlike in the type spec *)
 let destruct_spec_repr constr =
   match destruct_constr spec_descr (hnf_constr constr) with
   | Some res -> res
