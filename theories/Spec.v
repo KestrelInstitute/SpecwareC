@@ -767,21 +767,15 @@ Fixpoint translate_spec_ops xlate spec :
                  (translate_spec_ops xlate _ (ops_rest ops))
   end.
 
-Lemma translate_spec_axioms_eq xlate axioms :
-  conjoin_axioms (translate_spec_axioms xlate axioms) = conjoin_axioms axioms.
+Lemma translate_spec_axioms_impl xlate axioms :
+  conjoin_axioms (translate_spec_axioms xlate axioms) -> conjoin_axioms axioms.
   induction axioms.
-  reflexivity.
+  intro; assumption.
   destruct axioms; destruct a.
-  reflexivity.
-  destruct p.
-  admit.
-(* FIXME HERE *)
-(*
-  unfold translate_spec_axioms; unfold map; unfold conjoin_axioms;
-  fold (map (fun (fP:Field*Prop) => (translate_field xlate (fst fP), snd fP)));
-  fold (conjoin_axioms ((f0,P0)::axioms)); fold (translate_spec_axioms xlate).
-  f_equal. rewrite IHaxioms.
-*)
+  intro; assumption.
+  intro H; destruct H; split.
+  assumption.
+  apply IHaxioms; assumption.
 Qed.
 
 Program Definition translate_spec_interp xlate spec :
@@ -789,7 +783,9 @@ Program Definition translate_spec_interp xlate spec :
   mkInterp (translate_spec_ops xlate spec) _.
 Next Obligation.
 revert ops H; induction spec; intros.
-
+apply (translate_spec_axioms_impl xlate); assumption.
+apply H. assumption.
+Qed.
 
 
 (*** Refinement ***)
@@ -866,3 +862,8 @@ Definition refinement_subst_import {spec spec1 spec2}
        ref_import_interp := spec_subst_interp2 sub i;
        ref_import_class := P;
        ref_import_iso := iso |}.
+
+(* Translate a refinement *)
+Definition refinement_translate {spec}
+           (R: RefinementOf spec) xlate : RefinementOf spec :=
+  refinement_interp R (translate_spec_interp xlate _).
