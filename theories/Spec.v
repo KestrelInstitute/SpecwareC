@@ -712,6 +712,86 @@ Check (fromIsoInterp (iso1:=iso_example_monoid)
 *)
 
 
+(*** Spec Translations ***)
+
+Inductive SpecTranslationElem : Set :=
+| XlateSingle (f_from f_to : Field)
+| XlateWild (f_from_prefix f_to_prefix : string)
+.
+
+Definition SpecTranslation : Set := list SpecTranslationElem.
+
+Definition translate_field1 elem (f: Field) : option Field :=
+  match elem with
+    | XlateSingle f_from f_to =>
+      if Field_dec f f_from then Some f_to else None
+    | XlateWild f_from_prefix f_to_prefix =>
+      if Field_dec (substring 0 (length f_from_prefix) f) f_from_prefix then
+        Some (append f_to_prefix (substring (length f_from_prefix)
+                                            (length f - length f_from_prefix) f))
+      else None
+  end.
+
+Fixpoint translate_field xlate f : Field :=
+  match xlate with
+    | [] => f
+    | elem::xlate' =>
+      match translate_field1 elem f with
+        | Some f' => f'
+        | None => translate_field xlate' f
+      end
+  end.
+
+Definition translate_spec_axioms xlate axioms : list (Field * Prop) :=
+  map (fun fP => (translate_field xlate (fst fP), snd fP)) axioms.
+
+Fixpoint translate_spec xlate spec : Spec :=
+  match spec with
+    | Spec_Axioms axioms =>
+      Spec_Axioms (translate_spec_axioms xlate axioms)
+    | Spec_ConsOp f T oppred rest =>
+      Spec_ConsOp (translate_field xlate f) T oppred
+                  (fun x x__pf => translate_spec xlate (rest x x__pf))
+  end.
+
+(* NOTE: the spec_ops type of a translated spec is in fact equal to that of the
+original spec, but this requires functional extensionality to prove... *)
+
+Fixpoint translate_spec_ops xlate spec :
+  spec_ops (translate_spec xlate spec) -> spec_ops spec :=
+  match spec return spec_ops (translate_spec xlate spec) -> spec_ops spec with
+    | Spec_Axioms _ => fun ops => ops
+    | Spec_ConsOp f T oppred rest =>
+      fun ops =>
+        ops_cons (ops_head ops) (ops_proof ops)
+                 (translate_spec_ops xlate _ (ops_rest ops))
+  end.
+
+Lemma translate_spec_axioms_eq xlate axioms :
+  conjoin_axioms (translate_spec_axioms xlate axioms) = conjoin_axioms axioms.
+  induction axioms.
+  reflexivity.
+  destruct axioms; destruct a.
+  reflexivity.
+  destruct p.
+  admit.
+(* FIXME HERE *)
+(*
+  unfold translate_spec_axioms; unfold map; unfold conjoin_axioms;
+  fold (map (fun (fP:Field*Prop) => (translate_field xlate (fst fP), snd fP)));
+  fold (conjoin_axioms ((f0,P0)::axioms)); fold (translate_spec_axioms xlate).
+  f_equal. rewrite IHaxioms.
+*)
+Qed.
+
+Program Definition translate_spec_interp xlate spec :
+  Interpretation spec (translate_spec xlate spec) :=
+  mkInterp (translate_spec_ops xlate spec) _.
+Next Obligation.
+revert ops H; induction spec; intros.
+
+
+
 (*** Refinement ***)
 
 (* A refinement import into spec is some spec', an interpretation from spec' to
@@ -730,10 +810,26 @@ Record RefinementOf spec : Type :=
    ref_imports: list (RefinementImport ref_spec)}.
 
 (* The identity refinement of a spec to itself, with no other specs *)
-Definition refinement_id spec : RefinementOf spec :=
+Definition id_refinement spec : RefinementOf spec :=
   {| ref_spec := spec;
      ref_interp := interp_id spec;
      ref_imports := [] |}.
+
+(* Add a simple refinement to a refinement *)
+Definition refinement_add_import {spec} (R: RefinementOf spec)
+           (imp: RefinementImport (ref_spec _ R)) : RefinementOf spec :=
+  {| ref_spec := ref_spec _ R;
+     ref_interp := ref_interp _ R;
+     ref_imports := imp :: ref_imports _ R |}.
+
+(* The identity refinement with an import *)
+Definition id_refinement_import spec P
+           (iso: IsoToSpec spec P) : RefinementOf spec :=
+  refinement_add_import (id_refinement spec)
+                        {| ref_import_fromspec := spec;
+                           ref_import_interp := interp_id spec;
+                           ref_import_class := P;
+                           ref_import_iso := iso |}.
 
 (* Compose an interpretation with a simple refinement *)
 Definition simple_refinement_interp {spec spec'}
@@ -753,9 +849,20 @@ Definition refinement_interp {spec spec'}
      ref_imports := map (fun imp => simple_refinement_interp imp i)
                          (ref_imports _ R) |}.
 
-(* Add a simple refinement to a refinement *)
-Definition refinement_cons_import {spec} (R: RefinementOf spec)
-           (imp: RefinementImport (ref_spec _ R)) : RefinementOf spec :=
-  {| ref_spec := ref_spec _ R;
-     ref_interp := ref_interp _ R;
-     ref_imports := imp :: ref_imports _ R |}.
+(* Apply a spec substitution to a refinement *)
+Definition refinement_subst {spec spec1 spec2}
+           (R: RefinementOf spec) (sub: SubSpec spec1 (ref_spec _ R))
+           (i: Interpretation spec1 spec2) : RefinementOf spec :=
+  refinement_interp R (spec_subst_interp1 sub i).
+
+(* Apply a spec substitution to a refinement, importing the co-domain spec *)
+Definition refinement_subst_import {spec spec1 spec2}
+           (R: RefinementOf spec) (sub: SubSpec spec1 (ref_spec _ R))
+           (i: Interpretation spec1 spec2)
+           P (iso: IsoToSpec spec2 P) : RefinementOf spec :=
+  refinement_add_import
+    (refinement_subst R sub i)
+    {| ref_import_fromspec := spec2;
+       ref_import_interp := spec_subst_interp2 sub i;
+       ref_import_class := P;
+       ref_import_iso := iso |}.
