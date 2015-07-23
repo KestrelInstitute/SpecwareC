@@ -1,6 +1,8 @@
 
 DECLARE PLUGIN "specware"
 
+open Util_specware
+
 open Names
 open Loc
 open Libnames
@@ -16,681 +18,6 @@ open Decl_kinds
 open Ppconstr
 open Genredexpr
 open Topconstr
-
-
-(***
- *** Debugging support
- ***)
-
-let debug_level = ref 1
-
-let debug_printf level args =
-  if !debug_level >= level then
-    Format.eprintf args
-  else
-    Format.ifprintf Format.std_formatter args
-
-
-(***
- *** Helper functions
- ***)
-
-let dummy_loc = Loc.ghost
-
-(* Map f over an option type *)
-let map_opt f opt =
-  match opt with
-  | Some x -> Some (f x)
-  | None -> None
-
-(* Map f on a list but only keep the "Some"s *)
-let rec filter_map f l =
-  match l with
-  | [] -> []
-  | x :: l' ->
-     (match f x with
-      | Some y -> y :: filter_map f l'
-      | None -> filter_map f l')
-
-(* Same as filter_map, but also reverse the list *)
-let rev_filter_map f l =
-  let rec helper l acc =
-    match l with
-    | [] -> acc
-    | x :: l' ->
-       helper l' (match f x with
-                  | Some y -> (y::acc)
-                  | None -> acc)
-  in helper l []
-
-(* Map f on a list and concatenate the results *)
-let concat_map f l =
-  List.concat (List.map f l)
-
-(* Topo sort failed because of a circularity *)
-exception TopoCircularity of int
-
-(* Stable topological sort: sort l so that every element x comes after (or
-   before, if reverse_p is set) its dependencies, favoring the existing ordering
-   of l where possible. The dependencies of x are all nodes y whose key, given
-   by the key function, is key_eq to a key in (deps x). *)
-(* FIXME: use sets for deps instead of lists *)
-let rec stable_topo_sort ?(reverse_p=false) loc key key_eq deps l =
-  let arr = Array.of_list l in
-  let arr_deps = Array.make (List.length l) [] in
-  let visited = Array.make (List.length l) false in
-  let rec get_node_by_key_help k j =
-    if j >= Array.length arr then None
-    else if key_eq k (key arr.(j)) then Some j
-    else get_node_by_key_help k (j+1) in
-  let get_node_by_key k = get_node_by_key_help k 0 in
-  (* Perform a DFS to build the transitive closure of deps *)
-  let rec build_node_deps path_to_i i =
-    if visited.(i) then
-      arr_deps.(i)
-    else if List.mem i path_to_i then
-      raise loc (TopoCircularity i)
-    else
-      let i_immed_deps = filter_map get_node_by_key (deps arr.(i)) in
-      let i_deps = concat_map (build_node_deps (i::path_to_i)) i_immed_deps in
-      visited.(i) <- true;
-      arr_deps.(i) <- i_deps;
-      i::i_deps
-  in
-  let _ = for i = 0 to Array.length arr_deps - 1 do
-            ignore (build_node_deps [] i)
-          done in
-  let index_arr = Array.init (List.length l) (fun i -> i) in
-  let _ = Array.stable_sort
-            (fun i j ->
-             if List.mem j arr_deps.(i) then
-               (if reverse_p then 1 else -1)
-             else if List.mem i arr_deps.(j) then
-               (if reverse_p then -1 else 1)
-             else j-i)
-            index_arr in
-  Array.to_list (Array.map (fun i -> arr.(i)) index_arr)
-
-
-(***
- *** Helper functions for interacting with Coq
- ***)
-
-(* Syntactic expressions for the sorts Type and Prop *)
-let type_expr = Constrexpr.CSort (Loc.dummy_loc, Misctypes.GType [])
-let prop_expr = Constrexpr.CSort (Loc.dummy_loc, Misctypes.GProp)
-
-(* Pretty-print a term (a "construction") *)
-let pp_constr fmt c = Pp.pp_with fmt (Printer.pr_constr c)
-
-(* Pretty-print a term *)
-let pp_constr_expr fmt c = Pp.pp_with fmt (Richpp.pr_constr_expr c)
-
-(* Pretty-print a vernacular command *)
-let pp_vernac fmt cmd = Pp.pp_with fmt (Ppvernac.Richpp.pr_vernac_body cmd)
-
-(* Pretty-print a type error *)
-let pp_type_error env fmt e =
-  Pp.pp_with fmt (Himsg.explain_type_error env Evd.empty e)
-
-(* Pretty-print a pretyping error *)
-let pp_pretype_error env evd fmt e =
-  Pp.pp_with fmt (Himsg.explain_pretype_error env evd e)
-
-(* Convert a term to a string *)
-let constr_expr_to_string c = Pp.string_of_ppcmds (Richpp.pr_constr_expr c)
-
-(* Accessors for located types *)
-let located_elem (x : 'a located) = snd x
-let located_loc (x : 'a located) = fst x
-
-(* Build a name from an ident *)
-let name_of_ident (id : Id.t) : Name.t = Name id
-
-(* Build a located name from a located ident *)
-let lname_of_lident (id : lident) : lname =
-  (located_loc id, name_of_ident (located_elem id))
-
-(* Test if an identifier has a given prefix, and if so, return the
-   rest of the identifier after that prefix *)
-let match_prefix id prefix =
-  let pre_len = String.length prefix in
-  let id_str = Id.to_string id in
-  let id_len = String.length id_str in
-  if id_len >= pre_len &&
-       String.sub id_str 0 pre_len = prefix then
-    Some (String.sub id_str pre_len (id_len - pre_len))
-  else None
-
-(* Check if an identifier has a given suffix *)
-let has_suffix id suffix =
-  let str = Id.to_string id in
-  let str_len = String.length str in
-  let suffix_len = String.length suffix in
-  str_len > suffix_len &&
-    suffix = String.sub str (str_len - suffix_len) suffix_len
-
-(* Append a suffix to an Id, with "__" in between *)
-let add_suffix id suffix =
-  Id.of_string (Id.to_string id ^ "__" ^ suffix)
-
-(* Append a suffix to an lident, with "__" in between *)
-let add_suffix_l lid suffix =
-  let (loc, id) = lid in
-  (loc, add_suffix id suffix)
-
-(* Build an expression for a variable from a located identifier *)
-let mk_var id = CRef (Ident id, None)
-
-(* Build an application *)
-let mk_app f args =
-  CApp (dummy_loc, (None, f),
-        List.map (fun arg -> (arg, None)) args)
-
-(* Build an expression for a local reference applied to named implicit
-   args, where the args are given as (name,value) pairs *)
-let mk_ref_app_named_args loc r args =
-  CApp (loc,
-        (None, CRef (r, None)),
-        List.map (fun (id,arg) ->
-                  (arg, Some (dummy_loc, ExplByName id))) args)
-
-(* Build an expression for a variable applied to named implicit args,
-   where the args are given as (name,value) pairs *)
-let mk_id_app_named_args loc id args =
-  mk_ref_app_named_args loc (Ident id) args
-
-(* Build a qualified id (NOTE: dir is *not* reversed here) *)
-let mk_qualid dir id =
-  make_qualid (DirPath.make (List.rev_map Id.of_string dir)) id
-
-(* Cons an id onto the end of a qualid *)
-let qualid_cons qualid id =
-  let (mod_path,mod_name) = repr_qualid qualid in
-  make_qualid (DirPath.make ([mod_name] @ DirPath.repr mod_path)) id
-
-(* Build a term for a global constant, where dir lists the module path
-   as a list (e.g., ["Coq"; "Init"; "Logic"]) and id is the id *)
-let mk_reference dir id =
-  CRef (Qualid (dummy_loc, mk_qualid dir id), None)
-
-(* Get a string for a global reference *)
-let global_to_string gr =
-  match gr with
-  | VarRef v -> raise dummy_loc (Failure "global_to_string")
-  | ConstRef c -> Constant.to_string c
-  | IndRef (i,_) -> MutInd.to_string i
-  | ConstructRef _ -> raise dummy_loc (Failure "global_to_string")
-
-(* Get the module for a global reference *)
-let global_modpath gr =
-  match gr with
-  | VarRef _ -> raise dummy_loc (Failure "global_modpath")
-  | ConstRef c -> Constant.modpath c
-  | IndRef (i, _) -> MutInd.modpath i
-  | ConstructRef ((i, _), _) -> MutInd.modpath i
-
-(* Turn a global reference into a local one *)
-(* FIXME: find a better way than using strings! *)
-let qualid_of_global gr =
-  qualid_of_string (global_to_string gr)
-
-(* Build an expression for a global applied to named implicit args *)
-let mk_global_app_named_args gr args =
-  mk_ref_app_named_args dummy_loc (Qualid (dummy_loc, qualid_of_global gr)) args
-
-(* Build an exprssion for a global with @ in front of it *)
-let mk_global_expl gr =
-  CAppExpl (dummy_loc,
-            (None, (Qualid (dummy_loc, qualid_of_global gr)), None),
-            [])
-
-(* Look up a defined constant by qualid *)
-let lookup_constant loc qualid =
-  match Nametab.locate qualid with
-  | ConstRef c -> c
-  | _ -> user_err_loc (dummy_loc, "_",
-                       str ("Not a constant: " ^ string_of_qualid qualid))
-
-(* Look up a constructor by qualid *)
-let lookup_constructor loc qualid =
-  match Nametab.locate qualid with
-  | ConstructRef c -> c
-  | _ -> user_err_loc (dummy_loc, "_",
-                       str ("Not a constructor: " ^ string_of_qualid qualid))
-
-(* Look up an identifier in the current module and make it fully qualified *)
-let qualify_identifier id =
-  let _ = debug_printf 2 "@[qualify_identifier: %s@]\n" (Id.to_string id) in
-  qualid_of_global (Nametab.locate (qualid_of_ident id))
-
-(* Make (the syntactic representation of) a single record field,
-   filling in default (None) values for all the extra information such
-   as notations, priority, etc. The coercion_p flag indicates whether
-   to use a coercion field with ":>". *)
-let mk_record_field (id, tp, coercion_p) =
-  ((((if coercion_p then Some true else None),
-     AssumExpr (lname_of_lident id, tp)), None), [])
-
-(* Extract the name of a record field *)
-let record_field_name fld =
-  match fld with
-  | (((_, AssumExpr (lid, _)), _), _) -> located_elem lid
-  | _ -> raise dummy_loc (Failure "record_field_name")
-
-(* Make an implicit {name:tp} assumption, where name is an id and tp
-   is a construction (type constr) *)
-let mk_implicit_assum name tp =
-  LocalRawAssum ([(Loc.dummy_loc, Name name)], Default Implicit, tp)
-
-(* Add a definition to the current Coq image *)
-let add_definition id params type_opt body =
-  let cmd = VernacDefinition
-              ((None, Definition), id,
-               DefineBody (params, None, body, type_opt))
-  in
-  let _ = debug_printf 1 "@[add_definition command:@ %a@]\n" pp_vernac cmd in
-  interp (located_loc id, cmd)
-
-(* Add a type-class to the current Coq image, where is_op_class says
-   whether to add an operational type-class in Type (if true) or a
-   normal type-class in Prop (if false), and fields is a list of
-   triples (id, type, coercion_p) to be passed to mk_record_field *)
-let add_typeclass class_id is_op_class is_prop_class params fields =
-  let cmd =
-    VernacInductive (false, BiFinite,
-                     [((false, class_id), params,
-                       Some (if is_prop_class then prop_expr else type_expr),
-                       Class is_op_class,
-                       if is_op_class then
-                         match fields with
-                         | [] -> Constructors []
-                         | [(id, tp, _)] ->
-                            Constructors [false, (id, tp)]
-                         | _ -> raise (located_loc class_id) (Failure "add_typeclass")
-                       else
-                         RecordDecl (None, List.map mk_record_field fields)),
-                      []])
-  in
-  let _ = debug_printf 1 "@[add_typeclass command:@ %a@]\n" pp_vernac cmd in
-  interp (located_loc class_id, cmd)
-
-(* Add an instance of an typeclass that is a single term *)
-let add_term_instance inst_name inst_params inst_tp inst_body =
-  let cmd = VernacInstance
-              (false, inst_params,
-               (inst_name, Decl_kinds.Explicit, inst_tp),
-               Some (false, inst_body),
-               None)
-  in
-  let _ = debug_printf 1 "@[add_term_instance command:@ %a@]\n" pp_vernac cmd in
-  interp (located_loc inst_name, cmd)
-
-
-(* Add an instance using the given record fields *)
-let add_record_instance inst_name inst_params inst_tp inst_fields =
-  let loc = located_loc inst_name in
-  let cmd = VernacInstance
-              (false, inst_params,
-               (inst_name, Decl_kinds.Explicit, inst_tp),
-               Some (true,
-                     CRecord (loc, None,
-                              List.map (fun (id,body) -> (Ident (loc, id),body))
-                                       inst_fields)),
-               None)
-  in
-  let _ = debug_printf 1 "@[add_record_instance command:@ %a@]\n" pp_vernac cmd in
-  interp (loc, cmd)
-
-(* Begin an interactively-defined instance *)
-let begin_instance ?(hook=(fun _ -> ())) inst_params inst_name inst_tp =
-  let cmd = VernacInstance
-              (false, inst_params,
-               (inst_name, Explicit, inst_tp),
-               None, None)
-  in
-  let _ = debug_printf 1 "@[begin_instance command:@ %a@]\n" pp_vernac cmd in
-  ignore
-    (Classes.new_instance
-       false inst_params (inst_name, Explicit, inst_tp) None ~hook:hook None)
-
-(* Begin a new module *)
-let begin_module mod_name =
-  let loc = located_loc mod_name in
-  interp (loc, VernacDefineModule (None, mod_name, [], Check [], []))
-
-(* End the current module, which should have name mod_name *)
-let end_module mod_name =
-  let loc = located_loc mod_name in
-  interp (loc, VernacEndSegment mod_name)
-
-(* Begin a new section *)
-let begin_section sect_id =
-  Lib.open_section sect_id
-
-(* End the current section *)
-let end_section () =
-  Lib.close_section ()
-
-(* Perform some operation(s) inside a newly-defined module *)
-let within_module mod_name f =
-  let _ = begin_module mod_name in
-  let ret = f () in
-  let _ = end_module mod_name in
-  ret
-
-(* Reduce a constr using a list of reduction expressions *)
-let reduce_constr reds constr =
-  let env = Global.env () in
-  let evdref = ref Evd.empty in
-  let apply_redexpr c r =
-    let (evd,r_interp) = Tacinterp.interp_redexp env !evdref r in
-    let _ = evdref := evd in
-    snd (fst (Redexpr.reduction_of_red_expr env r_interp) env !evdref c) in
-  List.fold_left apply_redexpr constr reds
-
-(* Reduce a constr to head normal form *)
-let hnf_constr constr =
-  reduce_constr [Hnf] constr
-
-(* Reduce a constr using the "compute" reduction (which is call-by-value) *)
-let compute_constr constr =
-  reduce_constr
-    [Cbv (Redops.make_red_flag [FBeta;FIota;FZeta;FDeltaBut []])]
-    constr
-
-(* Apply a series of reductions to a term in a parameter context, by
-   interpreting the term to a constr, applying the reductions in order, and then
-   going back to a term *)
-let reduce_term params reds t =
-  let env = Global.env () in
-  let evdref = ref Evd.empty in
-  let impls, ((env, ctx), imps1) =
-    Constrintern.interp_context_evars env evdref params in
-  let interp_term t = fst (Constrintern.interp_constr env !evdref t) in
-  let uninterp_term c =
-    Constrextern.with_implicits
-      (Constrextern.with_arguments
-         (Constrextern.extern_constr true env !evdref)) c
-  in
-  let apply_redexpr c r =
-    let (evd,r_interp) = Tacinterp.interp_redexp env !evdref r in
-    let _ = evdref := evd in
-    snd (fst (Redexpr.reduction_of_red_expr env r_interp) env !evdref c) in
-  uninterp_term (List.fold_left apply_redexpr (interp_term t) reds)
-
-(* Fold some set of variables in c into equivalent terms, by taking
-   folds_c, a list of pairs of constrs (c_from,c_to) where c_from is
-   always a variable, and replacing all subterms of c equal to some
-   c_from in folds_c with the corresponding c_to. *)
-let rec fold_constr_vars folds_c c =
-  (* apply_fold_var searches for a constr on the LHS of folds_c that
-     equals c, and replaces c by the correponding RHS if found *)
-  let rec apply_fold_var folds_c c =
-    match folds_c with
-    | [] -> c
-    | (c_from,c_to)::folds_c' ->
-       if Constr.equal c c_from then c_to else apply_fold_var folds_c' c in
-  (* Lift a folding, due to a variable binding *)
-  let lift_folding folds_c =
-    List.map (fun (c_from,c_to) ->
-              (Vars.lift 1 c_from, Vars.lift 1 c_to)) folds_c in
-  (* The main body: recursively apply folds_c to the subterms of c *)
-  match Constr.kind c with
-  | Constr.Var _ -> apply_fold_var folds_c c
-  | Constr.Rel _ -> apply_fold_var folds_c c
-  | _ -> Constr.map_with_binders lift_folding fold_constr_vars folds_c c
-
-(* Unfold the list of global references (which must all be constants,
-   i.e., not constructors or type constructors), and then apply the
-   given folds, which are given as a list of pairs (var,term) of a
-   variable to be folded into the corresponding term (which should be
-   equal). All terms are relative to the given parameters. *)
-let unfold_fold_term params unfolds folds t =
-  let env = Global.env () in
-  let evdref = ref Evd.empty in
-  let impls, ((env, ctx), imps1) =
-    Constrintern.interp_context_evars env evdref params in
-  let interp_term t = fst (Constrintern.interp_constr env !evdref t) in
-  let uninterp_term c = Constrextern.extern_constr true env !evdref c in
-  let t_constr = interp_term t in
-
-  (* The following block of code comes from vernac_check_may_eval *)
-  (*
-  let sigma', t_constr = Constrintern.interp_open_constr env !evdref t in
-  let sigma' = Evarconv.consider_remaining_unif_problems env sigma' in
-  Evarconv.check_problems_are_solved env sigma';
-  let sigma',nf = Evarutil.nf_evars_and_universes sigma' in
-  let uctx = Evd.universe_context sigma' in
-  let env_bl = Environ.push_context uctx env in
-  let t_constr = nf t_constr in
-  let _ = evdref := sigma' in
-   *)
-
-  let unfold_redfun =
-    Tacred.unfoldn
-      (List.map (fun gr ->
-                 match gr with
-                 | ConstRef c -> (Locus.AllOccurrences, EvalConstRef c)
-                 | _ -> raise dummy_loc (Failure "unfold_fold_term"))
-                unfolds) in
-  let constr_unfolded = unfold_redfun env !evdref t_constr in
-
-  (* This used the fold reduction, which seemed to not work right... *)
-  (*
-  let fold_redfun =
-    Tacred.fold_commands
-      (List.map (fun t -> fst (Constrintern.interp_constr env !evdref t)) folds) in
-  let constr_out =
-    fold_redfun env !evdref constr_unfolded in
-   *)
-
-  (* This does our own fold, defined above *)
-  let folds_c =
-    List.map (fun (id,t) ->
-              let res_from = interp_term (mk_var (dummy_loc, id)) in
-              let res_to = interp_term t in
-              (*
-              let _ =
-                debug_printf "\nunfold_fold_term: unfolding %s to %a"
-                               (Id.to_string id)
-                               pp_constr_expr (uninterp_term res_to) in
-               *)
-             (res_from, res_to)) folds in
-  let constr_out = fold_constr_vars folds_c constr_unfolded in
-  let res = uninterp_term constr_out in
-  (*
-  let _ = debug_printf "\nunfold_fold_term: unfolded term: %a\n" pp_constr_expr
-                         (uninterp_term constr_unfolded) in
-   *)
-  let _ = debug_printf 2 "@[unfold_fold_term: returning@ %a@]\n"
-                       pp_constr_expr res in
-  res
-
-(* Test if constr is a constant equal to const *)
-let constr_is_constant const constr =
-  match Term.kind_of_term constr with
-  | Term.Const (c, _) -> Constant.equal c const
-  | _ -> false
-
-(* Test if constr is a constructor equal to ctor *)
-let constr_is_constructor ctor constr =
-  match Term.kind_of_term constr with
-  | Term.Construct (c, _) -> eq_constructor c ctor
-  | _ -> false
-
-(* Build the expression t1 = t2 *)
-let mk_equality t1 t2 =
-  CApp (dummy_loc,
-        (None, mk_reference ["Coq"; "Init"; "Logic"] (Id.of_string "eq")),
-        [(t1, None); (t2, None)])
-
-(* Build the expression id1 = id2 for identifiers id1 and id2 *)
-let mk_ident_equality id1 id2 =
-  mk_equality (mk_var id1) (mk_var id2)
-
-(* Build the expression t1::t2::...::tn::nil *)
-let mk_list loc ts =
-  List.fold_right
-    (fun t rest ->
-     mkAppC (mk_reference ["Coq"; "Init"; "Datatypes"] (Id.of_string "cons"),
-             [t; rest]))
-    ts
-    (mk_reference ["Coq"; "Init"; "Datatypes"] (Id.of_string "nil"))
-
-(* Check that two terms are definitionally equal relative to the given
-   parameter list, by checking that (forall params, eq_refl : t1=t2)
-   is well-typed (eq_refl is the constructor for the equality type) *)
-let check_equal_term params t1 t2 =
-  let cmd = VernacCheckMayEval
-              (None, None,
-               (mkCLambdaN
-                  dummy_loc
-                  params
-                  (CCast (dummy_loc,
-                          CApp (dummy_loc,
-                                (None, mk_reference ["Coq"; "Init"; "Logic"]
-                                                    (Id.of_string "eq_refl")),
-                                [(t1, None)]),
-                          CastConv (mk_equality t1 t2)))))
-  in
-  let _ = debug_printf 2 "@[check_equal_term command:@ %a@]\n" pp_vernac cmd in
-  try interp (dummy_loc, cmd); true
-  with Type_errors.TypeError (env, err) ->
-       let _ = debug_printf 1 "@[check_equal_term:@ %a@]\n" (pp_type_error env) err in
-       false
-     | Pretype_errors.PretypeError (env, evd, err) ->
-       let _ = debug_printf 1 "@[check_equal_term:@ %a@]\n"
-                            (pp_pretype_error env evd) err in
-       false
-
-
-(***
- *** Destructing Coq Inductive Objects
- ***)
-
-(* A description of a Coq inductive type, given as a list of constructors along
-with functions to try to interpret constructor arguments at type 'a *)
-type 'a ind_type_descr = (constructor * (Constr.t array -> 'a option)) list
-
-(* Destruct a constr of an inductive type using an ind_type_descr *)
-let destruct_ind_constr descr constr =
-  let rec apply_descr cur_descr f args =
-    match cur_descr with
-    | [] ->
-       let _ =
-         debug_printf 2 "@[destruct_ind_constr: no more cases left for@ %a@]\n"
-                      pp_constr constr
-       in
-       None
-    | (ctor, interp_f) :: cur_descr' ->
-       let _ =
-         debug_printf 2 "@[destruct_ind_constr: testing for constructor@ %a@]\n"
-                      pp_constr (Term.mkConstruct ctor)
-       in
-       if constr_is_constructor ctor f then
-         (match interp_f args with
-          | Some ret -> Some ret
-          | None -> apply_descr cur_descr' f args)
-       else
-         apply_descr cur_descr' f args
-  in
-  let _ = debug_printf 2 "@[destruct_ind_constr called on@ %a@]\n" pp_constr constr in
-  match Term.kind_of_term constr with
-  | Term.App (f, args) -> apply_descr descr f args
-  | Term.Construct _ -> apply_descr descr constr [| |]
-  | _ -> None
-
-(* Helper to build an ind_type_descr *)
-let make_descr ctor_mod d : 'a ind_type_descr =
-  List.map (fun (ctor,interp_f) ->
-            (lookup_constructor dummy_loc (mk_qualid ctor_mod (Id.of_string ctor)),
-             interp_f)) d
-
-(* Helpers to build ind_type_descrs for different sorts of constructors *)
-let nullary_ctor_descr ctor ret =
-  (ctor,function [| |] -> Some ret | _ -> None)
-let unary_ctor_descr ctor ret_f =
-  (ctor,function [| arg |] -> ret_f arg | _ -> None)
-let binary_ctor_descr ctor ret_f =
-  (ctor,function [| arg1;arg2 |] -> ret_f arg1 arg2 | _ -> None)
-let trinary_ctor_descr ctor ret_f =
-  (ctor,function [| arg1;arg2;arg3 |] -> ret_f arg1 arg2 arg3 | _ -> None)
-let quaternary_ctor_descr ctor ret_f =
-  (ctor,function [| arg1;arg2;arg3;arg4 |] -> ret_f arg1 arg2 arg3 arg4 | _ -> None)
-let unary_ind_ctor_descr ctor descr =
-  (ctor,function [| arg |] -> destruct_ind_constr descr arg | _ -> None)
-
-(* Descriptions of a number of Coq types *)
-let datatypes_mod = ["Coq"; "Init"; "Datatypes"]
-let bool_descr = make_descr datatypes_mod [(nullary_ctor_descr "true" true);
-                                           (nullary_ctor_descr "false" false)]
-let pair_descr left_f right_f =
-  make_descr datatypes_mod
-             [quaternary_ctor_descr
-                "pair"
-                (fun tp1 tp2 arg1 arg2 ->
-                 match (left_f arg1, right_f arg2) with
-                 | (Some l, Some r) -> Some (l,r)
-                 | _ -> None)]
-let option_descr elem_f =
-  make_descr datatypes_mod
-             [(binary_ctor_descr "Some" (fun tp x -> Some (elem_f x)));
-              (unary_ctor_descr "None" (fun tp -> Some None))]
-let rec list_descr elem_f =
-  make_descr datatypes_mod
-             [(trinary_ctor_descr
-                 "cons"
-                 (fun tp elem rest ->
-                  match (elem_f elem,
-                         destruct_ind_constr (list_descr elem_f) rest) with
-                  | (Some elem_res, Some l) -> Some (elem_res :: l)
-                  | _ -> None));
-              (unary_ctor_descr "nil" (fun tp -> Some []))]
-
-(* Decode a little-endian list of booleans into an int *)
-let rec decode_ascii_bits bits =
-  match bits with
-  | [] -> 0
-  | b :: bits' -> (if b then 1 else 0) + 2 * decode_ascii_bits bits'
-
-(* Description for the Coq Ascii character type *)
-let ascii_descr =
-  make_descr ["Coq"; "Strings"; "Ascii"]
-             [("Ascii",
-               fun args ->
-               if Array.length args = 8 then
-                 match
-                   (Array.fold_right
-                      (fun bit_c bits_opt ->
-                       match (destruct_ind_constr bool_descr bit_c, bits_opt) with
-                       | (Some b, Some bits) -> Some (b::bits)
-                       | _ -> None)
-                      args (Some []))
-                 with
-                 | Some bits -> Some (char_of_int (decode_ascii_bits bits))
-                 | None -> None
-               else None)]
-
-(* Description for the Coq string type as a list of characters *)
-let rec string_descr_thunk () =
-  make_descr ["Coq"; "Strings"; "String"]
-             [(nullary_ctor_descr "EmptyString" []);
-              (binary_ctor_descr
-                 "String"
-                 (fun hd tl ->
-                  match (destruct_ind_constr ascii_descr hd,
-                         destruct_ind_constr (string_descr_thunk ()) tl) with
-                  | (Some c, Some l) -> Some (c::l)
-                  | _ -> None))]
-let string_descr = string_descr_thunk ()
-
-(* Destruct a string literal, returning None if constr is not a string *)
-let destruct_string_constr constr =
-  let constr_red = compute_constr constr in
-  match destruct_ind_constr string_descr constr_red with
-  | Some chars -> Some (String.init (List.length chars) (List.nth chars))
-  | None -> None
 
 
 (***
@@ -865,85 +192,76 @@ let lookup_spec locref = fst (lookup_spec_and_globref locref)
  *** Representing Specs as Inductive Objects
  ***)
 
-(* Create the term (Spec_ConsOp f tp oppred (fun (f:f__class) f__pf => rest)) *)
-let repr_cons_op loc rest (f, tp, oppred) : constr_expr =
-  mkAppC (mk_reference ["Specware"; "Spec"] (Id.of_string "Spec_ConsOp"),
-          [CPrim (loc, String (Id.to_string f)); tp;
-           (match oppred with
-            | None -> mk_reference ["Coq"; "Init"; "Datatypes"]
-                                   (Id.of_string "None")
-            | Some pred ->
-               mkAppC (mk_reference ["Coq"; "Init"; "Datatypes"]
-                                    (Id.of_string "Some"),
-                       [pred]));
-           (mkCLambdaN loc
-                       [LocalRawAssum ([loc, Name f], Default Explicit,
-                                       mk_var (loc, field_class_id f));
-                        LocalRawAssum ([loc, Name (field_proof_id f)], Default Explicit,
-                                       CHole (loc, None, IntroAnonymous, None))]
-                       rest)
-          ])
+(* A description of strings that parses into Id.t *)
+let id_descr : (Id.t, Id.t) constr_descr =
+  Descr_Iso (Id.of_string, Id.to_string, string_descr)
 
-(* Create the term Spec_Axioms [("ax1",ax_tp1), ...] *)
-let repr_axioms loc axioms : constr_expr =
-  mkAppC (mk_reference ["Specware"; "Spec"] (Id.of_string "Spec_Axioms"),
-          [mk_list loc
-                   (List.rev_map
-                      (fun (ax_id,ax_tp) ->
-                       mkAppC (mk_reference ["Specware"; "Spec"]
-                                            (Id.of_string "ax_pair"),
-                               [CPrim (loc, String (Id.to_string ax_id));
-                                ax_tp]))
-                      axioms)])
+(* The description of a list of axioms *)
+let axiom_list_descr : ((Id.t * Constr.t) list,
+                        (Id.t * constr_expr) list) constr_descr =
+  list_descr (pair_descr id_descr Descr_Constr)
+
+(* The description of the Spec inductive type *)
+let spec_descr : ((Id.t * Constr.t * Constr.t option) list *
+                    (Id.t * Constr.t) list,
+                  (Id.t * constr_expr * constr_expr option) list *
+                    (Id.t * constr_expr) list) constr_descr =
+  Descr_Rec
+    (fun spec_descr ->
+     Descr_Iso
+       ((function
+          | Left (f, (tp, (oppred, ((ops, axioms), ())))) ->
+             ((f, tp, oppred)::ops, axioms)
+          | Right (Left (axioms, ())) -> ([], axioms)
+          | Right (Right emp) -> emp.elim_empty),
+        (function
+          | ((f,tp,oppred)::ops', axioms) ->
+             Left (f, (tp, (oppred, ((ops', axioms), ()))))
+          | ([], axioms) -> Right (Left (axioms, ()))),
+        quaternary_ctor
+          ["Specware"; "Spec"] "Spec_ConsOp"
+          id_descr (fun _ -> Descr_Constr) (fun _ _ -> option_descr Descr_Constr)
+          (fun f_sum _ _ ->
+           let f = match f_sum with Left f -> f | Right f -> f in
+           Descr_ConstrMap
+             ((fun rest_c ->
+               hnf_constr
+                 (Term.mkApp
+                    (rest_c,
+                     [| Term.mkVar f; Term.mkVar (field_proof_id f) |]))),
+              (fun rest_expr ->
+               (mkCLambdaN
+                  dummy_loc
+                  [LocalRawAssum ([dummy_loc, Name f], Default Explicit,
+                                  mk_var (dummy_loc, field_class_id f));
+                   LocalRawAssum ([dummy_loc, Name (field_proof_id f)], Default Explicit,
+                                  CHole (dummy_loc, None, IntroAnonymous, None))]
+                  rest_expr)),
+              spec_descr))
+          (unary_ctor
+             ["Specware"; "Spec"] "Spec_Axioms" axiom_list_descr
+             Descr_Fail)))
 
 (* Build a term of type Spec that represents a spec *)
 let build_spec_repr loc spec : constr_expr =
-  List.fold_left (repr_cons_op loc)
-                 (repr_axioms loc spec.spec_axioms) spec.spec_ops
+  build_constr_expr spec_descr (spec.spec_ops, spec.spec_axioms)
 
 exception MalformedSpec of Constr.t
 
-(* A description of the Spec type *)
-let rec spec_descr_thunk () =
-  make_descr ["Specware"; "Spec"]
-             [(unary_ctor_descr
-                 "Spec_Axioms"
-                 (fun arg ->
-                  map_opt
-                    (fun axioms -> ([], axioms))
-                    (destruct_ind_constr
-                       (list_descr
-                          (fun ax_pair ->
-                           destruct_ind_constr
-                             (pair_descr
-                                destruct_string_constr
-                                (fun x -> Some x))
-                             (hnf_constr ax_pair))) arg)));
-              (quaternary_ctor_descr
-                 "Spec_ConsOp"
-                 (fun f_c tp_c oppred_c rest_c ->
-                  match (destruct_string_constr f_c,
-                         destruct_ind_constr (option_descr (fun x -> Some x))
-                                             oppred_c) with
-                  | (Some f, Some oppred) ->
-                     map_opt
-                       (fun (ops,axioms) -> ((f, tp_c, oppred)::ops, axioms))
-                       (destruct_ind_constr
-                          (spec_descr_thunk ())
-                          (hnf_constr
-                             (Term.mkApp
-                                (rest_c,
-                                 [| Term.mkVar (Id.of_string f);
-                                    Term.mkVar (field_proof_id (Id.of_string f)) |]))))
-                  | _ -> None))]
-
-let spec_type_descr = spec_descr_thunk ()
-
 (* Destruct a constr of type Spec into a list of ops and axioms *)
 let destruct_spec_repr constr =
-  match destruct_ind_constr spec_type_descr (hnf_constr constr) with
+  match destruct_constr spec_descr (hnf_constr constr) with
   | Some res -> res
   | None -> raise dummy_loc (MalformedSpec constr)
+
+(* A description of the RefinementImport type *)
+(*
+let rec refinement_import_descr_thunk () =
+  make_descr ["Specware"; "Spec"]
+             [(quinary_ctor_descr
+                 "Build_RefinementImport"
+                 (fun arg))]
+ *)
 
 
 (***
@@ -1135,14 +453,14 @@ let import_spec_constr loc constr =
     List.iter (fun (f,tp,oppred) ->
                add_spec_field
                  false
-                 (loc, Id.of_string f)
+                 (loc, f)
                  (Constrextern.extern_constr true env evd tp)
                  (map_opt (Constrextern.extern_constr true env evd) oppred)) ops
   in
   List.iter
     (fun (ax_name,ax_tp) ->
      add_spec_field true
-                    (loc, Id.of_string ax_name)
+                    (loc, ax_name)
                     (Constrextern.extern_constr true env evd ax_tp)
                     None)
     axioms
