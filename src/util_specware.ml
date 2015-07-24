@@ -574,6 +574,9 @@ type ('a, 'b) sum =
   | Left of 'a
   | Right of 'b
 
+exception DescrFailedInternal
+exception DescrFailed of string * Constr.t
+
 (* Descriptions of the values of some Coq type, given as a "way" to map values
 of the Coq type to and from some OCaml type: ('t,'f) constr_descr describes
 how to destruct Coq values of this type to type 'to, and how to build Coq
@@ -584,23 +587,22 @@ type (_,_) constr_descr =
                  (('t1,'t2) sum, ('f1,'f2) sum) constr_descr
   | Descr_Fail : (empty, empty) constr_descr
   | Descr_Constr : (Constr.t, constr_expr) constr_descr
-  | Descr_Iso : ('t1 -> 't2) * ('f2 -> 'f1) *
+  | Descr_Iso : string * ('t1 -> 't2) * ('f2 -> 'f1) *
                   ('t1, 'f1) constr_descr -> ('t2, 'f2) constr_descr
-  | Descr_ConstrMap : (Constr.t -> Constr.t) *
-                        (constr_expr -> constr_expr) *
-                          ('t, 'f) constr_descr ->
+  | Descr_ConstrMap : (Constr.t -> Constr.t) * (constr_expr -> constr_expr) *
+                        ('t, 'f) constr_descr ->
                       ('t, 'f) constr_descr
   | Descr_Rec : (('t, 'f) constr_descr -> ('t, 'f) constr_descr) ->
                 ('t, 'f) constr_descr
-  | Descr_Direct : (Constr.t -> 't option) * ('f -> constr_expr) ->
+  | Descr_Direct : (Constr.t -> 't) * ('f -> constr_expr) ->
                    ('t,'f) constr_descr
  and (_,_) constr_array_descr =
    | ArrayDescr_Nil : (unit,unit) constr_array_descr
    | ArrayDescr_Cons : ('t1,'f1) constr_descr *
                          (('t1,'f1) sum -> ('t2, 'f2) constr_array_descr) ->
                        ('t1 * 't2, 'f1 * 'f2) constr_array_descr
-   | ArrayDescr_Direct : (Constr.t list -> 't option) *
-                           ('f -> constr_expr list) -> ('t,'f) constr_array_descr
+   | ArrayDescr_Direct : (Constr.t list -> 't) * ('f -> constr_expr list) ->
+                         ('t,'f) constr_array_descr
 
 (* Build a constr_expr from a description *)
 let rec build_constr_expr : type t f. (t,f) constr_descr -> f -> constr_expr = function
@@ -611,7 +613,7 @@ let rec build_constr_expr : type t f. (t,f) constr_descr -> f -> constr_expr = f
        | Right b -> build_constr_expr descr' b)
   | Descr_Fail -> fun emp -> emp.elim_empty
   | Descr_Constr -> fun constr_expr -> constr_expr
-  | Descr_Iso (iso_to, iso_from, descr') ->
+  | Descr_Iso (name,iso_to, iso_from, descr') ->
      fun b -> build_constr_expr descr' (iso_from b)
   | Descr_ConstrMap (map_to, map_from, descr') ->
      fun a -> map_from (build_constr_expr descr' a)
@@ -625,45 +627,44 @@ and build_constr_expr_list : type t f. (t,f) constr_array_descr -> f -> constr_e
   | ArrayDescr_Direct (f_to,f_from) -> f_from
 
 (* Destruct a constr using a description *)
-let rec destruct_constr : type t f. (t,f) constr_descr -> Constr.t -> t option = function
+let rec destruct_constr : type t f. (t,f) constr_descr -> Constr.t -> t = function
   | Descr_Ctor (ctor,array_descr,descr') ->
      fun constr ->
-     let head_args_opt =
+     let (c,args) =
        match Term.kind_of_term constr with
        | Term.App (f, args) ->
           (match Term.kind_of_term f with
-           | Term.Construct (c, _) -> Some (c, args)
-           | _ -> None)
-       | Term.Construct (c, _) -> Some (c, [| |])
-       | _ -> None
+           | Term.Construct (c, _) -> (c, args)
+           | _ -> raise dummy_loc DescrFailedInternal)
+       | Term.Construct (c, _) -> (c, [| |])
+       | _ -> raise dummy_loc DescrFailedInternal
      in
-     (match head_args_opt with
-      | Some (c, args) ->
-         if eq_constructor c ctor then
-           map_opt (fun x -> Left x) (destruct_constr_array array_descr args)
-         else
-           map_opt (fun x -> Right x) (destruct_constr descr' constr)
-      | None -> None)
-  | Descr_Fail -> fun constr -> None
-  | Descr_Constr -> fun constr -> Some constr
-  | Descr_Iso (iso_to, iso_from, descr') ->
-     fun constr -> map_opt iso_to (destruct_constr descr' constr)
+     if eq_constructor c ctor then
+       Left (destruct_constr_array array_descr args)
+     else
+       Right (destruct_constr descr' constr)
+  | Descr_Fail -> fun constr -> raise dummy_loc DescrFailedInternal
+  | Descr_Constr -> fun constr -> constr
+  | Descr_Iso (name,iso_to, iso_from, descr') ->
+     fun constr ->
+     (try iso_to (destruct_constr descr' constr)
+      with DescrFailedInternal -> raise dummy_loc (DescrFailed (name, constr)))
   | Descr_ConstrMap (map_to, map_from, descr') ->
      fun constr -> destruct_constr descr' (map_to constr)
   | Descr_Rec f -> destruct_constr (f (Descr_Rec f))
   | Descr_Direct (f_to,f_from) -> f_to
-and destruct_constr_list : type t f. (t,f) constr_array_descr -> Constr.t list -> t option = function
-  | ArrayDescr_Nil -> (function [] -> Some () | _ -> None)
+and destruct_constr_list : type t f. (t,f) constr_array_descr -> Constr.t list -> t = function
+  | ArrayDescr_Nil -> (function
+                        | [] -> ()
+                        | _ -> raise dummy_loc DescrFailedInternal)
   | ArrayDescr_Cons (descr, rest) ->
      (function
-       | [] -> None
+       | [] -> raise dummy_loc DescrFailedInternal
        | constr::constrs ->
-          match destruct_constr descr constr with
-          | Some a -> map_opt (fun b -> (a,b))
-                              (destruct_constr_list (rest (Left a)) constrs)
-          | None -> None)
+          let a = destruct_constr descr constr in
+          (a, destruct_constr_list (rest (Left a)) constrs))
   | ArrayDescr_Direct (f_to,f_from) -> f_to
-and destruct_constr_array : type t f. (t,f) constr_array_descr -> Constr.t array -> t option =
+and destruct_constr_array : type t f. (t,f) constr_array_descr -> Constr.t array -> t =
   fun descr constrs -> destruct_constr_list descr (Array.to_list constrs)
 
 (* Helpers for building descriptions *)
@@ -728,17 +729,19 @@ let quaternary_ctor =
               descr_rest)
 
 (* Description that always builds a hole *)
-let hole_descr : (Constr.t, unit) constr_descr =
-  Descr_Iso ((fun x -> x),
+let hole_descr (descr: ('t,'f) constr_descr) : ('t, unit) constr_descr =
+  Descr_Iso ("hole",
+             (fun x -> x),
              (fun () -> CHole (dummy_loc, None, IntroAnonymous, None)),
-             Descr_Constr)
+             descr)
 
 (* The module for many Coq datatypes *)
 let datatypes_mod = ["Coq"; "Init"; "Datatypes"]
 
 (* Description of the Coq Boolean type *)
 let bool_descr : (bool,bool) constr_descr =
-  Descr_Iso ((function
+  Descr_Iso ("bool",
+             (function
                | Left () -> true
                | Right (Left ()) -> false
                | Right (Right emp) -> emp.elim_empty),
@@ -750,19 +753,22 @@ let bool_descr : (bool,bool) constr_descr =
 let pair_descr (descr1 : ('t1,'f1) constr_descr)
                (descr2 : ('t2,'f2) constr_descr) :
       ('t1 * 't2, 'f1 * 'f2) constr_descr =
-  Descr_Iso ((function
+  Descr_Iso ("pair",
+             (function
                | Left (tpa_ctor, (tpb_ctor, (a, (b, ())))) -> (a, b)
                | Right emp -> emp.elim_empty),
              (fun (a,b) -> Left ((), ((), (a, (b, ()))))),
              quaternary_ctor
-               datatypes_mod "pair" hole_descr (fun _ -> hole_descr)
+               datatypes_mod "pair" (hole_descr Descr_Constr)
+               (fun _ -> hole_descr Descr_Constr)
                (fun _ _ -> descr1) (fun _ _ _ -> descr2) Descr_Fail
             )
 
 (* Description of the Coq option type *)
 let option_descr (descr : ('t,'f) constr_descr) :
       ('t option, 'f option) constr_descr =
-  Descr_Iso ((function
+  Descr_Iso ("option",
+             (function
                | Left (tp, (x, ())) -> Some x
                | Right (Left (tp, ())) -> None
                | Right (Right emp) -> emp.elim_empty),
@@ -770,8 +776,9 @@ let option_descr (descr : ('t,'f) constr_descr) :
                | Some x -> Left ((), (x, ()))
                | None -> Right (Left ((), ()))),
              binary_ctor
-               datatypes_mod "Some" hole_descr (fun _ -> descr)
-               (unary_ctor datatypes_mod "None" hole_descr Descr_Fail))
+               datatypes_mod "Some" (hole_descr Descr_Constr) (fun _ -> descr)
+               (unary_ctor datatypes_mod "None" (hole_descr Descr_Constr)
+                           Descr_Fail))
 
 (* Description of the Coq list type *)
 let list_descr (descr : ('t,'f) constr_descr) :
@@ -779,7 +786,8 @@ let list_descr (descr : ('t,'f) constr_descr) :
   Descr_Rec
     (fun l_descr ->
      Descr_Iso
-       ((function
+       ("list",
+        (function
           | Left (tp, (x, (rest, ()))) -> x::rest
           | Right (Left (tp, ())) -> []
           | Right (Right emp) -> emp.elim_empty),
@@ -787,8 +795,9 @@ let list_descr (descr : ('t,'f) constr_descr) :
           | x::l -> Left ((), (x, (l, ())))
           | [] -> Right (Left ((), ()))),
         ternary_ctor
-          datatypes_mod "cons" hole_descr (fun _ -> descr) (fun _ _ -> l_descr)
-          (unary_ctor datatypes_mod "nil" hole_descr Descr_Fail)))
+          datatypes_mod "cons" (hole_descr Descr_Constr) (fun _ -> descr)
+          (fun _ _ -> l_descr)
+          (unary_ctor datatypes_mod "nil" (hole_descr Descr_Constr) Descr_Fail)))
 
 (* Decode a little-endian list of booleans into an int *)
 let rec decode_ascii_bits bits =
@@ -804,7 +813,8 @@ let rec encode_ascii_bits n i =
 (* Description of the Coq Ascii type *)
 let ascii_descr : (char, char) constr_descr =
   Descr_Iso
-    ((function
+    ("ascii",
+     (function
        | Left c -> c
        | Right emp -> emp.elim_empty),
      (fun c -> Left c),
@@ -813,17 +823,10 @@ let ascii_descr : (char, char) constr_descr =
         (ArrayDescr_Direct
            ((fun args ->
              if List.length args = 8 then
-               match
-                 (List.fold_right
-                    (fun bit_c bits_opt ->
-                     match (destruct_constr bool_descr bit_c, bits_opt) with
-                     | (Some b, Some bits) -> Some (b::bits)
-                     | _ -> None)
-                    args (Some []))
-               with
-               | Some bits -> Some (char_of_int (decode_ascii_bits bits))
-               | None -> None
-             else None),
+               char_of_int (decode_ascii_bits
+                              (List.map (destruct_constr bool_descr) args))
+             else
+               raise dummy_loc DescrFailedInternal),
             (fun c ->
              List.map (fun b ->
                        mk_reference datatypes_mod (if b then "true" else "false"))
@@ -836,7 +839,8 @@ let string_descr : (string, string) constr_descr =
   Descr_Rec
     (fun str_descr ->
      Descr_Iso
-       ((function
+       ("string",
+        (function
           | Left (c, (l, ())) -> (String.make 1 c)^l
           | Right (Left ()) -> String.make 0 'a'
           | Right (Right emp) -> emp.elim_empty),

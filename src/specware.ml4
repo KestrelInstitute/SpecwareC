@@ -194,7 +194,7 @@ let lookup_spec locref = fst (lookup_spec_and_globref locref)
 
 (* A description of strings that parses into Id.t *)
 let id_descr : (Id.t, Id.t) constr_descr =
-  Descr_Iso (Id.of_string, Id.to_string, string_fast_descr)
+  Descr_Iso ("id", Id.of_string, Id.to_string, string_fast_descr)
 
 (* A description of axiom pairs: optimizes pair_descr by using the ax_pair
 operator from Spec.v *)
@@ -212,15 +212,18 @@ let axiom_list_descr : ((Id.t * Constr.t) list,
                         (Id.t * constr_expr) list) constr_descr =
   list_descr ax_pair_descr
 
+type spec_fields =
+    (Id.t * constr_expr * constr_expr option) list * (Id.t * constr_expr) list
+type spec_fields_constr =
+    (Id.t * Constr.t * Constr.t option) list * (Id.t * Constr.t) list
+
 (* The description of the Spec inductive type *)
-let spec_descr : ((Id.t * Constr.t * Constr.t option) list *
-                    (Id.t * Constr.t) list,
-                  (Id.t * constr_expr * constr_expr option) list *
-                    (Id.t * constr_expr) list) constr_descr =
+let spec_descr : (spec_fields_constr,spec_fields) constr_descr =
   Descr_Rec
     (fun spec_descr ->
      Descr_Iso
-       ((function
+       ("Spec",
+        (function
           | Left (f, (tp, (oppred, ((ops, axioms), ())))) ->
              ((f, tp, oppred)::ops, axioms)
           | Right (Left (axioms, ())) -> ([], axioms)
@@ -257,23 +260,63 @@ let spec_descr : ((Id.t * Constr.t * Constr.t option) list *
 let build_spec_repr loc spec : constr_expr =
   build_constr_expr spec_descr (List.rev spec.spec_ops, spec.spec_axioms)
 
-exception MalformedSpec of Constr.t
+exception MalformedSpec of Constr.t * string * Constr.t
 
 (* Destruct a constr of type Spec into a list of ops and axioms; NOTE: this
 returns the ops in non-reversed order, unlike in the type spec *)
 let destruct_spec_repr constr =
-  match destruct_constr spec_descr (hnf_constr constr) with
-  | Some res -> res
-  | None -> raise dummy_loc (MalformedSpec constr)
+  try
+    destruct_constr spec_descr (hnf_constr constr)
+  with DescrFailed (tag,sub_constr) ->
+    raise dummy_loc (MalformedSpec (constr,tag,sub_constr))
+
+type refinement_import =
+    constr_expr * constr_expr * constr_expr
+type refinement_import_constr =
+    Constr.t * Constr.t * Constr.t * Constr.t
 
 (* A description of the RefinementImport type *)
-(*
-let rec refinement_import_descr_thunk () =
-  make_descr ["Specware"; "Spec"]
-             [(quinary_ctor_descr
-                 "Build_RefinementImport"
-                 (fun arg))]
- *)
+let refinement_import_descr :
+      (refinement_import_constr, refinement_import) constr_descr =
+  Descr_Iso
+    ("RefinementImport",
+     (function
+       | Left (x1, (x2, (x3, (x4, ())))) -> (x1, x2, x3, x4)
+       | Right emp -> emp.elim_empty),
+     (fun (x1, x2, x3) ->
+      Left ((), (x1, (x2, (x3, ()))))),
+     quaternary_ctor
+       ["Specware"; "Spec"] "Build_RefinementImport"
+       (hole_descr Descr_Constr) (fun _ -> Descr_Constr)
+       (fun _ _ -> Descr_Constr) (fun _ _ _ -> Descr_Constr)
+       Descr_Fail)
+
+type refinementof = spec_fields * constr_expr * refinement_import list
+type refinementof_constr =
+    spec_fields_constr * Constr.t * refinement_import_constr list
+
+(* A description of the RefinementOf type *)
+let refinementof_descr : (refinementof_constr, refinementof) constr_descr =
+  Descr_Iso
+    ("RefinementOf",
+     (function
+       | Left (x1, (x2, (x3, ()))) -> (x1, x2, x3)
+       | Right emp -> emp.elim_empty),
+     (fun (x1, x2, x3) ->
+      Left (x1, (x2, (x3, ())))),
+     ternary_ctor
+       ["Specware"; "Spec"] "Build_RefinementOf"
+       spec_descr (fun _ -> Descr_Constr)
+       (fun _ _ -> list_descr refinement_import_descr)
+       Descr_Fail)
+
+exception MalformedRefinement of Constr.t * string * Constr.t
+
+let destruct_refinementof constr =
+  try
+    destruct_constr refinementof_descr (hnf_constr constr)
+  with DescrFailed (tag,sub_constr) ->
+    raise dummy_loc (MalformedRefinement (constr,tag,sub_constr))
 
 
 (***
@@ -456,10 +499,10 @@ let end_new_spec spec_lid =
  *** Spec Imports
  ***)
 
-(* Import all the ops and axioms given in a Spec representation object *)
-let import_spec_constr loc constr =
+(* Import all the ops and axioms given in a RefinementOf object *)
+let import_refinement_constr loc constr =
   let (evd,env) = Lemmas.get_current_context () in
-  let (ops,axioms) = destruct_spec_repr constr in
+  let ((ops,axioms),interp,imports) = destruct_refinementof constr in
   let _ =
     List.iter (fun (f,tp,oppred) ->
                add_spec_field
@@ -468,20 +511,23 @@ let import_spec_constr loc constr =
                  (Constrextern.extern_constr true env evd tp)
                  (map_opt (Constrextern.extern_constr true env evd) oppred)) ops
   in
-  List.iter
-    (fun (ax_name,ax_tp) ->
-     add_spec_field true
-                    (loc, ax_name)
-                    (Constrextern.extern_constr true env evd ax_tp)
-                    None)
-    axioms
-
+  let _ =
+    List.iter
+      (fun (ax_name,ax_tp) ->
+       add_spec_field true
+                      (loc, ax_name)
+                      (Constrextern.extern_constr true env evd ax_tp)
+                      None)
+      axioms
+  in
+  (* FIXME HERE NOW: add instances for imports! *)
+  ()
 
 (* Same as above, but take in a term for a Spec representation object *)
-let import_spec_constr_expr loc constr_expr =
+let import_refinement_constr_expr loc constr_expr =
   let (evd,env) = Lemmas.get_current_context () in
   let (constr,_) = Constrintern.interp_constr env evd constr_expr in
-  import_spec_constr loc constr
+  import_refinement_constr loc constr
 
 
 (***
@@ -541,10 +587,10 @@ VERNAC COMMAND EXTEND Spec
     -> [ reporting_exceptions
            (fun () -> add_spec_field true (dummy_loc,id) tp None) ]
 
-  | [ "Spec" "ImportRepr" constr(tm) ]
+  | [ "Spec" "ImportTerm" constr(tm) ]
     => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () -> import_spec_constr_expr dummy_loc tm) ]
+           (fun () -> import_refinement_constr_expr dummy_loc tm) ]
 
   (* Import a spec term *)
   (* FIXME HERE: add imports!! *)
