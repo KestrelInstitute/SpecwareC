@@ -208,8 +208,8 @@ let qualid_cons qualid id =
 
 (* Build a term for a global constant, where dir lists the module path
    as a list (e.g., ["Coq"; "Init"; "Logic"]) and id is the id *)
-let mk_reference dir id =
-  CRef (Qualid (dummy_loc, mk_qualid dir id), None)
+let mk_reference dir name =
+  CRef (Qualid (dummy_loc, mk_qualid dir (Id.of_string name)), None)
 
 (* Get a string for a global reference *)
 let global_to_string gr =
@@ -241,8 +241,9 @@ let mk_global_expl gr =
             (None, (Qualid (dummy_loc, qualid_of_global gr)), None),
             [])
 
-(* Look up a defined constant by qualid *)
-let lookup_constant loc qualid =
+(* Look up a defined constant by path list and string name *)
+let mk_constant loc dir name =
+  let qualid = mk_qualid dir (Id.of_string name) in
   match Nametab.locate qualid with
   | ConstRef c -> c
   | _ -> user_err_loc (dummy_loc, "_",
@@ -519,7 +520,7 @@ let constr_is_constructor ctor constr =
 (* Build the expression t1 = t2 *)
 let mk_equality t1 t2 =
   CApp (dummy_loc,
-        (None, mk_reference ["Coq"; "Init"; "Logic"] (Id.of_string "eq")),
+        (None, mk_reference ["Coq"; "Init"; "Logic"] "eq"),
         [(t1, None); (t2, None)])
 
 (* Build the expression id1 = id2 for identifiers id1 and id2 *)
@@ -527,13 +528,14 @@ let mk_ident_equality id1 id2 =
   mk_equality (mk_var id1) (mk_var id2)
 
 (* Build the expression t1::t2::...::tn::nil *)
+(* FIXME: use build_constr_expr below *)
 let mk_list loc ts =
   List.fold_right
     (fun t rest ->
-     mkAppC (mk_reference ["Coq"; "Init"; "Datatypes"] (Id.of_string "cons"),
+     mkAppC (mk_reference ["Coq"; "Init"; "Datatypes"] "cons",
              [t; rest]))
     ts
-    (mk_reference ["Coq"; "Init"; "Datatypes"] (Id.of_string "nil"))
+    (mk_reference ["Coq"; "Init"; "Datatypes"] "nil")
 
 (* Check that two terms are definitionally equal relative to the given
    parameter list, by checking that (forall params, eq_refl : t1=t2)
@@ -546,8 +548,8 @@ let check_equal_term params t1 t2 =
                   params
                   (CCast (dummy_loc,
                           CApp (dummy_loc,
-                                (None, mk_reference ["Coq"; "Init"; "Logic"]
-                                                    (Id.of_string "eq_refl")),
+                                (None, mk_reference
+                                         ["Coq"; "Init"; "Logic"] "eq_refl"),
                                 [(t1, None)]),
                           CastConv (mk_equality t1 t2)))))
   in
@@ -590,6 +592,8 @@ type (_,_) constr_descr =
                       ('t, 'f) constr_descr
   | Descr_Rec : (('t, 'f) constr_descr -> ('t, 'f) constr_descr) ->
                 ('t, 'f) constr_descr
+  | Descr_Direct : (Constr.t -> 't option) * ('f -> constr_expr) ->
+                   ('t,'f) constr_descr
  and (_,_) constr_array_descr =
    | ArrayDescr_Nil : (unit,unit) constr_array_descr
    | ArrayDescr_Cons : ('t1,'f1) constr_descr *
@@ -612,6 +616,7 @@ let rec build_constr_expr : type t f. (t,f) constr_descr -> f -> constr_expr = f
   | Descr_ConstrMap (map_to, map_from, descr') ->
      fun a -> map_from (build_constr_expr descr' a)
   | Descr_Rec f -> build_constr_expr (f (Descr_Rec f))
+  | Descr_Direct (f_to,f_from) -> f_from
 and build_constr_expr_list : type t f. (t,f) constr_array_descr -> f -> constr_expr list = function
   | ArrayDescr_Nil -> fun () -> []
   | ArrayDescr_Cons (descr, rest) ->
@@ -646,6 +651,7 @@ let rec destruct_constr : type t f. (t,f) constr_descr -> Constr.t -> t option =
   | Descr_ConstrMap (map_to, map_from, descr') ->
      fun constr -> destruct_constr descr' (map_to constr)
   | Descr_Rec f -> destruct_constr (f (Descr_Rec f))
+  | Descr_Direct (f_to,f_from) -> f_to
 and destruct_constr_list : type t f. (t,f) constr_array_descr -> Constr.t list -> t option = function
   | ArrayDescr_Nil -> (function [] -> Some () | _ -> None)
   | ArrayDescr_Cons (descr, rest) ->
@@ -820,8 +826,7 @@ let ascii_descr : (char, char) constr_descr =
              else None),
             (fun c ->
              List.map (fun b ->
-                       mk_reference datatypes_mod
-                                    (Id.of_string (if b then "true" else "false")))
+                       mk_reference datatypes_mod (if b then "true" else "false"))
                       (encode_ascii_bits 8 (int_of_char c))))
          : (char, char) constr_array_descr),
         Descr_Fail))
@@ -844,3 +849,14 @@ let string_descr : (string, string) constr_descr =
         binary_ctor
           ["Coq"; "Strings"; "String"] "String" ascii_descr (fun _ -> str_descr)
           (nullary_ctor ["Coq"; "Strings"; "String"] "EmptyString" Descr_Fail)))
+
+(* An optimized description of the Coq string type, that converts strings
+directly to string literals instead of cons-list expressions *)
+let string_fast_descr : (string, string) constr_descr =
+  Descr_Direct
+    (destruct_constr string_descr,
+     (fun str ->
+      CDelimiters (dummy_loc, "string",
+                   CPrim (dummy_loc, String str))))
+
+let mk_string = build_constr_expr string_fast_descr

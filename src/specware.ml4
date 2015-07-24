@@ -194,12 +194,23 @@ let lookup_spec locref = fst (lookup_spec_and_globref locref)
 
 (* A description of strings that parses into Id.t *)
 let id_descr : (Id.t, Id.t) constr_descr =
-  Descr_Iso (Id.of_string, Id.to_string, string_descr)
+  Descr_Iso (Id.of_string, Id.to_string, string_fast_descr)
+
+(* A description of axiom pairs: optimizes pair_descr by using the ax_pair
+operator from Spec.v *)
+let ax_pair_descr : (Id.t * Constr.t, Id.t * constr_expr) constr_descr =
+  Descr_Direct
+    ((fun constr ->
+      destruct_constr (pair_descr id_descr Descr_Constr)
+                      (hnf_constr constr)),
+     (fun (f, tp) ->
+      mkAppC (mk_reference ["Specware"; "Spec"] "ax_pair",
+              [mk_string (Id.to_string f); tp])))
 
 (* The description of a list of axioms *)
 let axiom_list_descr : ((Id.t * Constr.t) list,
                         (Id.t * constr_expr) list) constr_descr =
-  list_descr (pair_descr id_descr Descr_Constr)
+  list_descr ax_pair_descr
 
 (* The description of the Spec inductive type *)
 let spec_descr : ((Id.t * Constr.t * Constr.t option) list *
@@ -393,8 +404,7 @@ let complete_spec loc =
                          (build_spec_repr loc spec) in
   let _ = add_term_instance
             (loc, Name spec_iso_id spec.spec_name) []
-            (mkAppC (mk_reference ["Specware"; "Spec"]
-                                  (Id.of_string "IsoToSpec"),
+            (mkAppC (mk_reference ["Specware"; "Spec"] "IsoToSpec",
                      [mk_var (loc, spec_repr_id spec.spec_name);
                       CAppExpl
                         (loc, (None, Ident (loc, spec.spec_name), None), [])]))
@@ -531,7 +541,7 @@ VERNAC COMMAND EXTEND Spec
     -> [ reporting_exceptions
            (fun () -> add_spec_field true (dummy_loc,id) tp None) ]
 
-  | [ "Spec" "Import" "Repr" constr(tm) ]
+  | [ "Spec" "ImportRepr" constr(tm) ]
     => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
            (fun () -> import_spec_constr_expr dummy_loc tm) ]

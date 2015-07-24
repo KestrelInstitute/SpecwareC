@@ -17,6 +17,7 @@ Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus 
 
 Spec End Monoid.
 
+Print Monoid.Monoid__repr.
 
 Section Monoid_Thms.
 Import Monoid.
@@ -36,7 +37,7 @@ Print left_id_uniq.
 (* The version of Group that works right now... *)
 Spec GroupTest.
 
-Spec Import Repr Monoid.Monoid__repr.
+Spec ImportRepr Monoid.Monoid__repr.
 
 Spec Variable m_inv : (T -> T).
 Spec Axiom m_inv_left : (forall (x:T), m_plus (m_inv x) x = m_zero).

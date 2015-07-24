@@ -3,7 +3,7 @@
 
 Require Import List.
 Import ListNotations.
-Require Import String.
+Require Export String.
 Require Import Coq.Logic.Eqdep_dec.
 Import EqNotations.
 
