@@ -130,6 +130,14 @@ let morph_spec_arg_id = Id.of_string "Spec"
  *** Operations on Specs
  ***)
 
+(* FIXME: documentation *)
+type spec_import = {
+  spec_import_ops : Id.t list;
+  spec_import_ax_map : (Id.t * Id.t) list;
+  spec_import_class_qualid : qualid;
+  spec_import_number : int
+}
+
 (* A spec contains its name, its module path, and its op and axiom names. Note
 that ops and axioms --- collectively called the "fields" of the spec --- are
 stored in reverse order, for efficiency of adding new ones. *)
@@ -137,31 +145,60 @@ type spec = {
   spec_name : Id.t;
   spec_path : DirPath.t;
   spec_ops : (Id.t * constr_expr * constr_expr option) list;
-  spec_axioms : (Id.t * constr_expr) list
+  spec_axioms : (Id.t * constr_expr) list;
+  spec_imports : spec_import list
 }
 
 (* Create an empty spec with the given name *)
 let make_empty_spec spec_id =
   { spec_name = spec_id; spec_path = Lib.cwd_except_section ();
-    spec_ops = []; spec_axioms = [] }
+    spec_ops = []; spec_axioms = []; spec_imports = [] }
 
 (* Whether spec contains an op or axiom named f *)
 let contains_field spec f =
   List.exists (fun (f',_,_) -> Id.equal f f') spec.spec_ops ||
     List.exists (fun (f', _) -> Id.equal f f') spec.spec_axioms
 
-(* Check that a field (op or axiom) of the given name exists in spec *)
-let spec_field_exists ?(suffix="class") spec f =
+(* Whether field f has an associated oppred *)
+let field_has_oppred spec f =
+  try
+    (match List.find (fun (f',_,_) -> Id.equal f f') spec.spec_ops with
+     | (_,_,Some _) -> true
+     | (_,_,None) -> false)
+  with Not_found -> raise dummy_loc (Failure "field_has_oppred")
+
+(* Check that a field (op or axiom) of the given name exists in the current spec *)
+let spec_field_exists f =
   let res = Nametab.exists_cci (Lib.make_path f) in
   let _ = debug_printf 2 "@[spec_field_exists (%s): %B@]\n" (Id.to_string f) res in
   res
 
+(* Map spec import number i to an Id *)
+let spec_import_id i =
+  Id.of_string ("spec_instance__" ^ string_of_int i)
+
+(* Find an unused import number in spec *)
+let find_unused_import_id spec =
+  let slots = Array.make (List.length spec.spec_imports) false in
+  let _ = List.iter (fun imp -> slots.(imp.spec_import_number) <- true)
+                    spec.spec_imports in
+  let i = ref 0 in
+  let _ = while !i < Array.length slots && slots.(!i) do
+            i := !i + 1
+          done
+  in
+  !i
+
 (* Remove fields that no longer exist (because of potential Undos) *)
-let filter_nonexistent_fields spec =
+let filter_nonexistent_fields_and_imports spec =
   { spec with
     spec_ops = List.filter (fun (id, _,_) ->
-                            spec_field_exists spec id) spec.spec_ops;
-    spec_axioms = List.filter (fun (id,_) -> spec_field_exists spec id) spec.spec_axioms }
+                            spec_field_exists id) spec.spec_ops;
+    spec_axioms = List.filter (fun (id,_) -> spec_field_exists id) spec.spec_axioms;
+    spec_imports =
+      List.filter (fun imp ->
+                   spec_field_exists (spec_import_id imp.spec_import_number))
+                  spec.spec_imports }
 
 
 (***
@@ -272,8 +309,12 @@ let destruct_spec_repr constr =
 
 type refinement_import =
     constr_expr * constr_expr * constr_expr
-type refinement_import_constr =
-    Constr.t * Constr.t * Constr.t * Constr.t
+type refinement_import_constr = {
+  ref_import_fromspec: Constr.t;
+  ref_import_interp: Constr.t;
+  ref_import_class: global_reference;
+  ref_import_iso: Constr.t
+}
 
 (* A description of the RefinementImport type *)
 let refinement_import_descr :
@@ -281,9 +322,20 @@ let refinement_import_descr :
   Descr_Iso
     ("RefinementImport",
      (function
-       | Left (x1, (x2, (x3, (x4, ())))) -> (x1, x2, x3, x4)
+       | Left (x1, (x2, (x3, (x4, ())))) ->
+          let gr =
+            (match Term.kind_of_term x3 with
+             | Term.Const (c, _) -> ConstRef c
+             | Term.Ind (ind, _) -> IndRef ind
+             | Term.Construct (c, _) -> ConstructRef c
+             | _ -> raise dummy_loc DescrFailedInternal)
+          in
+          {ref_import_fromspec = x1;
+           ref_import_interp = x2;
+           ref_import_class = gr;
+           ref_import_iso = x4}
        | Right emp -> emp.elim_empty),
-     (fun (x1, x2, x3) ->
+     (fun (x1,x2,x3) ->
       Left ((), (x1, (x2, (x3, ()))))),
      quaternary_ctor
        ["Specware"; "Spec"] "Build_RefinementImport"
@@ -346,7 +398,7 @@ let validate_current_spec loc =
   | Some spec ->
      (* Check that we are still in the spec's module *)
      if DirPath.equal spec.spec_path (Lib.cwd_except_section ()) then
-       current_spec := Some (filter_nonexistent_fields spec)
+       current_spec := Some (filter_nonexistent_fields_and_imports spec)
      else if Nametab.exists_dir spec.spec_path then
        (* If the spec's module still exists but is not the current module, then
        the user is messing with us (FIXME: better error message!) *)
@@ -443,8 +495,10 @@ let complete_spec loc =
     global_modpath (Nametab.locate (qualid_of_ident spec.spec_name))
   in
   let _ = register_spec spec_globref spec in
+  (* Build the spec representation spec__repr *)
   let _ = add_definition (loc, spec_repr_id spec.spec_name) [] None
                          (build_spec_repr loc spec) in
+  (* Build a proof spec__iso that spec__repr is isomorphic to the spec *)
   let _ = add_term_instance
             (loc, Name spec_iso_id spec.spec_name) []
             (mkAppC (mk_reference ["Specware"; "Spec"] "IsoToSpec",
@@ -462,6 +516,38 @@ let complete_spec loc =
                                            mk_qualid ["Specware"; "Spec"]
                                                      (Id.of_string "prove_spec_iso")),
                                    []))))))
+  in
+  (* Add an instance for each import in the spec *)
+  let inst_counter = ref 1 in
+  let mk_inst_name () =
+    let res = add_suffix spec.spec_name ("inst" ^ string_of_int !inst_counter) in
+    let _ = inst_counter := !inst_counter + 1 in
+    res
+  in
+  let _ =
+    List.iter
+      (fun imp ->
+       add_term_instance
+         (dummy_loc, Name (mk_inst_name ()))
+         [LocalRawAssum ([dummy_loc, Anonymous],
+                         Generalized (Implicit, Implicit, false),
+                         mk_var (dummy_loc, spec.spec_name))]
+         (mkRefC (Qualid (dummy_loc,imp.spec_import_class_qualid)))
+         (mkAppC (mk_var (dummy_loc,
+                          spec_import_id imp.spec_import_number),
+                  concat_map
+                    (fun f -> if field_has_oppred spec f then
+                                [mk_var (dummy_loc, f);
+                                 mk_var (dummy_loc, field_proof_id f)]
+                              else [mk_var (dummy_loc, f)])
+                    imp.spec_import_ops
+                  @
+                    [CRecord (loc, None,
+                              List.map (fun (f_from,f_to) ->
+                                        (Ident (dummy_loc,f_from),
+                                         mk_var (dummy_loc,f_to)))
+                                       imp.spec_import_ax_map)])))
+      spec.spec_imports
   in
   ()
 
@@ -520,8 +606,24 @@ let import_refinement_constr loc constr =
                       None)
       axioms
   in
-  (* FIXME HERE NOW: add instances for imports! *)
-  ()
+  update_current_spec
+    loc
+    (fun spec ->
+     let new_imports =
+       List.map
+         (fun refimp ->
+          let imp_num = find_unused_import_id spec in
+          let interp_expr =
+            Constrextern.extern_constr true env evd refimp.ref_import_interp
+          in
+          let _ =
+            add_definition (loc,spec_import_id imp_num) [] None interp_expr
+          in
+          {spec_import_ops = List.map (fun (f,_,_) -> f) ops;
+           spec_import_ax_map = List.map (fun (f,_) -> (f,f)) axioms;
+           spec_import_class_qualid = qualid_of_global refimp.ref_import_class;
+           spec_import_number = imp_num}) imports in
+     {spec with spec_imports = spec.spec_imports @ new_imports})
 
 (* Same as above, but take in a term for a Spec representation object *)
 let import_refinement_constr_expr loc constr_expr =
