@@ -533,20 +533,22 @@ let complete_spec loc =
                          Generalized (Implicit, Implicit, false),
                          mk_var (dummy_loc, spec.spec_name))]
          (mkRefC (Qualid (dummy_loc,imp.spec_import_class_qualid)))
-         (mkAppC (mk_var (dummy_loc,
-                          spec_import_id imp.spec_import_number),
-                  concat_map
-                    (fun f -> if field_has_oppred spec f then
-                                [mk_var (dummy_loc, f);
-                                 mk_var (dummy_loc, field_proof_id f)]
-                              else [mk_var (dummy_loc, f)])
-                    imp.spec_import_ops
-                  @
-                    [CRecord (loc, None,
-                              List.map (fun (f_from,f_to) ->
-                                        (Ident (dummy_loc,f_from),
-                                         mk_var (dummy_loc,f_to)))
-                                       imp.spec_import_ax_map)])))
+         (mkAppC
+            (mk_reference ["Specware"; "Spec"] "toIsoInterp",
+             [mkAppC (mk_var (dummy_loc,
+                              spec_import_id imp.spec_import_number),
+                      concat_map
+                        (fun f -> if field_has_oppred spec f then
+                                    [mk_var (dummy_loc, f);
+                                     mk_var (dummy_loc, field_proof_id f)]
+                                  else [mk_var (dummy_loc, f)])
+                        imp.spec_import_ops
+                      @
+                        [CRecord (loc, None,
+                                  List.map (fun (f_from,f_to) ->
+                                            (Ident (dummy_loc,f_from),
+                                             mk_var (dummy_loc,f_to)))
+                                           imp.spec_import_ax_map)])])))
       spec.spec_imports
   in
   ()
