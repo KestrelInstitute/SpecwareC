@@ -52,40 +52,73 @@ Check (toIsoInterp
             Monoid.m_plus_assoc__axiom := m_plus_assoc |}
 ).
 
+Print Classes.
+
 Spec End GroupTest.
 
 Print GroupTest.m_zero_left__axiom.
+Print GroupTest.GroupTest.
+Print GroupTest.
 
+Instance group_mon_T `{T__param:GroupTest.T__class} : Monoid.T__class := T__param.
+Instance group_mon_m_zero `{m_zero__param:GroupTest.m_zero__class} :
+  Monoid.m_zero__class := m_zero__param.
+Instance group_mon_m_plus `{m_plus__param:GroupTest.m_plus__class} :
+  Monoid.m_plus__class := m_plus__param.
 
 Instance test_inst1 {T__param m_zero__param m_plus__param m_inv__param}
          {s: @GroupTest.GroupTest T__param m_zero__param
                                      m_plus__param m_inv__param} :
-  @Monoid.Monoid T__param m_zero__param m_plus__param :=
-  (toIsoInterp
-     (iso1:=Monoid.Monoid__iso)
-     (iso2:=Monoid.Monoid__iso)
-     GroupTest.spec_instance__0 _ _ _
-     {| Monoid.m_zero_left__axiom := GroupTest.m_zero_left__axiom;
-        Monoid.m_zero_right__axiom := GroupTest.m_zero_right__axiom;
-        Monoid.m_plus_assoc__axiom := GroupTest.m_plus_assoc__axiom |}
-  ).
-
-Instance Group_T `{T__param:GroupTest.T__class} : Monoid.T__class := T__param.
-Instance Group_m_zero `{m_zero__param:GroupTest.m_zero__class} : Monoid.m_zero__class :=
-  m_zero__param.
-Instance Group_m_plus `{m_plus__param:GroupTest.m_plus__class} : Monoid.m_plus__class :=
-  m_plus__param.
-
-Instance test_inst2 `{GroupTest.GroupTest} :
   Monoid.Monoid :=
   (toIsoInterp
      (iso1:=Monoid.Monoid__iso)
      (iso2:=Monoid.Monoid__iso)
-     GroupTest.spec_instance__0 _ _ _
-     {| Monoid.m_zero_left__axiom := GroupTest.m_zero_left__axiom;
-        Monoid.m_zero_right__axiom := GroupTest.m_zero_right__axiom;
-        Monoid.m_plus_assoc__axiom := GroupTest.m_plus_assoc__axiom |}
+     GroupTest.spec_instance__0 T__param m_zero__param m_plus__param
+     {| Monoid.m_zero_left__axiom := GroupTest.m_zero_left__axiom (GroupTest:=s);
+        Monoid.m_zero_right__axiom := GroupTest.m_zero_right__axiom (GroupTest:=s);
+        Monoid.m_plus_assoc__axiom := GroupTest.m_plus_assoc__axiom (GroupTest:=s) |}
   ).
+Check @test_inst1.
+
+Set Printing All.
+
+Check @GroupTest.m_zero_right__axiom.
+
+Section GroupTest_Thms.
+Import GroupTest.
+Context `{GroupTest}.
+
+Lemma m_left_id_uniq (x:T) : (forall y, m_plus x y = y) -> x = m_zero.
+  apply left_id_uniq.
+Qed.
+
+Lemma m_left_id_uniq2 (x:T) : (forall y, m_plus x y = y) -> x = m_zero.
+  intros left_id.
+  rewrite <- (left_id m_zero).
+  rewrite m_zero_right.
+  reflexivity.
+Qed.
+
+(*
+Instance m_zero_right__inst : m_zero_right__class :=
+  m_zero_right__axiom (GroupTest:=H).
+*)
+
+Lemma left_inv_uniq (x x_inv:T) :
+  m_plus x_inv x = m_zero -> x_inv = m_inv x.
+  intro left_inv.
+  (* FIXME: can we get rid of the T__param argument here? *)
+  rewrite <- (m_zero_right (T__param:=T__param) x_inv).
+  rewrite <- (m_inv_right x).
+  rewrite m_plus_assoc.
+  rewrite left_inv.
+  rewrite m_zero_left.
+  reflexivity.
+Qed.
+
+End GroupTest_Thms.
+
+
 
 (* The "correct" version of Group *)
 Spec Group.
