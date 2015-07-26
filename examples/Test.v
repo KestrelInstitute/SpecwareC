@@ -57,14 +57,10 @@ Spec End GroupTest.
 Print GroupTest.m_zero_left__axiom.
 
 
-Instance Group_T `{T__param:GroupTest.T__class} : Monoid.T__class := T__param.
-Instance Group_m_zero `{m_zero__param:GroupTest.m_zero__class} : Monoid.m_zero__class :=
-  m_zero__param.
-Instance Group_m_plus `{m_plus__param:GroupTest.m_plus__class} : Monoid.m_plus__class :=
-  m_plus__param.
-
-Instance test_inst `{GroupTest.GroupTest} :
-  Monoid.Monoid :=
+Instance test_inst1 {T__param m_zero__param m_plus__param m_inv__param}
+         {s: @GroupTest.GroupTest T__param m_zero__param
+                                     m_plus__param m_inv__param} :
+  @Monoid.Monoid T__param m_zero__param m_plus__param :=
   (toIsoInterp
      (iso1:=Monoid.Monoid__iso)
      (iso2:=Monoid.Monoid__iso)
@@ -74,10 +70,14 @@ Instance test_inst `{GroupTest.GroupTest} :
         Monoid.m_plus_assoc__axiom := GroupTest.m_plus_assoc__axiom |}
   ).
 
-Instance test_inst {T__param m_zero__param m_plus__param m_inv__param}
-         {s: @GroupTest.GroupTest T__param m_zero__param
-                                     m_plus__param m_inv__param} :
-  @Monoid.Monoid T__param m_zero__param m_plus__param :=
+Instance Group_T `{T__param:GroupTest.T__class} : Monoid.T__class := T__param.
+Instance Group_m_zero `{m_zero__param:GroupTest.m_zero__class} : Monoid.m_zero__class :=
+  m_zero__param.
+Instance Group_m_plus `{m_plus__param:GroupTest.m_plus__class} : Monoid.m_plus__class :=
+  m_plus__param.
+
+Instance test_inst2 `{GroupTest.GroupTest} :
+  Monoid.Monoid :=
   (toIsoInterp
      (iso1:=Monoid.Monoid__iso)
      (iso2:=Monoid.Monoid__iso)
