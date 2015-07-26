@@ -37,14 +37,55 @@ Print left_id_uniq.
 (* The version of Group that works right now... *)
 Spec GroupTest.
 
-Spec ImportRepr Monoid.Monoid__repr.
+Spec ImportTerm (id_refinement_import _ _ Monoid.Monoid__iso).
 
 Spec Variable m_inv : (T -> T).
 Spec Axiom m_inv_left : (forall (x:T), m_plus (m_inv x) x = m_zero).
 Spec Axiom m_inv_right : (forall (x:T), m_plus x (m_inv x) = m_zero).
 
+Check (toIsoInterp
+         (iso1:=Monoid.Monoid__iso)
+         (iso2:=Monoid.Monoid__iso)
+         spec_instance__0 T__param m_zero__param m_plus__param
+         {| Monoid.m_zero_left__axiom := m_zero_left;
+            Monoid.m_zero_right__axiom := m_zero_right;
+            Monoid.m_plus_assoc__axiom := m_plus_assoc |}
+).
+
 Spec End GroupTest.
 
+Print GroupTest.m_zero_left__axiom.
+
+
+Instance Group_T `{T__param:GroupTest.T__class} : Monoid.T__class := T__param.
+Instance Group_m_zero `{m_zero__param:GroupTest.m_zero__class} : Monoid.m_zero__class :=
+  m_zero__param.
+Instance Group_m_plus `{m_plus__param:GroupTest.m_plus__class} : Monoid.m_plus__class :=
+  m_plus__param.
+
+Instance test_inst `{GroupTest.GroupTest} :
+  Monoid.Monoid :=
+  (toIsoInterp
+     (iso1:=Monoid.Monoid__iso)
+     (iso2:=Monoid.Monoid__iso)
+     GroupTest.spec_instance__0 _ _ _
+     {| Monoid.m_zero_left__axiom := GroupTest.m_zero_left__axiom;
+        Monoid.m_zero_right__axiom := GroupTest.m_zero_right__axiom;
+        Monoid.m_plus_assoc__axiom := GroupTest.m_plus_assoc__axiom |}
+  ).
+
+Instance test_inst {T__param m_zero__param m_plus__param m_inv__param}
+         {s: @GroupTest.GroupTest T__param m_zero__param
+                                     m_plus__param m_inv__param} :
+  @Monoid.Monoid T__param m_zero__param m_plus__param :=
+  (toIsoInterp
+     (iso1:=Monoid.Monoid__iso)
+     (iso2:=Monoid.Monoid__iso)
+     GroupTest.spec_instance__0 _ _ _
+     {| Monoid.m_zero_left__axiom := GroupTest.m_zero_left__axiom;
+        Monoid.m_zero_right__axiom := GroupTest.m_zero_right__axiom;
+        Monoid.m_plus_assoc__axiom := GroupTest.m_plus_assoc__axiom |}
+  ).
 
 (* The "correct" version of Group *)
 Spec Group.

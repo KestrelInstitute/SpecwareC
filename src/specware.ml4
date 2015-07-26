@@ -322,7 +322,7 @@ let refinement_import_descr :
   Descr_Iso
     ("RefinementImport",
      (function
-       | Left (x1, (x2, (x3, (x4, ())))) ->
+       | Left (_, (x1, (x2, (x3, (x4, ()))))) ->
           let gr =
             (match Term.kind_of_term x3 with
              | Term.Const (c, _) -> ConstRef c
@@ -336,11 +336,12 @@ let refinement_import_descr :
            ref_import_iso = x4}
        | Right emp -> emp.elim_empty),
      (fun (x1,x2,x3) ->
-      Left ((), (x1, (x2, (x3, ()))))),
-     quaternary_ctor
+      Left ((), ((), (x1, (x2, (x3, ())))))),
+     quinary_ctor
        ["Specware"; "Spec"] "Build_RefinementImport"
-       (hole_descr Descr_Constr) (fun _ -> Descr_Constr)
-       (fun _ _ -> Descr_Constr) (fun _ _ _ -> Descr_Constr)
+       (hole_descr Descr_Constr) (fun _ -> hole_descr Descr_Constr)
+       (fun _ _ -> Descr_Constr)
+       (fun _ _ _ -> Descr_Constr) (fun _ _ _ _ -> Descr_Constr)
        Descr_Fail)
 
 type refinementof = spec_fields * constr_expr * refinement_import list
@@ -352,14 +353,16 @@ let refinementof_descr : (refinementof_constr, refinementof) constr_descr =
   Descr_Iso
     ("RefinementOf",
      (function
-       | Left (x1, (x2, (x3, ()))) -> (x1, x2, x3)
+       | Left (_, (x1, (x2, (x3, ())))) -> (x1, x2, x3)
        | Right emp -> emp.elim_empty),
      (fun (x1, x2, x3) ->
-      Left (x1, (x2, (x3, ())))),
-     ternary_ctor
+      Left ((), (x1, (x2, (x3, ()))))),
+     quaternary_ctor
        ["Specware"; "Spec"] "Build_RefinementOf"
-       spec_descr (fun _ -> Descr_Constr)
-       (fun _ _ -> list_descr refinement_import_descr)
+       (hole_descr Descr_Constr)
+       (fun _ -> hnf_descr spec_descr)
+       (fun _ _ -> Descr_Constr)
+       (fun _ _ _ -> hnf_descr (list_descr refinement_import_descr))
        Descr_Fail)
 
 exception MalformedRefinement of Constr.t * string * Constr.t
@@ -524,6 +527,7 @@ let complete_spec loc =
     let _ = inst_counter := !inst_counter + 1 in
     res
   in
+(*
   let _ =
     List.iter
       (fun imp ->
@@ -551,6 +555,7 @@ let complete_spec loc =
                                            imp.spec_import_ax_map)])])))
       spec.spec_imports
   in
+ *)
   ()
 
 (* Start the interactive definition of a new spec *)
@@ -641,7 +646,17 @@ let import_refinement_constr_expr loc constr_expr =
 (* Run f, catching any exceptions and turning them into user_errors *)
 (* FIXME: actually write this! *)
 let reporting_exceptions f =
-  f ()
+  try f ()
+  with
+  | MalformedRefinement (constr, tag, sub_constr) ->
+     user_err_loc (dummy_loc, "_",
+                   str "Malformed refinement term "
+                   ++ brk (0,0)
+                   ++ Printer.pr_constr constr
+                   ++ brk (0,0)
+                   ++ str (": could not parse " ^ tag ^ " in subterm ")
+                   ++ brk (0,0)
+                   ++ Printer.pr_constr sub_constr)
 
 (* FIXME: get the locations of all the identifiers right! *)
 

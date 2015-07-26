@@ -727,6 +727,29 @@ let quaternary_ctor =
                        ArrayDescr_Cons
                          (descr_d a b c, fun _ -> ArrayDescr_Nil)))),
               descr_rest)
+let quinary_ctor =
+  fun dir name descr_a descr_b descr_c descr_d descr_e descr_rest ->
+  Descr_Ctor (mk_constructor dummy_loc dir name,
+              ArrayDescr_Cons
+                (descr_a,
+                 fun a ->
+                 ArrayDescr_Cons
+                   (descr_b a,
+                    fun b ->
+                    ArrayDescr_Cons
+                      (descr_c a b,
+                       fun c ->
+                       ArrayDescr_Cons
+                         (descr_d a b c,
+                          fun d ->
+                          ArrayDescr_Cons
+                            (descr_e a b c d,
+                             fun _ -> ArrayDescr_Nil))))),
+              descr_rest)
+
+(* Description that always reduced a constr to hnf *)
+let hnf_descr (descr: ('t,'f) constr_descr) : ('t,'f) constr_descr =
+  Descr_ConstrMap (hnf_constr, (fun x -> x), descr)
 
 (* Description that always builds a hole *)
 let hole_descr (descr: ('t,'f) constr_descr) : ('t, unit) constr_descr =
@@ -796,7 +819,7 @@ let list_descr (descr : ('t,'f) constr_descr) :
           | [] -> Right (Left ((), ()))),
         ternary_ctor
           datatypes_mod "cons" (hole_descr Descr_Constr) (fun _ -> descr)
-          (fun _ _ -> l_descr)
+          (fun _ _ -> hnf_descr l_descr)
           (unary_ctor datatypes_mod "nil" (hole_descr Descr_Constr) Descr_Fail)))
 
 (* Decode a little-endian list of booleans into an int *)
