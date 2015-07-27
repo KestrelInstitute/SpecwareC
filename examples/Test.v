@@ -112,13 +112,30 @@ Definition mon_group_interp :
                                $(prove_sub_spec)$
          )) 0 $(auto)$).
 
+(*
 Instance group_mon_ops__instance `{GroupTest.GroupTest} : mon_ops :=
   map_ops mon_group_interp grp_repr__ops.
 Instance group_mon_model__instance `{GroupTest.GroupTest} : mon_model :=
   map_model mon_group_interp _ grp_repr__model.
+*)
 
+Section test.
 
+Context `{GroupTest.GroupTest}.
 
+Eval compute in (@mon_T__instance (map_ops mon_group_interp grp_repr__ops)).
+Instance grp_mon_T_inst : Monoid.T__class := T__param.
+
+Eval compute in (@mon_m_zero__instance (map_ops mon_group_interp grp_repr__ops)).
+Instance grp_mon_m_zero_inst : @Monoid.m_zero__class T__param := m_zero__param.
+
+Eval compute in (@mon_m_plus__instance (map_ops mon_group_interp grp_repr__ops)).
+Instance grp_mon_m_plus_inst : @Monoid.m_plus__class T__param := m_plus__param.
+
+Instance grp_mon_inst : @Monoid.Monoid T__param m_zero__param m_plus__param :=
+  @mon__instance _ (map_model mon_group_interp _ grp_repr__model).
+
+End test.
 
 (*
 Definition import_0_0__isoInterp :
@@ -159,9 +176,11 @@ Section GroupTest_Thms.
 Import GroupTest.
 Context `{GroupTest}.
 
-Hint Extern 3 (@Monoid.Monoid _ _ _) =>
+(*
+Hint Extern 5 (@Monoid.Monoid _ _ _) =>
      (unfold mon_T__instance; unfold mon_m_zero__instance; unfold mon_m_plus__instance;
       unfold group_mon_ops__instance) : typeclass_instances.
+*)
 
 Definition blah := left_id_uniq.
 Set Printing All.
