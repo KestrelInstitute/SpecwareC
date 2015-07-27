@@ -78,20 +78,20 @@ Qed.
 
 
 Definition grp_repr__ops {T__param:Group.T__class}
-           {m_zero__param:Group.m_zero__class} {m_plus__param:Group.m_plus__class}
-           {m_inv__param:Group.m_inv__class} : spec_ops Group.Group__repr :=
+           {g_zero__param:Group.g_zero__class} {g_plus__param:Group.g_plus__class}
+           {g_inv__param:Group.g_inv__class} : spec_ops Group.Group__repr :=
   ops_cons
     T__param (I : sats_op_pred None _)
     (ops_cons
-       m_zero__param (I : sats_op_pred None _)
+       g_zero__param (I : sats_op_pred None _)
        (ops_cons
-          m_plus__param (I : sats_op_pred None _)
+          g_plus__param (I : sats_op_pred None _)
           (ops_cons
-             m_inv__param (I : sats_op_pred None _)
+             g_inv__param (I : sats_op_pred None _)
              (tt : spec_ops (Spec_Axioms _))))).
 
-Instance Group__IsoM {T__param m_zero__param m_plus__param m_inv__param} :
-  IsoToSpecModels grp_repr__ops (@Group.Group T__param m_zero__param m_plus__param m_inv__param).
+Instance Group__IsoM {T__param g_zero__param g_plus__param g_inv__param} :
+  IsoToSpecModels grp_repr__ops (@Group.Group T__param g_zero__param g_plus__param g_inv__param).
   compute; split;
   [ intro H; destruct H;
     repeat (first [ assumption | split; [assumption|] | apply I])
@@ -103,30 +103,34 @@ Qed.
 Hint Extern 1 Monoid.T__class =>
   refine (_ : Group.T__class) : typeclass_instances.
 Hint Extern 1 Monoid.m_zero__class =>
-  refine (_ : Group.m_zero__class) : typeclass_instances.
+  refine (_ : Group.g_zero__class) : typeclass_instances.
 Hint Extern 1 Monoid.m_plus__class =>
-  refine (_ : Group.m_plus__class) : typeclass_instances.
+  refine (_ : Group.g_plus__class) : typeclass_instances.
 
+Print Group.spec__import0.
 
 (* NOTE: do not use nth_refinement_import in generated code, just destruct the
 actual RefinementOf object and its imports *)
-Definition mon_group_interp :
+Program Definition mon_group_interp :
   Interpretation Monoid.Monoid__repr Group.Group__repr :=
   ref_import_interp
     _ (nth_refinement_import
          (refinement_interp Group.spec__import0
                             (@sub_spec_interp
-                               Monoid.Monoid__repr Group.Group__repr
-                               $(prove_sub_spec)$
+                               _ Group.Group__repr
+                               _ (* $(prove_sub_spec)$ *)
          )) 0 $(auto)$).
+Next Obligation.
+prove_sub_spec.
+Defined.
 
 Print spec_models_iso.
 
-Instance grp_mon__instance {T__param m_zero__param m_plus__param m_inv__param}
-         {H:@Group.Group T__param m_zero__param m_plus__param m_inv__param} :
-  @Monoid.Monoid T__param m_zero__param m_plus__param :=
+Instance grp_mon__instance {T__param g_zero__param g_plus__param g_inv__param}
+         {H:@Group.Group T__param g_zero__param g_plus__param g_inv__param} :
+  @Monoid.Monoid T__param g_zero__param g_plus__param :=
   proj2 (spec_models_iso
-           (IsoToSpecModels:= @Monoid__IsoM T__param m_zero__param m_plus__param))
+           (IsoToSpecModels:= @Monoid__IsoM T__param g_zero__param g_plus__param))
         (map_model mon_group_interp grp_repr__ops
                    (proj1 (spec_models_iso (IsoToSpecModels:=Group__IsoM)) H)).
 
@@ -134,41 +138,26 @@ Section Group_Thms.
 Import Group.
 Context `{Group}.
 
-(*
-Hint Extern 5 (@Monoid.Monoid _ _ _) =>
-     (unfold mon_T__instance; unfold mon_m_zero__instance; unfold mon_m_plus__instance;
-      unfold group_mon_ops__instance) : typeclass_instances.
-*)
-
-Definition blah := left_id_uniq.
-Set Printing All.
-Check blah.
-
-Lemma m_left_id_uniq (x:T) : (forall y, m_plus x y = y) -> x = m_zero.
+Lemma g_left_id_uniq (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
   apply left_id_uniq.
 Qed.
 
-Lemma m_left_id_uniq2 (x:T) : (forall y, m_plus x y = y) -> x = m_zero.
+Lemma g_left_id_uniq2 (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
   intros left_id.
-  rewrite <- (left_id m_zero).
-  rewrite m_zero_right.
+  rewrite <- (left_id g_zero).
+  rewrite g_zero_right.
   reflexivity.
 Qed.
 
-(*
-Instance m_zero_right__inst : m_zero_right__class :=
-  m_zero_right__axiom (Group:=H).
-*)
-
 Lemma left_inv_uniq (x x_inv:T) :
-  m_plus x_inv x = m_zero -> x_inv = m_inv x.
+  g_plus x_inv x = g_zero -> x_inv = g_inv x.
   intro left_inv.
   (* FIXME: can we get rid of the T__param argument here? *)
-  rewrite <- (m_zero_right (T__param:=T__param) x_inv).
-  rewrite <- (m_inv_right x).
-  rewrite m_plus_assoc.
+  rewrite <- (g_zero_right (T__param:=T__param) x_inv).
+  rewrite <- (g_inv_right x).
+  rewrite g_plus_assoc.
   rewrite left_inv.
-  rewrite m_zero_left.
+  rewrite g_zero_left.
   reflexivity.
 Qed.
 
