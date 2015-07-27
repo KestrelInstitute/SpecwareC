@@ -56,7 +56,85 @@ Check (toIsoInterp
 
 Spec End GroupTest.
 
-Print GroupTest.spec__import0.
+
+Definition mon_T__repr_instance (ops:spec_ops Monoid.Monoid__repr) : Monoid.T__class :=
+  ops_head ops.
+Definition mon_m_zero__repr_instance (ops:spec_ops Monoid.Monoid__repr)
+: Monoid.m_zero__class :=
+  ops_head (ops_rest ops).
+Definition mon_m_plus__repr_instance (ops:spec_ops Monoid.Monoid__repr)
+: Monoid.m_plus__class :=
+  ops_head (ops_rest (ops_rest ops)).
+
+Definition mon_mk_ops T__param m_zero__param m_plus__param :
+  spec_ops Monoid.Monoid__repr :=
+  ops_cons
+    T__param (I : sats_op_pred None _)
+    (ops_cons
+       m_zero__param (I : sats_op_pred None _)
+       (ops_cons
+          m_plus__param (I : sats_op_pred None _)
+          (tt : spec_ops (Spec_Axioms _)))).
+
+Definition mon_spec_repr__instance__H
+           T__param m_zero__param m_plus__param
+           (* (mod: spec_model _ (mon_mk_ops T__param m_zero__param m_plus__param)) *)
+           (mod: Monoid.m_zero_left__class /\
+                 (Monoid.m_zero_right__class /\ Monoid.m_plus_assoc__class)) :
+  @Monoid.Monoid T__param m_zero__param m_plus__param :=
+  {| Monoid.m_zero_left__axiom := proj1 mod;
+        Monoid.m_zero_right__axiom := proj1 (proj2 mod);
+        Monoid.m_plus_assoc__axiom := proj2 (proj2 mod) |}.
+
+Definition mon_spec_repr__instance
+           T__param m_zero__param m_plus__param
+           (mod: spec_model _ (mon_mk_ops T__param m_zero__param m_plus__param)) :
+  @Monoid.Monoid T__param m_zero__param m_plus__param :=
+  mon_spec_repr__instance__H _ _ _ mod.
+
+
+(*
+Definition mon_spec_repr__instance2
+           T__param m_zero__param m_plus__param
+           (mod: spec_model
+                   _
+                   (ops_cons
+                      T__param (I : sats_op_pred None _)
+                      (ops_cons
+                         m_zero__param (I : sats_op_pred None _)
+                         (ops_cons
+                            m_plus__param (I : sats_op_pred None _)
+                            (tt : spec_ops (Spec_Axioms _)))))) :
+  @Monoid.Monoid T__param m_zero__param m_plus__param :=
+  mon_spec_repr__instance__H _ _ _ mod.
+*)
+
+Definition mon_spec_repr__instance2
+           T__param m_zero__param m_plus__param
+           (mod: spec_model _ (mon_mk_ops T__param m_zero__param m_plus__param)) :
+  @Monoid.Monoid T__param m_zero__param m_plus__param :=
+  mon_spec_repr__instance__H _ _ _ mod.
+
+(*
+Definition mon_e_model T__param m_zero__param m_plus__param :
+  spec_model _ (mon_mk_ops T__param m_zero__param m_plus__param) =
+  Monoid.m_zero_left__class /\
+  (Monoid.m_zero_right__class /\ Monoid.m_plus_assoc__class) :=
+  eq_refl.
+*)
+
+
+Definition grp_repr__ops `{GroupTest.GroupTest} : spec_ops GroupTest.GroupTest__repr :=
+  ops_cons
+    T__param (I : sats_op_pred None _)
+    (ops_cons
+       m_zero__param (I : sats_op_pred None _)
+       (ops_cons
+          m_plus__param (I : sats_op_pred None _)
+          (ops_cons
+             m_inv__param (I : sats_op_pred None _)
+             (tt : spec_ops (Spec_Axioms _))))).
+
 
 
 Definition mon_group_interp :
