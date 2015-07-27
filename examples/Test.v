@@ -43,6 +43,7 @@ Spec Variable m_inv : (T -> T).
 Spec Axiom m_inv_left : (forall (x:T), m_plus (m_inv x) x = m_zero).
 Spec Axiom m_inv_right : (forall (x:T), m_plus x (m_inv x) = m_zero).
 
+(*
 Check (toIsoInterp
          (iso1:=Monoid.Monoid__iso)
          (iso2:=Monoid.Monoid__iso)
@@ -51,14 +52,30 @@ Check (toIsoInterp
             Monoid.m_zero_right__axiom := m_zero_right;
             Monoid.m_plus_assoc__axiom := m_plus_assoc |}
 ).
-
-Print Classes.
+*)
 
 Spec End GroupTest.
 
-Print GroupTest.m_zero_left__axiom.
-Print GroupTest.GroupTest.
-Print GroupTest.
+Print GroupTest.spec__import0.
+
+
+Definition mon_group_interp :
+  Interpretation Monoid.Monoid__repr GroupTest.GroupTest__repr :=
+  ref_import_interp
+    _ (nth_refinement_import
+         (refinement_interp GroupTest.spec__import0
+                            (@sub_spec_interp
+                               Monoid.Monoid__repr GroupTest.GroupTest__repr
+                               $(prove_sub_spec)$
+         )) 0 $(auto)$).
+
+(*
+Definition import_0_0__isoInterp :
+  IsoInterpretation Monoid.Monoid__iso GroupTest.GroupTest__iso (proj1_sig mon_group_interp) :=
+  toIsoInterp mon_group_interp.
+*)
+
+Instance import_0_0_instance__T `{GroupTest.GroupTest}
 
 Instance group_mon_T `{T__param:GroupTest.T__class} : Monoid.T__class := T__param.
 Instance group_mon_m_zero `{m_zero__param:GroupTest.m_zero__class} :

@@ -57,6 +57,10 @@ let spec_typeclass_ref loc locref =
    module *)
 type spec_globref = module_path
 
+(* Get the spec_globref from a global reference to a spec's typeclass *)
+let spec_globref_of_classref gr =
+  global_modpath gr
+
 (* Compare spec globrefs for equality *)
 let spec_globref_equal (g1  : spec_globref) (g2 : spec_globref) =
   ModPath.equal g1 g2
@@ -122,6 +126,16 @@ let spec_repr_id s_id = add_suffix s_id "repr"
 (* The name of the IsoToSpec proof for a spec named s_id *)
 let spec_iso_id s_id = add_suffix s_id "iso"
 
+(* Get the Id for the interppretation for import number i *)
+let spec_import_id i =
+  add_suffix (Id.of_string "spec") ("import" ^ string_of_int i)
+
+(* Get the Id for the jth instance generated from the ith import *)
+let spec_import_instance_id i j =
+  add_suffix
+    (add_suffix (Id.of_string "spec") ("import" ^ string_of_int i))
+    ("instance" ^ string_of_int j)
+
 (* The variable name for the implicit spec argument of a morphism instance *)
 let morph_spec_arg_id = Id.of_string "Spec"
 
@@ -131,12 +145,13 @@ let morph_spec_arg_id = Id.of_string "Spec"
  ***)
 
 (* FIXME: documentation *)
+(*
 type spec_import = {
   spec_import_ops : Id.t list;
   spec_import_ax_map : (Id.t * Id.t) list;
-  spec_import_class_qualid : qualid;
-  spec_import_number : int
+  spec_import_class_qualid : qualid
 }
+ *)
 
 (* A spec contains its name, its module path, and its op and axiom names. Note
 that ops and axioms --- collectively called the "fields" of the spec --- are
@@ -146,7 +161,7 @@ type spec = {
   spec_path : DirPath.t;
   spec_ops : (Id.t * constr_expr * constr_expr option) list;
   spec_axioms : (Id.t * constr_expr) list;
-  spec_imports : spec_import list
+  spec_imports : (int * spec_globref list) list
 }
 
 (* Create an empty spec with the given name *)
@@ -173,14 +188,10 @@ let spec_field_exists f =
   let _ = debug_printf 2 "@[spec_field_exists (%s): %B@]\n" (Id.to_string f) res in
   res
 
-(* Map spec import number i to an Id *)
-let spec_import_id i =
-  Id.of_string ("spec_instance__" ^ string_of_int i)
-
 (* Find an unused import number in spec *)
 let find_unused_import_id spec =
   let slots = Array.make (List.length spec.spec_imports) false in
-  let _ = List.iter (fun imp -> slots.(imp.spec_import_number) <- true)
+  let _ = List.iter (fun imp -> slots.(fst imp) <- true)
                     spec.spec_imports in
   let i = ref 0 in
   let _ = while !i < Array.length slots && slots.(!i) do
@@ -196,8 +207,8 @@ let filter_nonexistent_fields_and_imports spec =
                             spec_field_exists id) spec.spec_ops;
     spec_axioms = List.filter (fun (id,_) -> spec_field_exists id) spec.spec_axioms;
     spec_imports =
-      List.filter (fun imp ->
-                   spec_field_exists (spec_import_id imp.spec_import_number))
+      List.filter (fun (imp_num,_) ->
+                   spec_field_exists (spec_import_id imp_num))
                   spec.spec_imports }
 
 
@@ -295,7 +306,7 @@ let spec_descr : (spec_fields_constr,spec_fields) constr_descr =
 
 (* Build a term of type Spec that represents a spec *)
 let build_spec_repr loc spec : constr_expr =
-  build_constr_expr spec_descr (List.rev spec.spec_ops, spec.spec_axioms)
+  build_constr_expr spec_descr (List.rev spec.spec_ops, List.rev spec.spec_axioms)
 
 exception MalformedSpec of Constr.t * string * Constr.t
 
@@ -592,10 +603,15 @@ let end_new_spec spec_lid =
  *** Spec Imports
  ***)
 
-(* Import all the ops and axioms given in a RefinementOf object *)
-let import_refinement_constr loc constr =
+(* Same as above, but take in a term for a Spec representation object *)
+let import_refinement_constr_expr loc constr_expr =
+  (* Get the current Coq context *)
   let (evd,env) = Lemmas.get_current_context () in
+  (* Internalize constr_expr into a construction *)
+  let (constr,_) = Constrintern.interp_constr env evd constr_expr in
+  (* Destruct constr as a RefinementOf object *)
   let ((ops,axioms),interp,imports) = destruct_refinementof constr in
+  (* Add all the ops specified by constr *)
   let _ =
     List.iter (fun (f,tp,oppred) ->
                add_spec_field
@@ -604,6 +620,7 @@ let import_refinement_constr loc constr =
                  (Constrextern.extern_constr true env evd tp)
                  (map_opt (Constrextern.extern_constr true env evd) oppred)) ops
   in
+  (* Add all the axioms specified by constr *)
   let _ =
     List.iter
       (fun (ax_name,ax_tp) ->
@@ -616,28 +633,16 @@ let import_refinement_constr loc constr =
   update_current_spec
     loc
     (fun spec ->
-     let new_imports =
-       List.map
-         (fun refimp ->
-          let imp_num = find_unused_import_id spec in
-          let interp_expr =
-            Constrextern.extern_constr true env evd refimp.ref_import_interp
-          in
-          let _ =
-            add_definition (loc,spec_import_id imp_num) [] None interp_expr
-          in
-          {spec_import_ops = List.map (fun (f,_,_) -> f) ops;
-           spec_import_ax_map = List.map (fun (f,_) -> (f,f)) axioms;
-           spec_import_class_qualid = qualid_of_global refimp.ref_import_class;
-           spec_import_number = imp_num}) imports in
-     {spec with spec_imports = spec.spec_imports @ new_imports})
-
-(* Same as above, but take in a term for a Spec representation object *)
-let import_refinement_constr_expr loc constr_expr =
-  let (evd,env) = Lemmas.get_current_context () in
-  let (constr,_) = Constrintern.interp_constr env evd constr_expr in
-  import_refinement_constr loc constr
-
+     (* Get a fresh import number for the current spec *)
+     let imp_num = find_unused_import_id spec in
+     (* Add a definition spec__import<i> := constr_expr *)
+     let _ = add_definition (loc,spec_import_id imp_num) [] None constr_expr in
+     (* Extract the spec_globrefs from the import list of constr *)
+     let spec_refs =
+       List.map (fun refimp ->
+                 spec_globref_of_classref (refimp.ref_import_class)) imports in
+     (* Add the import list to the currernt spec *)
+     {spec with spec_imports = spec.spec_imports @ [imp_num, spec_refs]})
 
 (***
  *** Additions to the Coq parser
