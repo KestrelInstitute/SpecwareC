@@ -58,6 +58,35 @@ Spec End GroupTest.
 
 
 
+Class IsoToSpecModels {spec} (ops: spec_ops spec) (P: Prop) : Prop :=
+  spec_models_iso : P <-> spec_model spec ops.
+
+
+Definition mon_repr__ops {T__param:Monoid.T__class}
+           {m_zero__param:Monoid.m_zero__class} {m_plus__param:Monoid.m_plus__class} :
+  spec_ops Monoid.Monoid__repr :=
+  ops_cons
+    T__param (I : sats_op_pred None _)
+    (ops_cons
+       m_zero__param (I : sats_op_pred None _)
+       (ops_cons
+          m_plus__param (I : sats_op_pred None _)
+          (tt : spec_ops (Spec_Axioms _)))).
+
+Instance Monoid__IsoM {T__param m_zero__param m_plus__param} :
+  IsoToSpecModels mon_repr__ops (@Monoid.Monoid T__param m_zero__param m_plus__param).
+  compute; split;
+  [ intro H; destruct H;
+    repeat (first [ assumption | split; [assumption|] | apply I])
+  | intro H; repeat (let Hi := fresh "H" in
+                     destruct H as [Hi H]); constructor; assumption ].
+Qed.
+
+FIXME HERE: add Extern hints to typeclass_instances to build a Monoid.T__class
+from a GroupTest.T__class using the refine tactic
+
+
+
 Class mon_ops : Type :=
   mon_spec_ops : spec_ops Monoid.Monoid__repr.
 Class mon_model {ops:mon_ops} : Prop :=
