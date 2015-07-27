@@ -630,7 +630,7 @@ and build_constr_expr_list : type t f. (t,f) constr_array_descr -> f -> constr_e
 let rec destruct_constr : type t f. (t,f) constr_descr -> Constr.t -> t = function
   | Descr_Ctor (ctor,array_descr,descr') ->
      fun constr ->
-     let (c,args) =
+     let destruct_ctor_app c =
        match Term.kind_of_term constr with
        | Term.App (f, args) ->
           (match Term.kind_of_term f with
@@ -638,6 +638,13 @@ let rec destruct_constr : type t f. (t,f) constr_descr -> Constr.t -> t = functi
            | _ -> raise dummy_loc DescrFailedInternal)
        | Term.Construct (c, _) -> (c, [| |])
        | _ -> raise dummy_loc DescrFailedInternal
+     in
+     let (c,args) = destruct_ctor_app constr
+     (* README: don't do the below: it reduces constr once for each ctor match *)
+       (*
+       try destruct_ctor_app constr
+       with DescrFailedInternal -> destruct_ctor_app constr
+        *)
      in
      if eq_constructor c ctor then
        Left (destruct_constr_array array_descr args)
@@ -874,7 +881,8 @@ let string_descr : (string, string) constr_descr =
          else
            Right (Left ())),
         binary_ctor
-          ["Coq"; "Strings"; "String"] "String" ascii_descr (fun _ -> str_descr)
+          ["Coq"; "Strings"; "String"] "String" ascii_descr
+          (fun _ -> hnf_descr str_descr)
           (nullary_ctor ["Coq"; "Strings"; "String"] "EmptyString" Descr_Fail)))
 
 (* An optimized description of the Coq string type, that converts strings

@@ -242,7 +242,7 @@ let lookup_spec locref = fst (lookup_spec_and_globref locref)
 
 (* A description of strings that parses into Id.t *)
 let id_descr : (Id.t, Id.t) constr_descr =
-  Descr_Iso ("id", Id.of_string, Id.to_string, string_fast_descr)
+  hnf_descr (Descr_Iso ("id", Id.of_string, Id.to_string, string_fast_descr))
 
 (* A description of axiom pairs: optimizes pair_descr by using the ax_pair
 operator from Spec.v *)
@@ -282,7 +282,7 @@ let spec_descr : (spec_fields_constr,spec_fields) constr_descr =
           | ([], axioms) -> Right (Left (axioms, ()))),
         quaternary_ctor
           ["Specware"; "Spec"] "Spec_ConsOp"
-          id_descr (fun _ -> Descr_Constr) (fun _ _ -> option_descr Descr_Constr)
+          (hnf_descr id_descr) (fun _ -> Descr_Constr) (fun _ _ -> option_descr Descr_Constr)
           (fun f_sum _ _ ->
            let f = match f_sum with Left f -> f | Right f -> f in
            Descr_ConstrMap
@@ -301,7 +301,7 @@ let spec_descr : (spec_fields_constr,spec_fields) constr_descr =
                   rest_expr)),
               spec_descr))
           (unary_ctor
-             ["Specware"; "Spec"] "Spec_Axioms" axiom_list_descr
+             ["Specware"; "Spec"] "Spec_Axioms" (hnf_descr axiom_list_descr)
              Descr_Fail)))
 
 (* Build a term of type Spec that represents a spec *)
@@ -339,7 +339,7 @@ let refinement_import_descr :
              | Term.Const (c, _) -> ConstRef c
              | Term.Ind (ind, _) -> IndRef ind
              | Term.Construct (c, _) -> ConstructRef c
-             | _ -> raise dummy_loc DescrFailedInternal)
+             | _ -> raise dummy_loc (DescrFailed ("defined spec", x3)))
           in
           {ref_import_fromspec = x1;
            ref_import_interp = x2;
@@ -373,7 +373,7 @@ let refinementof_descr : (refinementof_constr, refinementof) constr_descr =
        (hole_descr Descr_Constr)
        (fun _ -> hnf_descr spec_descr)
        (fun _ _ -> Descr_Constr)
-       (fun _ _ _ -> hnf_descr (list_descr refinement_import_descr))
+       (fun _ _ _ -> hnf_descr (list_descr (hnf_descr refinement_import_descr)))
        Descr_Fail)
 
 exception MalformedRefinement of Constr.t * string * Constr.t

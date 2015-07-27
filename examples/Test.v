@@ -37,6 +37,12 @@ Print left_id_uniq.
 (* The version of Group that works right now... *)
 Spec GroupTest.
 
+(*
+Spec ImportTerm
+     (refinement_translate
+        (id_refinement_import _ _ Monoid.Monoid__iso)
+        (cons (XlateWild "m_" "g_") nil)).
+*)
 Spec ImportTerm (id_refinement_import _ _ Monoid.Monoid__iso).
 
 Spec Variable m_inv : (T -> T).
