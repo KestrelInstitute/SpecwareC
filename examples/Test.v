@@ -82,38 +82,10 @@ Instance Monoid__IsoM {T__param m_zero__param m_plus__param} :
                      destruct H as [Hi H]); constructor; assumption ].
 Qed.
 
-FIXME HERE: add Extern hints to typeclass_instances to build a Monoid.T__class
-from a GroupTest.T__class using the refine tactic
 
-
-
-Class mon_ops : Type :=
-  mon_spec_ops : spec_ops Monoid.Monoid__repr.
-Class mon_model {ops:mon_ops} : Prop :=
-  mon_spec_model : spec_model Monoid.Monoid__repr mon_spec_ops.
-
-Instance mon_T__instance `{mon_ops} : Monoid.T__class :=
-  ops_head mon_spec_ops.
-Instance mon_m_zero__instance `{mon_ops} : Monoid.m_zero__class :=
-  ops_head (ops_rest mon_spec_ops).
-Instance mon_m_plus__instance `{mon_ops} : Monoid.m_plus__class :=
-  ops_head (ops_rest (ops_rest mon_spec_ops)).
-
-Instance mon__instance `{mon_model} : Monoid.Monoid.
-revert ops H.
-unfold mon_ops; unfold mon_model; unfold Monoid.Monoid__repr.
-intro ops.
-repeat (let t := fresh "t" in
-        let pf := fresh "pf" in
-        destruct ops as [t ops]; destruct ops as [pf ops];
-        try destruct pf).
-compute.
-intro H; repeat (let Hi := fresh "H" in
-                 destruct H as [Hi H]); constructor; assumption.
-Qed.
-
-
-Definition grp_repr__ops `{GroupTest.GroupTest} : spec_ops GroupTest.GroupTest__repr :=
+Definition grp_repr__ops {T__param:GroupTest.T__class}
+           {m_zero__param:GroupTest.m_zero__class} {m_plus__param:GroupTest.m_plus__class}
+           {m_inv__param:GroupTest.m_inv__class} : spec_ops GroupTest.GroupTest__repr :=
   ops_cons
     T__param (I : sats_op_pred None _)
     (ops_cons
@@ -124,13 +96,26 @@ Definition grp_repr__ops `{GroupTest.GroupTest} : spec_ops GroupTest.GroupTest__
              m_inv__param (I : sats_op_pred None _)
              (tt : spec_ops (Spec_Axioms _))))).
 
-Definition grp_repr__model `{GroupTest.GroupTest} :
-  spec_model GroupTest.GroupTest__repr grp_repr__ops.
-  compute.
-  destruct H.
-  repeat (first [ assumption | split; [assumption|] | apply I]).
+Instance GroupTest__IsoM {T__param m_zero__param m_plus__param m_inv__param} :
+  IsoToSpecModels grp_repr__ops (@GroupTest.GroupTest T__param m_zero__param m_plus__param m_inv__param).
+  compute; split;
+  [ intro H; destruct H;
+    repeat (first [ assumption | split; [assumption|] | apply I])
+  | intro H; repeat (let Hi := fresh "H" in
+                     destruct H as [Hi H]); constructor; assumption ].
 Qed.
 
+
+Hint Extern 1 Monoid.T__class =>
+  refine (_ : GroupTest.T__class) : typeclass_instances.
+Hint Extern 1 Monoid.m_zero__class =>
+  refine (_ : GroupTest.m_zero__class) : typeclass_instances.
+Hint Extern 1 Monoid.m_plus__class =>
+  refine (_ : GroupTest.m_plus__class) : typeclass_instances.
+
+
+(* NOTE: do not use nth_refinement_import in generated code, just destruct the
+actual RefinementOf object and its imports *)
 Definition mon_group_interp :
   Interpretation Monoid.Monoid__repr GroupTest.GroupTest__repr :=
   ref_import_interp
@@ -141,65 +126,15 @@ Definition mon_group_interp :
                                $(prove_sub_spec)$
          )) 0 $(auto)$).
 
-(*
-Instance group_mon_ops__instance `{GroupTest.GroupTest} : mon_ops :=
-  map_ops mon_group_interp grp_repr__ops.
-Instance group_mon_model__instance `{GroupTest.GroupTest} : mon_model :=
-  map_model mon_group_interp _ grp_repr__model.
-*)
+Print spec_models_iso.
 
-Section test.
-
-Context `{GroupTest.GroupTest}.
-
-Eval compute in (@mon_T__instance (map_ops mon_group_interp grp_repr__ops)).
-Instance grp_mon_T_inst : Monoid.T__class := T__param.
-
-Eval compute in (@mon_m_zero__instance (map_ops mon_group_interp grp_repr__ops)).
-Instance grp_mon_m_zero_inst : @Monoid.m_zero__class T__param := m_zero__param.
-
-Eval compute in (@mon_m_plus__instance (map_ops mon_group_interp grp_repr__ops)).
-Instance grp_mon_m_plus_inst : @Monoid.m_plus__class T__param := m_plus__param.
-
-Instance grp_mon_inst : @Monoid.Monoid T__param m_zero__param m_plus__param :=
-  @mon__instance _ (map_model mon_group_interp _ grp_repr__model).
-
-End test.
-
-(*
-Definition import_0_0__isoInterp :
-  IsoInterpretation Monoid.Monoid__iso GroupTest.GroupTest__iso (proj1_sig mon_group_interp) :=
-  toIsoInterp mon_group_interp.
-*)
-
-(*
-Instance import_0_0_instance__T `{GroupTest.GroupTest}
-
-Instance group_mon_T `{T__param:GroupTest.T__class} : Monoid.T__class := T__param.
-Instance group_mon_m_zero `{m_zero__param:GroupTest.m_zero__class} :
-  Monoid.m_zero__class := m_zero__param.
-Instance group_mon_m_plus `{m_plus__param:GroupTest.m_plus__class} :
-  Monoid.m_plus__class := m_plus__param.
-
-Instance test_inst1 {T__param m_zero__param m_plus__param m_inv__param}
-         {s: @GroupTest.GroupTest T__param m_zero__param
-                                     m_plus__param m_inv__param} :
-  Monoid.Monoid :=
-  (toIsoInterp
-     (iso1:=Monoid.Monoid__iso)
-     (iso2:=Monoid.Monoid__iso)
-     GroupTest.spec_instance__0 T__param m_zero__param m_plus__param
-     {| Monoid.m_zero_left__axiom := GroupTest.m_zero_left__axiom (GroupTest:=s);
-        Monoid.m_zero_right__axiom := GroupTest.m_zero_right__axiom (GroupTest:=s);
-        Monoid.m_plus_assoc__axiom := GroupTest.m_plus_assoc__axiom (GroupTest:=s) |}
-  ).
-Check @test_inst1.
-
-Set Printing All.
-
-Check @GroupTest.m_zero_right__axiom.
-*)
-
+Instance grp_mon__instance {T__param m_zero__param m_plus__param m_inv__param}
+         {H:@GroupTest.GroupTest T__param m_zero__param m_plus__param m_inv__param} :
+  @Monoid.Monoid T__param m_zero__param m_plus__param :=
+  proj2 (spec_models_iso
+           (IsoToSpecModels:= @Monoid__IsoM T__param m_zero__param m_plus__param))
+        (map_model mon_group_interp grp_repr__ops
+                   (proj1 (spec_models_iso (IsoToSpecModels:=GroupTest__IsoM)) H)).
 
 Section GroupTest_Thms.
 Import GroupTest.
