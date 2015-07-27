@@ -34,33 +34,21 @@ End Monoid_Thms.
 Print left_id_uniq.
 
 
-(* The version of Group that works right now... *)
-Spec GroupTest.
+Spec Group.
 
-(*
 Spec ImportTerm
      (refinement_translate
         (id_refinement_import _ _ Monoid.Monoid__iso)
         (cons (XlateWild "m_" "g_") nil)).
-*)
-Spec ImportTerm (id_refinement_import _ _ Monoid.Monoid__iso).
-
-Spec Variable m_inv : (T -> T).
-Spec Axiom m_inv_left : (forall (x:T), m_plus (m_inv x) x = m_zero).
-Spec Axiom m_inv_right : (forall (x:T), m_plus x (m_inv x) = m_zero).
-
 (*
-Check (toIsoInterp
-         (iso1:=Monoid.Monoid__iso)
-         (iso2:=Monoid.Monoid__iso)
-         spec_instance__0 T__param m_zero__param m_plus__param
-         {| Monoid.m_zero_left__axiom := m_zero_left;
-            Monoid.m_zero_right__axiom := m_zero_right;
-            Monoid.m_plus_assoc__axiom := m_plus_assoc |}
-).
+Spec ImportTerm (id_refinement_import _ _ Monoid.Monoid__iso).
 *)
 
-Spec End GroupTest.
+Spec Variable g_inv : (T -> T).
+Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
+Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
+
+Spec End Group.
 
 
 
@@ -89,9 +77,9 @@ Instance Monoid__IsoM {T__param m_zero__param m_plus__param} :
 Qed.
 
 
-Definition grp_repr__ops {T__param:GroupTest.T__class}
-           {m_zero__param:GroupTest.m_zero__class} {m_plus__param:GroupTest.m_plus__class}
-           {m_inv__param:GroupTest.m_inv__class} : spec_ops GroupTest.GroupTest__repr :=
+Definition grp_repr__ops {T__param:Group.T__class}
+           {m_zero__param:Group.m_zero__class} {m_plus__param:Group.m_plus__class}
+           {m_inv__param:Group.m_inv__class} : spec_ops Group.Group__repr :=
   ops_cons
     T__param (I : sats_op_pred None _)
     (ops_cons
@@ -102,8 +90,8 @@ Definition grp_repr__ops {T__param:GroupTest.T__class}
              m_inv__param (I : sats_op_pred None _)
              (tt : spec_ops (Spec_Axioms _))))).
 
-Instance GroupTest__IsoM {T__param m_zero__param m_plus__param m_inv__param} :
-  IsoToSpecModels grp_repr__ops (@GroupTest.GroupTest T__param m_zero__param m_plus__param m_inv__param).
+Instance Group__IsoM {T__param m_zero__param m_plus__param m_inv__param} :
+  IsoToSpecModels grp_repr__ops (@Group.Group T__param m_zero__param m_plus__param m_inv__param).
   compute; split;
   [ intro H; destruct H;
     repeat (first [ assumption | split; [assumption|] | apply I])
@@ -113,38 +101,38 @@ Qed.
 
 
 Hint Extern 1 Monoid.T__class =>
-  refine (_ : GroupTest.T__class) : typeclass_instances.
+  refine (_ : Group.T__class) : typeclass_instances.
 Hint Extern 1 Monoid.m_zero__class =>
-  refine (_ : GroupTest.m_zero__class) : typeclass_instances.
+  refine (_ : Group.m_zero__class) : typeclass_instances.
 Hint Extern 1 Monoid.m_plus__class =>
-  refine (_ : GroupTest.m_plus__class) : typeclass_instances.
+  refine (_ : Group.m_plus__class) : typeclass_instances.
 
 
 (* NOTE: do not use nth_refinement_import in generated code, just destruct the
 actual RefinementOf object and its imports *)
 Definition mon_group_interp :
-  Interpretation Monoid.Monoid__repr GroupTest.GroupTest__repr :=
+  Interpretation Monoid.Monoid__repr Group.Group__repr :=
   ref_import_interp
     _ (nth_refinement_import
-         (refinement_interp GroupTest.spec__import0
+         (refinement_interp Group.spec__import0
                             (@sub_spec_interp
-                               Monoid.Monoid__repr GroupTest.GroupTest__repr
+                               Monoid.Monoid__repr Group.Group__repr
                                $(prove_sub_spec)$
          )) 0 $(auto)$).
 
 Print spec_models_iso.
 
 Instance grp_mon__instance {T__param m_zero__param m_plus__param m_inv__param}
-         {H:@GroupTest.GroupTest T__param m_zero__param m_plus__param m_inv__param} :
+         {H:@Group.Group T__param m_zero__param m_plus__param m_inv__param} :
   @Monoid.Monoid T__param m_zero__param m_plus__param :=
   proj2 (spec_models_iso
            (IsoToSpecModels:= @Monoid__IsoM T__param m_zero__param m_plus__param))
         (map_model mon_group_interp grp_repr__ops
-                   (proj1 (spec_models_iso (IsoToSpecModels:=GroupTest__IsoM)) H)).
+                   (proj1 (spec_models_iso (IsoToSpecModels:=Group__IsoM)) H)).
 
-Section GroupTest_Thms.
-Import GroupTest.
-Context `{GroupTest}.
+Section Group_Thms.
+Import Group.
+Context `{Group}.
 
 (*
 Hint Extern 5 (@Monoid.Monoid _ _ _) =>
@@ -169,7 +157,7 @@ Qed.
 
 (*
 Instance m_zero_right__inst : m_zero_right__class :=
-  m_zero_right__axiom (GroupTest:=H).
+  m_zero_right__axiom (Group:=H).
 *)
 
 Lemma left_inv_uniq (x x_inv:T) :
@@ -184,43 +172,8 @@ Lemma left_inv_uniq (x x_inv:T) :
   reflexivity.
 Qed.
 
-End GroupTest_Thms.
-
-
-
-(* The "correct" version of Group *)
-Spec Group.
-
-Spec Import Monoid {m_% +-> g_%}.
-
-Spec Variable g_inv : (T -> T).
-Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
-Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
-
-Spec End Group.
-
-Print Group.
-
-Section Group_Thms.
-Import Group.
-Context `{Group}.
-
-Lemma g_left_id_uniq (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
-  apply left_id_uniq.
-Qed.
-
-Lemma left_inv_uniq (x x_inv:T) :
-  g_plus x_inv x = g_zero -> x_inv = g_inv x.
-  intro left_inv.
-  rewrite <- (g_zero_right x_inv).
-  rewrite <- (g_inv_right x).
-  rewrite g_plus_assoc.
-  rewrite left_inv.
-  rewrite g_zero_left.
-  reflexivity.
-Qed.
-
 End Group_Thms.
+
 
 
 Spec Group2.

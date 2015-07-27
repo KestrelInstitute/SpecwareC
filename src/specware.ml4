@@ -335,7 +335,12 @@ let refinement_import_descr :
      (function
        | Left (_, (x1, (x2, (x3, (x4, ()))))) ->
           let gr =
-            (match Term.kind_of_term x3 with
+            (* FIXME: when we just look at the spec, x1, going to need
+            CMap.bindings of spec_table to reduce all but the named specs of the
+            globally registered spec names; OR: could repeatedly reduce with
+            CBN, only allowing constants to be expanded if we see them in the
+            term and they do not and in __repr *)
+            (match Term.kind_of_term (hnf_constr x3) with
              | Term.Const (c, _) -> ConstRef c
              | Term.Ind (ind, _) -> IndRef ind
              | Term.Construct (c, _) -> ConstructRef c
