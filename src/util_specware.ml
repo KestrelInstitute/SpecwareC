@@ -179,6 +179,25 @@ let add_suffix_l lid suffix =
 (* Build an expression for a variable from a located identifier *)
 let mk_var id = CRef (Ident id, None)
 
+(* Build an anonymous hole term *)
+let mk_hole loc =
+  CHole (loc, None, IntroAnonymous, None)
+
+(* Build a hole to be filled in by a tactic *)
+let mk_tactic_hole loc tac =
+  (CHole (loc, None, IntroAnonymous,
+          Some (Genarg.in_gen (Genarg.rawwit Constrarg.wit_tactic) tac)))
+
+(* Build a hole to be filled in by a specific, named tactic *)
+let mk_named_tactic_hole loc tac_qualid =
+  (CHole (loc, None, IntroAnonymous,
+          Some (Genarg.in_gen
+                  (Genarg.rawwit Constrarg.wit_tactic)
+                  (Tacexpr.TacArg
+                     (loc,
+                      Tacexpr.TacCall
+                        (loc, Qualid (loc, tac_qualid), []))))))
+
 (* Build an application *)
 let mk_app f args =
   CApp (dummy_loc, (None, f),
@@ -198,8 +217,8 @@ let mk_id_app_named_args loc id args =
   mk_ref_app_named_args loc (Ident id) args
 
 (* Build a qualified id (NOTE: dir is *not* reversed here) *)
-let mk_qualid dir id =
-  make_qualid (DirPath.make (List.rev_map Id.of_string dir)) id
+let mk_qualid dir str =
+  make_qualid (DirPath.make (List.rev_map Id.of_string dir)) (Id.of_string str)
 
 (* Cons an id onto the end of a qualid *)
 let qualid_cons qualid id =
@@ -209,7 +228,7 @@ let qualid_cons qualid id =
 (* Build a term for a global constant, where dir lists the module path
    as a list (e.g., ["Coq"; "Init"; "Logic"]) and id is the id *)
 let mk_reference dir name =
-  CRef (Qualid (dummy_loc, mk_qualid dir (Id.of_string name)), None)
+  CRef (Qualid (dummy_loc, mk_qualid dir name), None)
 
 (* Get a string for a global reference *)
 let global_to_string gr =
@@ -243,7 +262,7 @@ let mk_global_expl gr =
 
 (* Look up a defined constant by path list and string name *)
 let mk_constant loc dir name =
-  let qualid = mk_qualid dir (Id.of_string name) in
+  let qualid = mk_qualid dir name in
   match Nametab.locate qualid with
   | ConstRef c -> c
   | _ -> user_err_loc (dummy_loc, "_",
@@ -251,7 +270,7 @@ let mk_constant loc dir name =
 
 (* Look up a constructor by a path list and a string name *)
 let mk_constructor loc dir name =
-  let qualid = mk_qualid dir (Id.of_string name) in
+  let qualid = mk_qualid dir name in
   match Nametab.locate qualid with
   | ConstructRef c -> c
   | _ -> user_err_loc (dummy_loc, "_",

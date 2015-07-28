@@ -50,7 +50,7 @@ let spec_repr_id s_id = add_suffix s_id "Spec"
 let spec_ops_id s_id = add_suffix s_id "ops"
 
 (* The name of the IsoToSpec proof for a spec named s_id *)
-let spec_iso_id s_id = add_suffix s_id "iso"
+let spec_iso_id s_id = add_suffix s_id "Iso"
 
 (* Get the Id for the interppretation for import number i *)
 let spec_import_id i =
@@ -64,6 +64,18 @@ let spec_import_instance_id i j =
 
 (* The variable name for the implicit spec argument of a morphism instance *)
 let morph_spec_arg_id = Id.of_string "Spec"
+
+
+(***
+ *** Specware-Specific Symbols
+ ***)
+
+(* The logical path to the Specware.Spec module *)
+let specware_mod = ["Specware"; "Spec"]
+
+(* Build a reference to a Specware-specific symbol *)
+let mk_specware_ref str =
+  mk_reference specware_mod str
 
 
 (***
@@ -262,7 +274,7 @@ let ax_pair_descr : (Id.t * Constr.t, Id.t * constr_expr) constr_descr =
       destruct_constr (pair_descr id_descr Descr_Constr)
                       (hnf_constr constr)),
      (fun (f, tp) ->
-      mkAppC (mk_reference ["Specware"; "Spec"] "ax_pair",
+      mkAppC (mk_specware_ref "ax_pair",
               [mk_string (Id.to_string f); tp])))
 
 (* The description of a list of axioms *)
@@ -531,27 +543,50 @@ let complete_spec loc =
     global_modpath (Nametab.locate (qualid_of_ident spec.spec_name))
   in
   let _ = register_spec spec_globref spec in
-  (* Build the spec representation spec__repr *)
+  (* Build the spec representation spec__Spec *)
   let _ = add_definition (loc, spec_repr_id spec.spec_name) [] None
                          (build_spec_repr loc spec) in
-  (* Build a proof spec__iso that spec__repr is isomorphic to the spec *)
+  (* Build spec__ops {op_params} : spec_ops spec__Spec *)
+  let _ = add_definition
+            (loc, spec_ops_id spec.spec_name)
+            op_params
+            (Some mkAppC (mk_specware_ref "spec_ops",
+                          [mk_var (loc, spec_repr_id spec.spec_name)]))
+            (List.fold_left
+               (fun rest_expr (op_id, op_tp, pred_opt) ->
+                mkAppC (mk_specware_ref "ops_cons",
+                        [mk_var (loc, field_param_id op_id);
+                         (match pred_opt with
+                          | Some _ -> mk_var (loc, field_proof_id op_id)
+                          | None ->
+                             mkCastC (mk_reference ["Coq"; "Init"; "Logic"] "I",
+                                      CastConv
+                                        (mkAppC
+                                           (mk_specware_ref "sats_op_pred",
+                                            [mk_reference datatypes_mod "None";
+                                             mk_hole loc]))));
+                         rest_expr]))
+               (mkCastC (mk_reference datatypes_mod "tt",
+                         CastConv
+                           (mkAppC (mk_specware_ref "spec_ops",
+                                    [mkAppC (mk_specware_ref "Spec_Axioms",
+                                             [mk_hole loc])]))))
+               spec.spec_ops)
+  in
+  (* Build a proof spec__iso that spec__Spec is isomorphic to the spec *)
   let _ = add_term_instance
-            (loc, Name spec_iso_id spec.spec_name) []
-            (mkAppC (mk_reference ["Specware"; "Spec"] "IsoToSpec",
-                     [mk_var (loc, spec_repr_id spec.spec_name);
+            (loc, Name spec_iso_id spec.spec_name)
+            op_params
+            (mkAppC (mk_specware_ref "IsoToSpecModels",
+                     [mk_var (loc, spec_ops_id spec.spec_name);
                       CAppExpl
-                        (loc, (None, Ident (loc, spec.spec_name), None), [])]))
-            (CHole (loc, None, IntroAnonymous,
-                    Some (Genarg.in_gen
-                            (Genarg.rawwit Constrarg.wit_tactic)
-                            (Tacexpr.TacArg
-                               (loc,
-                                Tacexpr.TacCall
-                                  (loc,
-                                   Qualid (loc,
-                                           mk_qualid ["Specware"; "Spec"]
-                                                     (Id.of_string "prove_spec_iso")),
-                                   []))))))
+                        (loc, (None, Ident (loc, spec.spec_name), None),
+                         List.rev_map (fun (op_id,_,_) ->
+                                       mk_var (loc, field_param_id op_id))
+                                      spec.spec_ops)]))
+            (mk_named_tactic_hole
+               loc
+               (mk_qualid specware_mod "prove_spec_models_iso"))
   in
   (* Add an instance for each import in the spec *)
   let inst_counter = ref 1 in
@@ -571,7 +606,7 @@ let complete_spec loc =
                          mk_var (dummy_loc, spec.spec_name))]
          (mkRefC (Qualid (dummy_loc,imp.spec_import_class_qualid)))
          (mkAppC
-            (mk_reference ["Specware"; "Spec"] "toIsoInterp",
+            (mk_specware_ref "toIsoInterp",
              [mkAppC (mk_var (dummy_loc,
                               spec_import_id imp.spec_import_number),
                       concat_map

@@ -48,7 +48,7 @@ Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 Spec End Group.
 
 
-
+(*
 Definition mon_repr__ops {T__param:Monoid.T__class}
            {m_zero__param:Monoid.m_zero__class} {m_plus__param:Monoid.m_plus__class} :
   spec_ops Monoid.Monoid__Spec :=
@@ -91,7 +91,7 @@ Instance Group__IsoM {T__param g_zero__param g_plus__param g_inv__param} :
   | intro H; repeat (let Hi := fresh "H" in
                      destruct H as [Hi H]); constructor; assumption ].
 Qed.
-
+*)
 
 Hint Extern 1 Monoid.T__class =>
   refine (_ : Group.T__class) : typeclass_instances.
@@ -117,15 +117,13 @@ Next Obligation.
 prove_sub_spec.
 Defined.
 
-Print spec_models_iso.
-
 Instance grp_mon__instance {T__param g_zero__param g_plus__param g_inv__param}
          {H:@Group.Group T__param g_zero__param g_plus__param g_inv__param} :
   @Monoid.Monoid T__param g_zero__param g_plus__param :=
   proj2 (spec_models_iso
-           (IsoToSpecModels:= @Monoid__IsoM T__param g_zero__param g_plus__param))
-        (map_model mon_group_interp grp_repr__ops
-                   (proj1 (spec_models_iso (IsoToSpecModels:=Group__IsoM)) H)).
+           (IsoToSpecModels:= @Monoid.Monoid__Iso T__param g_zero__param g_plus__param))
+        (map_model mon_group_interp Group.Group__ops
+                   (proj1 (spec_models_iso (IsoToSpecModels:=Group.Group__Iso)) H)).
 
 Section Group_Thms.
 Import Group.
