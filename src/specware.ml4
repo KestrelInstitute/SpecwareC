@@ -21,6 +21,52 @@ open Topconstr
 
 
 (***
+ *** Identifiers and Identifier Suffixes
+ ***)
+
+(* Build the identifier used to quantify over a field as a local
+   variable *)
+let field_param_id f = add_suffix f "param"
+
+(* Get the identifier used locally for the type of a field *)
+let field_type_id f = add_suffix f "type"
+
+(* Get the identifier used locally for the type-class of a field *)
+let field_class_id f = add_suffix f "class"
+
+(* Get the identifier used for the proof of a field predicate *)
+let field_proof_id f = add_suffix f "proof"
+
+(* The name of the instance associated with a field *)
+let field_inst_id f = add_suffix f "inst"
+
+(* The axiom typeclass field pointing to an instance of this axiom *)
+let field_axelem_id f = add_suffix f "axiom"
+
+(* The name of the Spec representation of a spec named s_id *)
+let spec_repr_id s_id = add_suffix s_id "Spec"
+
+(* The name of the parameteric ops constructor for a spec named s_id *)
+let spec_ops_id s_id = add_suffix s_id "ops"
+
+(* The name of the IsoToSpec proof for a spec named s_id *)
+let spec_iso_id s_id = add_suffix s_id "iso"
+
+(* Get the Id for the interppretation for import number i *)
+let spec_import_id i =
+  add_suffix (Id.of_string "spec") ("import" ^ string_of_int i)
+
+(* Get the Id for the jth instance generated from the ith import *)
+let spec_import_instance_id i j =
+  add_suffix
+    (add_suffix (Id.of_string "spec") ("import" ^ string_of_int i))
+    ("instance" ^ string_of_int j)
+
+(* The variable name for the implicit spec argument of a morphism instance *)
+let morph_spec_arg_id = Id.of_string "Spec"
+
+
+(***
  *** Global and local references to specs
  ***)
 
@@ -53,6 +99,10 @@ let spec_typeclass_qualid locref =
 let spec_typeclass_ref loc locref =
   Qualid (loc, spec_typeclass_qualid locref)
 
+(* Return a local reference to the Spec object for a spec *)
+let spec_repr_ref loc locref =
+  Qualid (loc, qualid_cons locref (spec_repr_id (spec_locref_basename locref)))
+
 (* A global reference to a spec is a global reference to the spec's
    module *)
 type spec_globref = module_path
@@ -80,9 +130,8 @@ let this_spec_globref () = ??
  *)
 
 (* Turn the global reference to a spec into a local reference *)
-(* FIXME: find a better way than going through strings... *)
 let spec_globref_to_locref spec_globref =
-  qualid_of_string (ModPath.to_string spec_globref)
+  Nametab.shortest_qualid_of_module spec_globref
 
 (* Build a reference to a field in a global spec *)
 (* FIXME: this should not go through a locref *)
@@ -96,48 +145,9 @@ let global_spec_typeclass_ref loc globref =
 let global_field_in_global_spec globref fname =
   Nametab.locate (field_in_global_spec globref fname)
 
-
-(***
- *** Identifiers and Identifier Suffixes
- ***)
-
-(* Build the identifier used to quantify over a field as a local
-   variable *)
-let field_param_id f = add_suffix f "param"
-
-(* Get the identifier used locally for the type of a field *)
-let field_type_id f = add_suffix f "type"
-
-(* Get the identifier used locally for the type-class of a field *)
-let field_class_id f = add_suffix f "class"
-
-(* Get the identifier used for the proof of a field predicate *)
-let field_proof_id f = add_suffix f "proof"
-
-(* The name of the instance associated with a field *)
-let field_inst_id f = add_suffix f "inst"
-
-(* The axiom typeclass field pointing to an instance of this axiom *)
-let field_axelem_id f = add_suffix f "axiom"
-
-(* The name of the Spec representation of a spec named s_id *)
-let spec_repr_id s_id = add_suffix s_id "repr"
-
-(* The name of the IsoToSpec proof for a spec named s_id *)
-let spec_iso_id s_id = add_suffix s_id "iso"
-
-(* Get the Id for the interppretation for import number i *)
-let spec_import_id i =
-  add_suffix (Id.of_string "spec") ("import" ^ string_of_int i)
-
-(* Get the Id for the jth instance generated from the ith import *)
-let spec_import_instance_id i j =
-  add_suffix
-    (add_suffix (Id.of_string "spec") ("import" ^ string_of_int i))
-    ("instance" ^ string_of_int j)
-
-(* The variable name for the implicit spec argument of a morphism instance *)
-let morph_spec_arg_id = Id.of_string "Spec"
+(* Return a reference to the Spec object for a spec *)
+let global_spec_repr_ref loc globref =
+  spec_repr_ref loc (spec_globref_to_locref globref)
 
 
 (***
@@ -318,14 +328,36 @@ let destruct_spec_repr constr =
   with DescrFailed (tag,sub_constr) ->
     raise dummy_loc (MalformedSpec (constr,tag,sub_constr))
 
-type refinement_import =
-    constr_expr * constr_expr * constr_expr
+type refinement_import = constr_expr * constr_expr
 type refinement_import_constr = {
-  ref_import_fromspec: Constr.t;
-  ref_import_interp: Constr.t;
-  ref_import_class: global_reference;
-  ref_import_iso: Constr.t
+  ref_import_fromspec: spec_globref;
+  ref_import_interp: Constr.t
 }
+
+
+exception NonGlobalSpec of Constr.t
+
+(* Reduce constr until it is a global_reference to a variable XXX.XXX__Spec,
+where XXX is some spec module registerd in spec_table. *)
+(* README: As another way to do this, we could repeatedly reduce with CBN, only
+allowing constants to be expanded if we see them in the term and they do not end
+in __Spec *)
+let destruct_spec_globref_constr constr =
+  let constr_red =
+    reduce_constr
+      [Cbn (Redops.make_red_flag
+              [FBeta;FIota;FZeta;
+               FDeltaBut (List.map
+                            (fun (spec_globref,_) ->
+                             AN (global_spec_repr_ref dummy_loc spec_globref))
+                            (MPmap.bindings !spec_table))])]
+      constr
+  in
+  match Term.kind_of_term constr_red with
+  | Term.Const (c, _) -> Constant.modpath c
+  | Term.Ind (ind, _) -> ind_modpath ind
+  | Term.Construct (c, _) -> constr_modpath c
+  | _ -> raise dummy_loc (NonGlobalSpec constr)
 
 (* A description of the RefinementImport type *)
 let refinement_import_descr :
@@ -333,31 +365,16 @@ let refinement_import_descr :
   Descr_Iso
     ("RefinementImport",
      (function
-       | Left (_, (x1, (x2, (x3, (x4, ()))))) ->
-          let gr =
-            (* FIXME: when we just look at the spec, x1, going to need
-            CMap.bindings of spec_table to reduce all but the named specs of the
-            globally registered spec names; OR: could repeatedly reduce with
-            CBN, only allowing constants to be expanded if we see them in the
-            term and they do not and in __repr *)
-            (match Term.kind_of_term (hnf_constr x3) with
-             | Term.Const (c, _) -> ConstRef c
-             | Term.Ind (ind, _) -> IndRef ind
-             | Term.Construct (c, _) -> ConstructRef c
-             | _ -> raise dummy_loc (DescrFailed ("defined spec", x3)))
-          in
-          {ref_import_fromspec = x1;
-           ref_import_interp = x2;
-           ref_import_class = gr;
-           ref_import_iso = x4}
+       | Left (_, (x1, (x2, ()))) ->
+          {ref_import_fromspec = destruct_spec_globref_constr x1;
+           ref_import_interp = x2}
        | Right emp -> emp.elim_empty),
-     (fun (x1,x2,x3) ->
-      Left ((), ((), (x1, (x2, (x3, ())))))),
-     quinary_ctor
+     (fun (x1,x2) ->
+      Left ((), (x1, (x2, ())))),
+     ternary_ctor
        ["Specware"; "Spec"] "Build_RefinementImport"
-       (hole_descr Descr_Constr) (fun _ -> hole_descr Descr_Constr)
+       (hole_descr Descr_Constr) (fun _ -> Descr_Constr)
        (fun _ _ -> Descr_Constr)
-       (fun _ _ _ -> Descr_Constr) (fun _ _ _ _ -> Descr_Constr)
        Descr_Fail)
 
 type refinementof = spec_fields * constr_expr * refinement_import list
@@ -644,8 +661,7 @@ let import_refinement_constr_expr loc constr_expr =
      let _ = add_definition (loc,spec_import_id imp_num) [] None constr_expr in
      (* Extract the spec_globrefs from the import list of constr *)
      let spec_refs =
-       List.map (fun refimp ->
-                 spec_globref_of_classref (refimp.ref_import_class)) imports in
+       List.map (fun refimp -> refimp.ref_import_fromspec) imports in
      (* Add the import list to the currernt spec *)
      {spec with spec_imports = spec.spec_imports @ [imp_num, spec_refs]})
 

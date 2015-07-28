@@ -770,6 +770,20 @@ Check (fromIsoInterp (iso1:=iso_example_monoid)
 *)
 
 
+(*** An Alternative Isomorphism to Specs ***)
+
+Class IsoToSpecModels {spec} (ops: spec_ops spec) (P: Prop) : Prop :=
+  spec_models_iso : P <-> spec_model spec ops.
+
+(* Tactic to prove IsoToSpec instances *)
+Ltac prove_spec_models_iso :=
+  split; compute;
+  [ intro H; destruct H;
+    repeat (first [ assumption | split; [assumption|] | apply I])
+  | intro H; repeat (let Hi := fresh "H" in
+                     destruct H as [Hi H]); constructor; assumption ].
+
+
 (*** Spec Translations ***)
 
 Inductive SpecTranslationElem : Set :=
@@ -852,9 +866,7 @@ Qed.
 spec, and a type that is isomorphic to spec' *)
 Record RefinementImport spec : Type :=
   {ref_import_fromspec: Spec;
-   ref_import_interp: Interpretation ref_import_fromspec spec;
-   ref_import_class: OpsPred ref_import_fromspec;
-   ref_import_iso: IsoToSpec ref_import_fromspec ref_import_class}.
+   ref_import_interp: Interpretation ref_import_fromspec spec}.
 
 (* A refinement of spec is some ref_spec, an interpretation from spec to
 ref_spec, and a list of simple refinements to ref_spec *)
@@ -882,22 +894,17 @@ Definition nth_refinement_import {spec} (R: RefinementOf spec) n :
   nth_nodef n (ref_imports _ R).
 
 (* The identity refinement with an import *)
-Definition id_refinement_import spec P
-           (iso: IsoToSpec spec P) : RefinementOf spec :=
+Definition id_refinement_import spec : RefinementOf spec :=
   refinement_add_import (id_refinement spec)
                         {| ref_import_fromspec := spec;
-                           ref_import_interp := interp_id spec;
-                           ref_import_class := P;
-                           ref_import_iso := iso |}.
+                           ref_import_interp := interp_id spec |}.
 
 (* Compose an interpretation with a simple refinement *)
 Definition simple_refinement_interp {spec spec'}
            (imp: RefinementImport spec)
            (i: Interpretation spec spec') : RefinementImport spec' :=
   {| ref_import_fromspec := ref_import_fromspec _ imp;
-     ref_import_interp := interp_compose i (ref_import_interp _ imp);
-     ref_import_class := ref_import_class _ imp;
-     ref_import_iso := ref_import_iso _ imp |}.
+     ref_import_interp := interp_compose i (ref_import_interp _ imp) |}.
 
 (* Compose an interpretation with a refinement *)
 Definition refinement_interp {spec spec'}
@@ -922,9 +929,7 @@ Definition refinement_subst_import {spec spec1 spec2}
   refinement_add_import
     (refinement_subst R sub i)
     {| ref_import_fromspec := spec2;
-       ref_import_interp := spec_subst_interp2 sub i;
-       ref_import_class := P;
-       ref_import_iso := iso |}.
+       ref_import_interp := spec_subst_interp2 sub i |}.
 
 (* Translate a refinement *)
 Definition refinement_translate {spec}

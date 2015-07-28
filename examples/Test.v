@@ -17,7 +17,7 @@ Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus 
 
 Spec End Monoid.
 
-Print Monoid.Monoid__repr.
+Print Monoid.Monoid__Spec.
 
 Section Monoid_Thms.
 Import Monoid.
@@ -38,11 +38,8 @@ Spec Group.
 
 Spec ImportTerm
      (refinement_translate
-        (id_refinement_import _ _ Monoid.Monoid__iso)
+        (id_refinement_import Monoid.Monoid__Spec)
         (cons (XlateWild "m_" "g_") nil)).
-(*
-Spec ImportTerm (id_refinement_import _ _ Monoid.Monoid__iso).
-*)
 
 Spec Variable g_inv : (T -> T).
 Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
@@ -52,13 +49,9 @@ Spec End Group.
 
 
 
-Class IsoToSpecModels {spec} (ops: spec_ops spec) (P: Prop) : Prop :=
-  spec_models_iso : P <-> spec_model spec ops.
-
-
 Definition mon_repr__ops {T__param:Monoid.T__class}
            {m_zero__param:Monoid.m_zero__class} {m_plus__param:Monoid.m_plus__class} :
-  spec_ops Monoid.Monoid__repr :=
+  spec_ops Monoid.Monoid__Spec :=
   ops_cons
     T__param (I : sats_op_pred None _)
     (ops_cons
@@ -79,7 +72,7 @@ Qed.
 
 Definition grp_repr__ops {T__param:Group.T__class}
            {g_zero__param:Group.g_zero__class} {g_plus__param:Group.g_plus__class}
-           {g_inv__param:Group.g_inv__class} : spec_ops Group.Group__repr :=
+           {g_inv__param:Group.g_inv__class} : spec_ops Group.Group__Spec :=
   ops_cons
     T__param (I : sats_op_pred None _)
     (ops_cons
@@ -112,12 +105,12 @@ Print Group.spec__import0.
 (* NOTE: do not use nth_refinement_import in generated code, just destruct the
 actual RefinementOf object and its imports *)
 Program Definition mon_group_interp :
-  Interpretation Monoid.Monoid__repr Group.Group__repr :=
+  Interpretation Monoid.Monoid__Spec Group.Group__Spec :=
   ref_import_interp
     _ (nth_refinement_import
          (refinement_interp Group.spec__import0
                             (@sub_spec_interp
-                               _ Group.Group__repr
+                               _ Group.Group__Spec
                                _ (* $(prove_sub_spec)$ *)
          )) 0 $(auto)$).
 Next Obligation.
