@@ -5,6 +5,12 @@ Add ML Path "../src".
 Declare ML Module "util_specware".
 Declare ML Module "specware".
 
+
+(***
+ *** Syntax for a spec; creates a sequence of type classes a-la Spitters and van
+ *** der Weegen
+ ***)
+
 Spec Monoid.
 
 Spec Variable T : Type.
@@ -17,7 +23,22 @@ Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus 
 
 Spec End Monoid.
 
+
+(***
+ *** The results are: a type-class; a Spec inductive object that represents the
+ *** type-class; and a proof that the two are isomorphic.
+ ***)
+
+Print Monoid.Monoid.
 Print Monoid.Monoid__Spec.
+Print Monoid.Monoid__Iso.
+
+
+(***
+ *** We can prove theorems in the new Monoid spec, by adding an assumption of a
+ *** model of Monoid to the current context, and then just use the variables and
+ *** axioms like normal defined names.
+ ***)
 
 Section Monoid_Thms.
 Import Monoid.
@@ -31,8 +52,15 @@ Qed.
 
 End Monoid_Thms.
 
-Print left_id_uniq.
 
+
+(***
+ *** The point of the Spec object created above for Monoid is that it allows us
+ *** operate (indirectly) on the Monoid type-class as a first-class object in
+ *** the Coq theory. As a simple example, the following Group spec imports the
+ *** Monoid spec, but with all names starting with "m_" replaced by names
+ *** starting with "g_".
+ ***)
 
 Spec Group.
 
@@ -47,6 +75,23 @@ Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 
 Spec End Group.
 
+
+(***
+ *** We can see the type-class that was created:
+ ***)
+
+Print Group.
+
+
+
+(***
+ *** The eventual goal is to automatically add type-class instance declarations
+ *** as a result of imports and other refinements. This is currently in
+ *** progress: the stuff in comments is automatically generated, while the stuff
+ *** below not in comments is still in progress.
+ ***
+ *** Don't really look at any of this...
+ ***)
 
 (*
 Definition mon_repr__ops {T__param:Monoid.T__class}
@@ -125,6 +170,14 @@ Instance grp_mon__instance {T__param g_zero__param g_plus__param g_inv__param}
         (map_model mon_group_interp Group.Group__ops
                    (proj1 (spec_models_iso (IsoToSpecModels:=Group.Group__Iso)) H)).
 
+
+(***
+ *** Phew, now that that is over with, we can prove theorems in the Group spec
+ *** using theorems we proved in the context of the Monoid spec; e.g.,
+ *** left_id_uniq, used below, was proved above for Monoids. (We prove it again
+ *** with a different name just so that we can apply it directly, as a demo.)
+ ***)
+
 Section Group_Thms.
 Import Group.
 Context `{Group}.
@@ -153,6 +206,17 @@ Lemma left_inv_uniq (x x_inv:T) :
 Qed.
 
 End Group_Thms.
+
+
+(***
+ *** Fin. (For now...)
+ ***)
+
+
+
+
+
+
 
 
 
