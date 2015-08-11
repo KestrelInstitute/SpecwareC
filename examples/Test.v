@@ -138,6 +138,45 @@ Instance Group__IsoM {T__param g_zero__param g_plus__param g_inv__param} :
 Qed.
 *)
 
+
+Print Group.spec__import0.
+Print Group.spec_ops__import0.
+Print Group.spec_model__import0.
+
+
+(*
+Definition grp_spec_ops__import0 {T__param:Group.T__class}
+           {g_zero__param:Group.g_zero__class}
+           {g_plus__param:Group.g_plus__class} : spec_ops (ref_spec _ Group.spec__import0) :=
+  existT _ T__param
+         (existT _ I
+                 (existT _ g_zero__param
+                         (existT _ I
+                                 (existT _ g_plus__param
+                                         (existT _ I
+                                                 tt))))).
+
+Definition grp_spec_model__import0 {T__param:Group.T__class}
+           {g_zero__param:Group.g_zero__class}
+           {g_plus__param:Group.g_plus__class}
+           {g_zero_left__param:Group.g_zero_left__class}
+           {g_zero_right__param:Group.g_zero_right__class}
+           {g_plus_assoc__param:Group.g_plus_assoc__class}
+: spec_model (ref_spec _ Group.spec__import0) grp_spec_ops__import0 :=
+  conj g_zero_left__param (conj g_zero_right__param g_plus_assoc__param).
+*)
+
+Definition grp_spec_interp0__import0 :
+  Interpretation Monoid.Monoid__Spec (ref_spec _ Group.spec__import0) :=
+  ref_import_interp _ (nth_refinement_import Group.spec__import0 0 $(auto)$).
+
+Eval cbv in
+    (fun {T__param g_zero__param g_plus__param} =>
+       @map_ops Monoid.Monoid__Spec
+                (ref_spec Monoid.Monoid__Spec Group.spec__import0)
+                grp_spec_interp0__import0
+                Group.spec_ops__import0).
+
 Hint Extern 1 Monoid.T__class =>
   refine (_ : Group.T__class) : typeclass_instances.
 Hint Extern 1 Monoid.m_zero__class =>
@@ -145,10 +184,29 @@ Hint Extern 1 Monoid.m_zero__class =>
 Hint Extern 1 Monoid.m_plus__class =>
   refine (_ : Group.g_plus__class) : typeclass_instances.
 
-Print Group.spec__import0.
+Instance grp_spec_instance0__import0
+         {T__param:Group.T__class}
+         {g_zero__param:Group.g_zero__class}
+         {g_plus__param:Group.g_plus__class}
+         {g_zero_left__param:Group.g_zero_left__class}
+         {g_zero_right__param:Group.g_zero_right__class}
+         {g_plus_assoc__param:Group.g_plus_assoc__class} :
+(*  @Monoid.Monoid T__param g_zero__param g_plus__param := *)
+  Monoid.Monoid :=
+  proj2 (spec_models_iso
+           (IsoToSpecModels:= @Monoid.Monoid__Iso T__param g_zero__param g_plus__param))
+        (map_model grp_spec_interp0__import0
+                   Group.spec_ops__import0 Group.spec_model__import0).
+
+(*
+Set Printing All.
+Check grp_spec_instance0__import0.
+*)
+
 
 (* NOTE: do not use nth_refinement_import in generated code, just destruct the
 actual RefinementOf object and its imports *)
+(*
 Program Definition mon_group_interp :
   Interpretation Monoid.Monoid__Spec Group.Group__Spec :=
   ref_import_interp
@@ -161,7 +219,9 @@ Program Definition mon_group_interp :
 Next Obligation.
 prove_sub_spec.
 Defined.
+*)
 
+(*
 Instance grp_mon__instance {T__param g_zero__param g_plus__param g_inv__param}
          {H:@Group.Group T__param g_zero__param g_plus__param g_inv__param} :
   @Monoid.Monoid T__param g_zero__param g_plus__param :=
@@ -169,6 +229,7 @@ Instance grp_mon__instance {T__param g_zero__param g_plus__param g_inv__param}
            (IsoToSpecModels:= @Monoid.Monoid__Iso T__param g_zero__param g_plus__param))
         (map_model mon_group_interp Group.Group__ops
                    (proj1 (spec_models_iso (IsoToSpecModels:=Group.Group__Iso)) H)).
+*)
 
 
 (***
