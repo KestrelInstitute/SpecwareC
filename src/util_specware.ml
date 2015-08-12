@@ -183,6 +183,10 @@ let mk_var id = CRef (Ident id, None)
 let mk_hole loc =
   CHole (loc, None, IntroAnonymous, None)
 
+(* Build a named hole term *)
+let mk_named_hole loc id =
+  CHole (loc, None, IntroIdentifier id, None)
+
 (* Build a hole to be filled in by a tactic *)
 let mk_tactic_hole loc tac =
   (CHole (loc, None, IntroAnonymous,

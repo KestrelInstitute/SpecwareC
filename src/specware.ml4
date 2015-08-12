@@ -440,7 +440,12 @@ let destruct_refinementof constr =
  *** Inductive Descriptions of Ops and Models
  ***)
 
-(* A description of the spec_ops S type for any given spec S *)
+(* A description of the spec_ops S type for any given spec S.
+
+NOTE: does not use any reduction, since it is used (in the import code, below)
+in an extended environment with free variables. Thus, if you call
+destruct_constr with spec_ops_descr, you need to be sure the Constr.t you are
+applying it to is already normalized as needed. *)
 let spec_ops_descr : ((Constr.t * Constr.t) list,
                       (constr_expr * constr_expr) list) constr_descr =
   Descr_Rec
@@ -462,13 +467,13 @@ let spec_ops_descr : ((Constr.t * Constr.t) list,
           (fun _ -> hole_descr Descr_Constr)
           (fun _ _ -> Descr_Constr)
           (fun _ _ _ ->
-           hnf_descr (quaternary_ctor
-                        ["Coq"; "Init"; "Specif"] "existT"
-                        (hole_descr Descr_Constr)
-                        (fun _ -> hole_descr Descr_Constr)
-                        (fun _ _ -> Descr_Constr)
-                        (fun _ _ _ -> spec_ops_descr)
-                        Descr_Fail))
+           quaternary_ctor
+             ["Coq"; "Init"; "Specif"] "existT"
+             (hole_descr Descr_Constr)
+             (fun _ -> hole_descr Descr_Constr)
+             (fun _ _ -> Descr_Constr)
+             (fun _ _ _ -> hnf_descr spec_ops_descr)
+             Descr_Fail)
           (nullary_ctor
              ["Coq"; "Init"; "Datatypes"] "tt"
              Descr_Fail)))
@@ -715,18 +720,19 @@ let import_refinement_constr_expr loc constr_expr =
   let (constr,_) = Constrintern.interp_constr env evd constr_expr in
   let constr_hnf = hnf_constr constr in
   (* Destruct constr as a RefinementOf object *)
-  let ((ops,axioms),interp,imports) = destruct_refinementof constr_hnf in
+  let ((ops,axioms),_,imports) = destruct_refinementof constr_hnf in
   (* Get the source spec of the refinement in constr *)
-  let src_spec_globref =
-    destruct_spec_globref_constr
-      (match Term.kind_of_term constr_hnf with
-       | Term.App (ctor, args) ->
-          if constr_is_constructor (mk_constructor
-                                      loc specware_mod "Build_RefinementOf") ctor then
-            args.(0)
-          else
-            raise loc (Failure "import_refinement_constr_expr")
-       | _ -> raise loc (Failure "import_refinement_constr_expr")) in
+  let src_spec_constr =
+    match Term.kind_of_term constr_hnf with
+    | Term.App (ctor, args) ->
+       if constr_is_constructor (mk_constructor
+                                   loc specware_mod "Build_RefinementOf") ctor
+       then args.(0)
+       else
+         raise loc (Failure "import_refinement_constr_expr")
+    | _ -> raise loc (Failure "import_refinement_constr_expr")
+  in
+  let src_spec_globref = destruct_spec_globref_constr src_spec_constr in
   (* Add all the ops specified by constr *)
   let _ =
     List.iter (fun (f,tp,oppred) ->
@@ -757,11 +763,7 @@ let import_refinement_constr_expr loc constr_expr =
      let _ = add_definition
                (loc, spec_import_ops_id imp_num)
                []
-               (Some (mkAppC
-                        (mk_specware_ref "spec_ops",
-                         [mkAppC (mk_specware_ref "ref_spec",
-                                  [mk_hole loc;
-                                   mk_var (loc, spec_import_id imp_num)])])))
+               (Some spec_ops_tp)
                (make_ops_constr_expr loc ops) in
      (* Add spec_model__import<i> : spec_model spec_ops__import<i>
                                       (ref_spec _ spec__import<i>) := ... *)
@@ -778,21 +780,48 @@ let import_refinement_constr_expr loc constr_expr =
                                    mk_var (loc, spec_import_id imp_num)]);
                           mk_var (loc, spec_import_ops_id imp_num)])))
                (make_model_constr_expr loc axioms) in
+     (* Get the Coq context again (cause we added some defs) *)
+     let (evd,env) = Lemmas.get_current_context () in
+     let evdref = ref evd in
+     (* Add vars for all the ops to env *)
+     let impls, ((env_with_vars, ctx), imps1) =
+       interp_context_evars
+         env evdref
+         (concat_map
+            (fun (op_id, op_tp, oppred) ->
+             mk_implicit_assum (field_param_id op_id) op_tp::
+               (match oppred with
+                | None -> []
+                | Some pred ->
+                   [mk_implicit_assum (field_proof_id op_id) pred]))
+            ops)
+         env
+     in
+     (* Interpret the value of spec_ops__import<i> in env_with_vars *)
+     let ops_constr =
+       hnf_constr (Constrintern.interp_constr_evars
+                     env_with_vars evdref
+                     (mk_var (loc, spec_import_ops_id imp_num)))
+     in
+     (* Function to normalize a Constr.t relative to env_with_vars *)
+     let norm_constr constr =
+       let (evd,r_interp) = Tacinterp.interp_redexp env_with_vars !evdref r in
+       let _ = evdref := evd in
+       snd (fst (Redexpr.reduction_of_red_expr env r_interp) env !evdref c) in
      (* For each import, ... *)
      let _ =
        List.iter
          (fun refimp ->
-          let (evd,env) = Lemmas.get_current_context () in
           (* Look up the spec structure *)
           let imp_spec = lookup_global_spec refimp.ref_import_fromspec in
           let imp_spec_locref =
             spec_globref_to_locref refimp.ref_import_fromspec in
           (* Normalize the term (map_ops interp spec_ops__import<i>) to get the
           ops of imp_spec in terms of the ops of the current spec *)
-          let imp_ops =
+          let imp_ops_constr =
             destruct_constr
               spec_ops_descr
-              (hnf_constr
+              (norm_constr
                  (Term.mkApp
                     (Term.mkConst (mk_constant loc specware_mod "map_ops"),
                      [| Term.mkConst (global_spec_repr_constant
@@ -803,14 +832,14 @@ let import_refinement_constr_expr loc constr_expr =
                                               loc src_spec_globref);
                               Term.mkVar (spec_import_id imp_num) |]);
                         refimp.ref_import_interp;
-                        Term.mkVar (spec_import_ops_id imp_num) |])))
+                        ops_constr |])))
           in
           (* For each op in imp_spec, add the hint
              Hint Extern 1 op__class => refine (opexpr) : typeclass_instances *)
-          (*
-          List.iter2
-            (fun ((op_id, _, oppred), (opexpr, oppf)) ->
-             let _ =
+          let _ =
+            List.iter2
+              (fun ((op_id, _, oppred), (opexpr, oppf)) ->
+               (* FIXME HERE NOW: replace free vars in opexpr with holes *)
                Hints.add_hints
                  false
                  ["typeclass_instances"]
@@ -824,17 +853,14 @@ let import_refinement_constr_expr loc constr_expr =
                         (loc,
                          Tacexpr.TacCall
                            (loc, ArgVar (loc, Id.of_string "refine"),
-                            [Tacexpr.UConstr
-                               ()
-                               ])))))
-             in
-             (* FIXME HERE NOW: add a hint for the proof class, if it exists *)
-             ()
-            )
-            imp_spec.spec_ops imp_ops
-           *)
+                            [Tacexpr.ConstrMayEval
+                               (ConstrTerm
+                                  ())
+              ]))))))
+              imp_spec.spec_ops imp_ops
+          in
+          (* FIXME HERE NOW: add the instance *)
           ()
-          (* FIXME HERE NOW *)
          )
      in
      (* Extract the spec_globrefs from the import list of constr *)

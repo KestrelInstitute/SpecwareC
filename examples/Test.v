@@ -143,7 +143,6 @@ Print Group.spec__import0.
 Print Group.spec_ops__import0.
 Print Group.spec_model__import0.
 
-
 (*
 Definition grp_spec_ops__import0 {T__param:Group.T__class}
            {g_zero__param:Group.g_zero__class}
@@ -176,6 +175,11 @@ Eval cbv in
                 (ref_spec Monoid.Monoid__Spec Group.spec__import0)
                 grp_spec_interp0__import0
                 Group.spec_ops__import0).
+
+Eval cbv in
+    (fun {T__param g_zero__param g_plus__param} =>
+       map_ops grp_spec_interp0__import0
+               Group.spec_ops__import0).
 
 Hint Extern 1 Monoid.T__class =>
   refine (_ : Group.T__class) : typeclass_instances.
