@@ -154,7 +154,9 @@ let this_spec_globref () = ??
 
 (* Turn the global reference to a spec into a local reference *)
 let spec_globref_to_locref spec_globref =
-  Nametab.shortest_qualid_of_module spec_globref
+  try Nametab.shortest_qualid_of_module spec_globref
+  with Not_found ->
+    raise dummy_loc (Failure "spec_globref_to_locref")
 
 (* Build a reference to a field in a global spec *)
 (* FIXME: this should not go through a locref *)
@@ -205,7 +207,7 @@ type spec = {
   spec_path : DirPath.t;
   spec_ops : (Id.t * constr_expr * constr_expr option) list;
   spec_axioms : (Id.t * constr_expr) list;
-  spec_imports : (int * (spec_globref * Hints.hints_entry list) list) list
+  spec_imports : (int * spec_globref list) list
 }
 
 (* Create an empty spec with the given name *)
@@ -405,6 +407,7 @@ where XXX is some spec module registerd in spec_table. *)
 allowing constants to be expanded if we see them in the term and they do not end
 in __Spec *)
 let destruct_spec_globref_constr constr =
+  let _ = debug_printf 1 "debug1\n" in
   let constr_red =
     reduce_constr
       [Cbn (Redops.make_red_flag
@@ -415,6 +418,7 @@ let destruct_spec_globref_constr constr =
                             (MPmap.bindings !spec_table))])]
       constr
   in
+  let _ = debug_printf 1 "debug2\n" in
   match Term.kind_of_term constr_red with
   | Term.Const (c, _) -> Constant.modpath c
   | Term.Ind (ind, _) -> ind_modpath ind
@@ -647,122 +651,26 @@ let add_spec_field axiom_p field_name tp pred_opt =
        in
        { spec with spec_ops = (f,tp,pred_opt)::spec.spec_ops })
 
-(* Complete the current spec, by creating its axiom type-class, registering it
-   in the global spec table, and creating representation as a Spec object. NOTE:
-   this needs to be called after the spec's section is closed, but before its
-   module is closed. *)
-let complete_spec loc =
-  let spec = get_current_spec loc in
-  (* First, build the axioms into fields for the axiom type-class *)
-  let ax_fields =
-    List.rev_map
-      (fun (ax_id, ax_tp) -> ((loc, field_axelem_id ax_id),
-                              mk_var (loc, field_class_id ax_id),
-                              true))
-      spec.spec_axioms
-  in
-  (* Next, build parameters for all the ops and their subtype predicates. NOTE:
-  we do this explicitly, rather than implicitly relying on the context, so that
-  we can ensure all of the ops become params *)
-  let op_params =
-    List.concat
-      (List.rev_map
-         (fun (op_id, op_tp, pred_opt) ->
-          let op_param =
-            mk_implicit_assum (field_param_id op_id)
-                              (mk_var (loc, field_class_id op_id)) in
-          match pred_opt with
-          | None -> [op_param]
-          | Some pred ->
-             [op_param; mk_implicit_assum (field_proof_id op_id) pred])
-         spec.spec_ops)
-  in
-  let _ = add_typeclass (loc, spec.spec_name) false true op_params ax_fields in
-  (* FIXME: register_spec should be a hook function for add_typeclass *)
-  let spec_globref =
-    global_modpath (Nametab.locate (qualid_of_ident spec.spec_name))
-  in
-  let _ = register_spec spec_globref spec in
-  (* Build the spec representation spec__Spec *)
-  let _ = add_definition (loc, spec_repr_id spec.spec_name) [] None
-                         (build_spec_repr loc spec) in
-  (* Build spec__ops {op_params} : spec_ops spec__Spec *)
-  let _ = add_definition
-            (loc, spec_ops_id spec.spec_name)
-            op_params
-            (Some mkAppC (mk_specware_ref "spec_ops",
-                          [mk_var (loc, spec_repr_id spec.spec_name)]))
-            (make_ops_constr_expr loc (List.rev spec.spec_ops))
-  in
-  (* Build a proof spec__iso that spec__Spec is isomorphic to the spec *)
-  let _ = add_term_instance
-            (loc, Name spec_iso_id spec.spec_name)
-            op_params
-            (mkAppC (mk_specware_ref "IsoToSpecModels",
-                     [mk_var (loc, spec_ops_id spec.spec_name);
-                      CAppExpl
-                        (loc, (None, Ident (loc, spec.spec_name), None),
-                         List.rev_map (fun (op_id,_,_) ->
-                                       mk_var (loc, field_param_id op_id))
-                                      spec.spec_ops)]))
-            (mk_named_tactic_hole
-               loc
-               (mk_qualid specware_mod "prove_spec_models_iso"))
-  in
-  (* Add all hints in the import list to the current module *)
-  let _ = List.iter (fun (_, sub_imports) ->
-                     List.iter (fun (_, hints) ->
-                                add_typeclass_hints hints) sub_imports)
-                    spec.spec_imports
-  in
-  ()
-
-(* Start the interactive definition of a new spec *)
-let begin_new_spec spec_lid =
-  let loc = located_loc spec_lid in
-  let spec_id = located_elem spec_lid in
-  let _ = validate_current_spec loc in
-  if !current_spec = None then
-    let _ = begin_module spec_lid in
-    let _ = begin_section spec_id in
-    current_spec := Some (make_empty_spec spec_id)
-  else
-    raise loc CurrentSpecExists
-
-(* Finish the interactive definition of a new spec by completing it
-   and clearing current_spec; return the newly defined spec *)
-let end_new_spec spec_lid =
-  let loc = located_loc spec_lid in
-  let spec_id = located_elem spec_lid in
-  match !current_spec with
-  | Some spec ->
-     (* FIXME: make sure there aren't any other opened sections *)
-     if Id.equal spec.spec_name spec_id then
-       let _ = end_section () in
-       let _ = complete_spec loc in
-       let _ = end_module spec_lid in
-       current_spec := None
-     else
-       raise loc WrongCurrentSpecName
-  | None -> raise loc NoCurrentSpec
-
 
 (***
  *** Spec Imports
  ***)
 
-(* Same as above, but take in a term for a Spec representation object *)
-let import_refinement_constr_expr loc constr_expr =
-  (* Get the current Coq context *)
-  let (evd,env) = Lemmas.get_current_context () in
-  (* Internalize constr_expr into a construction *)
-  let (constr,_) = Constrintern.interp_constr env evd constr_expr in
-  let constr_hnf = hnf_constr constr in
+(* FIXME HERE NOW: fold most of this back into import_refinement_constr_expr,
+having that function store the glob_exprs for the ops and proofs of each
+imported spec *)
+
+(* Add all the typeclass hints implied by a given list of ops, axioms, and
+imports that have been deconstructed from a RefinementOf object *)
+let add_import_hints_helper loc imp_num constr =
+  (* Get the Coq context *)
+  let env = Global.env () in
+  let evd = Evd.from_env env in
   (* Destruct constr as a RefinementOf object *)
-  let ((ops,axioms),_,imports) = destruct_refinementof constr_hnf in
+  let ((ops,axioms),_,imports) = destruct_refinementof constr in
   (* Get the source spec of the refinement in constr *)
   let src_spec_constr =
-    match Term.kind_of_term constr_hnf with
+    match Term.kind_of_term constr with
     | Term.App (ctor, args) ->
        if constr_is_constructor (mk_constructor
                                    loc specware_mod "Build_RefinementOf") ctor
@@ -772,6 +680,173 @@ let import_refinement_constr_expr loc constr_expr =
     | _ -> raise loc (Failure "import_refinement_constr_expr")
   in
   let src_spec_globref = destruct_spec_globref_constr src_spec_constr in
+
+  (* Interpret the value of spec_ops__import<i> to a constr *)
+  let _ = debug_printf 1 "debug3\n" in
+  let ops_constr =
+    hnf_constr
+      (fst (Constrintern.interp_constr
+              env evd (mk_var (loc, spec_import_ops_id imp_num))))
+  in
+  let _ = debug_printf 1 "debug4\n" in
+
+  (* Helper function for replacing free variables f__param or f__proof with
+     the hole (_:f__class) or (_:<type of f proofs>), respectively *)
+  let field_var_type_map =
+    List.fold_left
+      (fun map (op_id, op_tp, oppred) ->
+       let tp_glob =
+         (Constrintern.intern_constr
+            env
+            (mk_var (loc, field_class_id op_id))) in
+       let _ = debug_printf 1 "@[tp_glob: %a@]\n"
+                            pp_glob_constr tp_glob in
+       let map1 = Id.Map.add
+                    (field_param_id op_id)
+                    tp_glob
+                    (*
+                       (Glob_term.GRef
+                          (loc,
+                           (* FIXME HERE NOW: the following global reference is
+                           causing a Not_found exception when it is printed! *)
+                           (try Nametab.locate
+                                  (* (mk_qualid ["Specware"; "Spec"] "Spec") *)
+                                  (qualid_of_ident (field_class_id op_id))
+                            with Not_found ->
+                              raise dummy_loc
+                                    (Failure "import_refinement_constr_expr")),
+                           None)) *)
+                    map
+       in
+       match oppred with
+       | None -> map1
+       | Some pred ->
+          Id.Map.add (field_proof_id op_id)
+                     (Detyping.detype true [] env evd pred)
+                     map1
+      )
+      Id.Map.empty ops
+  in
+  let replace_vars_by_holes =
+    map_rec_glob_constr_with_binders
+      (function
+        | Name x -> Id.Map.remove x
+        | Anonymous -> fun map -> map)
+      (fun map g ->
+       match g with
+       | (Glob_term.GVar (loc, x) | Glob_term.GRef (loc, VarRef x, _)) as glob ->
+          (try mk_glob_cast loc (mk_glob_hole loc) (Id.Map.find x map)
+           with
+           | Not_found -> glob)
+       | glob -> glob)
+      field_var_type_map
+  in
+
+  (* Now iterate over the imports *)
+  let _ =
+    List.iter
+      (fun refimp ->
+       (* Look up the spec structure *)
+       let imp_spec = lookup_global_spec refimp.ref_import_fromspec in
+       let imp_spec_locref =
+         spec_globref_to_locref refimp.ref_import_fromspec in
+
+       (* Normalize the term (map_ops interp spec_ops__import<i>) to get the
+          ops of imp_spec in terms of the ops of the current spec *)
+       let imp_ops_constr =
+         destruct_constr
+           spec_ops_descr
+           (compute_constr
+              (Term.mkApp
+                 (Term.mkConst (mk_constant loc specware_mod "map_ops"),
+                  [| Term.mkConst (global_spec_repr_constant
+                                     loc refimp.ref_import_fromspec);
+                     Term.mkApp
+                       (Term.mkConst (mk_constant loc specware_mod "ref_spec"),
+                        [| Term.mkConst (global_spec_repr_constant
+                                           loc src_spec_globref);
+                           Term.mkVar (spec_import_id imp_num) |]);
+                     refimp.ref_import_interp;
+                     ops_constr |])))
+       in
+
+       (* Build the hint "Hint Extern 1 op__class => refine (opexpr_repl)"
+          for each op in imp_spec, where opexpr_repl has holes in place of the
+          f__param variables of the current spec *)
+       let hints =
+         List.map2
+           (fun (op_id, _, oppred) (opexpr_constr, _) ->
+            (* Detype opexpr, since tactics take untyped glob_terms *)
+            let opexpr =
+              Detyping.detype true [] env evd opexpr_constr
+            in
+            (* Replace each free var f__param of opexpr with (_:f__class) *)
+            let opexpr_repl = replace_vars_by_holes opexpr in
+            (* Now build the hint *)
+            let tacexpr =
+              (Tacexpr.TacML
+                 (loc,
+                  {Tacexpr.mltac_tactic = "refine";
+                   Tacexpr.mltac_plugin = "extratactics"},
+                  [Genarg.in_gen
+                     (Genarg.glbwit Constrarg.wit_constr)
+                     (opexpr_repl, None)]
+              ))
+            (*
+                 (Tacexpr.TacArg
+                    (loc,
+                     Tacexpr.TacCall
+                       (loc, ArgArg (loc, Nametab.locate_tactic
+                                            (qualid_of_ident (Id.of_string "refine"))),
+                        [Tacexpr.ConstrMayEval
+                           (ConstrTerm (opexpr_repl, None))]
+                 (* [] *)
+                 ))) *)
+            in
+            let _ = debug_printf 1 "@[hint tactic: %a@]\n"
+                                 pp_autotactic (Hints.Extern tacexpr) in
+            Hints.HintsExternEntry
+              (1,
+               Some ([], Pattern.PRef
+                           (try Nametab.locate
+                                  (field_in_spec imp_spec_locref
+                                                 (field_class_id op_id))
+                            with Not_found ->
+                              raise dummy_loc
+                                    (Failure "import_refinement_constr_expr"))),
+               tacexpr))
+           (List.rev imp_spec.spec_ops) imp_ops_constr
+       in
+
+       (* Now add all the hints to the typeclass_instances database *)
+       let _ = add_typeclass_hints hints in
+       (* FIXME HERE NOW: add the instance *)
+       ()
+      )
+      imports
+  in
+  ()
+
+
+(* Top-level verion of the above, that extracts the constr *)
+let add_import_hints loc imp_num =
+  let env = Global.env () in
+  let evd = Evd.from_env env in
+  let (constr,_) =
+    Constrintern.interp_constr env evd (mk_var (loc, spec_import_id imp_num))
+  in
+  add_import_hints_helper loc imp_num (hnf_constr constr)
+
+
+(* Import a spec that is constructed by a RefinementOf expression *)
+let import_refinement_constr_expr loc constr_expr =
+  (* Get the current Coq context *)
+  let (evd,env) = Lemmas.get_current_context () in
+  (* Internalize constr_expr into a construction *)
+  let (constr,_) = Constrintern.interp_constr env evd constr_expr in
+  let constr_hnf = hnf_constr constr in
+  (* Destruct constr as a RefinementOf object *)
+  let ((ops,axioms),_,imports) = destruct_refinementof constr_hnf in
 
   (* Add all the ops specified by constr *)
   let _ =
@@ -827,160 +902,116 @@ let import_refinement_constr_expr loc constr_expr =
                           mk_var (loc, spec_import_ops_id imp_num)])))
                (make_model_constr_expr loc axioms) in
 
-     (* Get the Coq context again (cause we added some defs) *)
-     let (evd,env) = Lemmas.get_current_context () in
-     let evdref = ref evd in
-     (* Interpret the value of spec_ops__import<i> to a constr *)
-     let ops_constr =
-       hnf_constr
-         (fst (Constrintern.interp_constr
-                 env evd (mk_var (loc, spec_import_ops_id imp_num))))
-     in
-
-     (* FIXME HERE NOW: the globals that refer to the newly-created typeclasses
-     are not valid outside the current section; so, need to re-generate these
-     hints altogether in complete_spec *)
-
-     (* Helper function for replacing free variables f__param or f__proof with
-     the hole (_:f__class) or (_:<type of f proofs>), respectively *)
-     let field_var_type_map =
-       List.fold_left
-         (fun map (op_id, op_tp, oppred) ->
-          let tp_glob =
-            (Constrintern.intern_constr
-               env
-               (mk_var (loc, field_class_id op_id))) in
-          let _ = debug_printf 1 "@[tp_glob: %a@]\n"
-                               pp_glob_constr tp_glob in
-          let map1 = Id.Map.add
-                       (field_param_id op_id)
-                       tp_glob
-                       (*
-                       (Glob_term.GRef
-                          (loc,
-                           (* FIXME HERE NOW: the following global reference is
-                           causing a Not_found exception when it is printed! *)
-                           (try Nametab.locate
-                                  (* (mk_qualid ["Specware"; "Spec"] "Spec") *)
-                                  (qualid_of_ident (field_class_id op_id))
-                            with Not_found ->
-                              raise dummy_loc
-                                    (Failure "import_refinement_constr_expr")),
-                           None)) *)
-                       map
-          in
-          match oppred with
-          | None -> map1
-          | Some pred ->
-             Id.Map.add (field_proof_id op_id)
-                        (Detyping.detype true [] env !evdref pred)
-                        map1
-         )
-         Id.Map.empty ops
-     in
-     let replace_vars_by_holes =
-       map_rec_glob_constr_with_binders
-         (function
-           | Name x -> Id.Map.remove x
-           | Anonymous -> fun map -> map)
-         (fun map g ->
-          match g with
-          | (Glob_term.GVar (loc, x) | Glob_term.GRef (loc, VarRef x, _)) as glob ->
-             (try mk_glob_cast loc (mk_glob_hole loc) (Id.Map.find x map)
-              with
-              | Not_found -> glob)
-          | glob -> glob)
-         field_var_type_map
-     in
-
-     (* For each import, get a reference to the imported spec, and also generate
-     hints for building its ops *)
-     let import_refs_and_hints =
-       List.map
-         (fun refimp ->
-          (* Look up the spec structure *)
-          let imp_spec = lookup_global_spec refimp.ref_import_fromspec in
-          let imp_spec_locref =
-            spec_globref_to_locref refimp.ref_import_fromspec in
-
-          (* Normalize the term (map_ops interp spec_ops__import<i>) to get the
-          ops of imp_spec in terms of the ops of the current spec *)
-          let imp_ops_constr =
-            destruct_constr
-              spec_ops_descr
-              (compute_constr
-                 (Term.mkApp
-                    (Term.mkConst (mk_constant loc specware_mod "map_ops"),
-                     [| Term.mkConst (global_spec_repr_constant
-                                        loc refimp.ref_import_fromspec);
-                        Term.mkApp
-                          (Term.mkConst (mk_constant loc specware_mod "ref_spec"),
-                           [| Term.mkConst (global_spec_repr_constant
-                                              loc src_spec_globref);
-                              Term.mkVar (spec_import_id imp_num) |]);
-                        refimp.ref_import_interp;
-                        ops_constr |])))
-          in
-
-          (* Build the hint "Hint Extern 1 op__class => refine (opexpr_repl)"
-          for each op in imp_spec, where opexpr_repl has holes in place of the
-          f__param variables of the current spec *)
-          let hints =
-            List.map2
-              (fun (op_id, _, oppred) (opexpr_constr, _) ->
-               (* Detype opexpr, since tactics take untyped glob_terms *)
-               let opexpr =
-                 Detyping.detype true [] env !evdref opexpr_constr
-               in
-               (* Replace each free var f__param of opexpr with (_:f__class) *)
-               let opexpr_repl = replace_vars_by_holes opexpr in
-               (* Now build the hint *)
-               let tacexpr =
-                 (Tacexpr.TacML
-                    (loc,
-                     {Tacexpr.mltac_tactic = "refine";
-                      Tacexpr.mltac_plugin = "extratactics"},
-                     [Genarg.in_gen
-                        (Genarg.glbwit Constrarg.wit_constr)
-                        (opexpr_repl, None)]
-                 ))
-                 (*
-                 (Tacexpr.TacArg
-                    (loc,
-                     Tacexpr.TacCall
-                       (loc, ArgArg (loc, Nametab.locate_tactic
-                                            (qualid_of_ident (Id.of_string "refine"))),
-                        [Tacexpr.ConstrMayEval
-                           (ConstrTerm (opexpr_repl, None))]
-                          (* [] *)
-                 ))) *)
-               in
-               let _ = debug_printf 1 "@[hint tactic: %a@]\n"
-                                    pp_autotactic (Hints.Extern tacexpr) in
-               Hints.HintsExternEntry
-                 (1,
-                  Some ([], Pattern.PRef
-                              (try Nametab.locate
-                                     (field_in_spec imp_spec_locref
-                                                    (field_class_id op_id))
-                               with Not_found ->
-                                 raise dummy_loc
-                                       (Failure "import_refinement_constr_expr"))),
-                  tacexpr))
-              (List.rev imp_spec.spec_ops) imp_ops_constr
-          in
-
-          (* Now add all the hints to the typeclass_instances database *)
-          let _ = add_typeclass_hints hints in
-
-          (* FIXME HERE NOW: add the instance *)
-          (refimp.ref_import_fromspec, hints)
-         )
-         imports
-     in
-
+     (* Add the necessary typeclass hints *)
+     let _ = add_import_hints_helper loc imp_num constr_hnf in
+     (* Extract the spec_globrefs from the import list of constr *)
+     let spec_refs =
+       List.map (fun refimp -> refimp.ref_import_fromspec) imports in
      (* Add the import list to the currernt spec *)
-     {spec with spec_imports = spec.spec_imports @ [imp_num, import_refs_and_hints]})
+     {spec with spec_imports = spec.spec_imports @ [imp_num, spec_refs]})
+
+
+(***
+ *** Beginning and Ending the Current Spec
+ ***)
+
+(* Complete the current spec, by creating its axiom type-class, registering it
+   in the global spec table, and creating representation as a Spec object. NOTE:
+   this needs to be called after the spec's section is closed, but before its
+   module is closed. *)
+let complete_spec loc =
+  let spec = get_current_spec loc in
+  (* First, build the axioms into fields for the axiom type-class *)
+  let ax_fields =
+    List.rev_map
+      (fun (ax_id, ax_tp) -> ((loc, field_axelem_id ax_id),
+                              mk_var (loc, field_class_id ax_id),
+                              true))
+      spec.spec_axioms
+  in
+  (* Next, build parameters for all the ops and their subtype predicates. NOTE:
+  we do this explicitly, rather than implicitly relying on the context, so that
+  we can ensure all of the ops become params *)
+  let op_params =
+    List.concat
+      (List.rev_map
+         (fun (op_id, op_tp, pred_opt) ->
+          let op_param =
+            mk_implicit_assum (field_param_id op_id)
+                              (mk_var (loc, field_class_id op_id)) in
+          match pred_opt with
+          | None -> [op_param]
+          | Some pred ->
+             [op_param; mk_implicit_assum (field_proof_id op_id) pred])
+         spec.spec_ops)
+  in
+  let _ = add_typeclass (loc, spec.spec_name) false true op_params ax_fields in
+  (* Build the spec representation spec__Spec *)
+  let _ = add_definition (loc, spec_repr_id spec.spec_name) [] None
+                         (build_spec_repr loc spec) in
+  (* Build spec__ops {op_params} : spec_ops spec__Spec *)
+  let _ = add_definition
+            (loc, spec_ops_id spec.spec_name)
+            op_params
+            (Some mkAppC (mk_specware_ref "spec_ops",
+                          [mk_var (loc, spec_repr_id spec.spec_name)]))
+            (make_ops_constr_expr loc (List.rev spec.spec_ops))
+  in
+  (* Build a proof spec__iso that spec__Spec is isomorphic to the spec *)
+  let _ = add_term_instance
+            (loc, Name spec_iso_id spec.spec_name)
+            op_params
+            (mkAppC (mk_specware_ref "IsoToSpecModels",
+                     [mk_var (loc, spec_ops_id spec.spec_name);
+                      CAppExpl
+                        (loc, (None, Ident (loc, spec.spec_name), None),
+                         List.rev_map (fun (op_id,_,_) ->
+                                       mk_var (loc, field_param_id op_id))
+                                      spec.spec_ops)]))
+            (mk_named_tactic_hole
+               loc
+               (mk_qualid specware_mod "prove_spec_models_iso"))
+  in
+  (* Add all hints in the import list to the current module *)
+  let _ = List.iter (fun (imp_num, _) ->
+                     add_import_hints loc imp_num)
+                    spec.spec_imports
+  in
+  (* Register the current spec *)
+  let spec_globref =
+    global_modpath (Nametab.locate (qualid_of_ident spec.spec_name))
+  in
+  let _ = register_spec spec_globref spec in
+  ()
+
+(* Start the interactive definition of a new spec *)
+let begin_new_spec spec_lid =
+  let loc = located_loc spec_lid in
+  let spec_id = located_elem spec_lid in
+  let _ = validate_current_spec loc in
+  if !current_spec = None then
+    let _ = begin_module spec_lid in
+    let _ = begin_section spec_id in
+    current_spec := Some (make_empty_spec spec_id)
+  else
+    raise loc CurrentSpecExists
+
+(* Finish the interactive definition of a new spec by completing it
+   and clearing current_spec; return the newly defined spec *)
+let end_new_spec spec_lid =
+  let loc = located_loc spec_lid in
+  let spec_id = located_elem spec_lid in
+  match !current_spec with
+  | Some spec ->
+     (* FIXME: make sure there aren't any other opened sections *)
+     if Id.equal spec.spec_name spec_id then
+       let _ = end_section () in
+       let _ = complete_spec loc in
+       let _ = end_module spec_lid in
+       current_spec := None
+     else
+       raise loc WrongCurrentSpecName
+  | None -> raise loc NoCurrentSpec
 
 
 (***
