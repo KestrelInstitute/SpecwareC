@@ -120,6 +120,9 @@ let prop_expr = Constrexpr.CSort (Loc.dummy_loc, Misctypes.GProp)
 (* Pretty-print a term (a "construction") *)
 let pp_constr fmt c = Pp.pp_with fmt (Printer.pr_constr c)
 
+(* Pretty-print a glob_constr *)
+let pp_glob_constr fmt c = Pp.pp_with fmt (Printer.pr_glob_constr c)
+
 (* Pretty-print a term *)
 let pp_constr_expr fmt c = Pp.pp_with fmt (Richpp.pr_constr_expr c)
 
@@ -133,6 +136,9 @@ let pp_type_error env fmt e =
 (* Pretty-print a pretyping error *)
 let pp_pretype_error env evd fmt e =
   Pp.pp_with fmt (Himsg.explain_pretype_error env evd e)
+
+(* Pretty-print an auto_tactic *)
+let pp_autotactic fmt tac = Pp.pp_with fmt (Hints.pr_autotactic tac)
 
 (* Convert a term to a string *)
 let constr_expr_to_string c = Pp.string_of_ppcmds (Richpp.pr_constr_expr c)
@@ -218,7 +224,7 @@ let mk_ref_app_named_args loc r args =
 (* Build an expression for a variable applied to named implicit args,
    where the args are given as (name,value) pairs *)
 let mk_id_app_named_args loc id args =
-  mk_ref_app_named_args loc (Ident id) args
+  mk_ref_app_named_args loc (Ident (loc, id)) args
 
 (* Build a qualified id (NOTE: dir is *not* reversed here) *)
 let mk_qualid dir str =
@@ -347,7 +353,6 @@ let add_term_instance inst_name inst_params inst_tp inst_body =
   let _ = debug_printf 1 "@[add_term_instance command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc inst_name, cmd)
 
-
 (* Add an instance using the given record fields *)
 let add_record_instance inst_name inst_params inst_tp inst_fields =
   let loc = located_loc inst_name in
@@ -375,6 +380,12 @@ let begin_instance ?(hook=(fun _ -> ())) inst_params inst_name inst_tp =
     (Classes.new_instance
        false inst_params (inst_name, Explicit, inst_tp) None ~hook:hook None)
 
+(* Issue a Context command *)
+let add_to_context params =
+  let cmd = VernacContext params in
+  let _ = debug_printf 1 "@[context command:@ %a@]\n" pp_vernac cmd in
+  ignore (Classes.context false params)
+
 (* Begin a new module *)
 let begin_module mod_name =
   let loc = located_loc mod_name in
@@ -399,6 +410,12 @@ let within_module mod_name f =
   let ret = f () in
   let _ = end_module mod_name in
   ret
+
+(* Add a list of hints to the typeclass_instances database *)
+let add_typeclass_hints hints =
+  List.iter (fun hint ->
+             Hints.add_hints false ["typeclass_instances"] hint)
+            hints
 
 (* Reduce a constr using a list of reduction expressions *)
 let reduce_constr reds constr =
@@ -550,16 +567,6 @@ let mk_equality t1 t2 =
 let mk_ident_equality id1 id2 =
   mk_equality (mk_var id1) (mk_var id2)
 
-(* Build the expression t1::t2::...::tn::nil *)
-(* FIXME: use build_constr_expr below *)
-let mk_list loc ts =
-  List.fold_right
-    (fun t rest ->
-     mkAppC (mk_reference ["Coq"; "Init"; "Datatypes"] "cons",
-             [t; rest]))
-    ts
-    (mk_reference ["Coq"; "Init"; "Datatypes"] "nil")
-
 (* Check that two terms are definitionally equal relative to the given
    parameter list, by checking that (forall params, eq_refl : t1=t2)
    is well-typed (eq_refl is the constructor for the equality type) *)
@@ -585,6 +592,97 @@ let check_equal_term params t1 t2 =
        let _ = debug_printf 1 "@[check_equal_term:@ %a@]\n"
                             (pp_pretype_error env evd) err in
        false
+
+
+(* Build an anonymous hole glob_term *)
+let mk_glob_hole loc =
+  Glob_term.GHole (loc, Evar_kinds.QuestionMark (Evar_kinds.Define true),
+         IntroAnonymous, None)
+
+(* Build a cast glob_term *)
+let mk_glob_cast loc body tp =
+  Glob_term.GCast (loc, body, CastConv tp)
+
+(* Map function f over all subterms of a glob_term, including the glob_term
+itself, doing subterms before superterms. The function f is also passed a
+context argument of some arbitrary type, which is updated by the add_var
+argument whenever the mapping passes inside a binder. *)
+let rec map_rec_glob_constr_with_binders add_var f ctx glob =
+  let add_vars vars = List.fold_right add_var vars ctx in
+  (* First apply f to all subterms of glob, making sure to add_var if needed *)
+  let glob_subterms =
+    match glob with
+    | Glob_term.GApp (loc, head, args) ->
+       let head' = map_rec_glob_constr_with_binders add_var f ctx head in
+       let args' =
+         List.map (map_rec_glob_constr_with_binders add_var f ctx) args in
+       Glob_term.GApp (loc, head', args')
+    | Glob_term.GLambda (loc, nm, b_kind, tp, body) ->
+       let tp' = map_rec_glob_constr_with_binders add_var f ctx tp in
+       let body' =
+         map_rec_glob_constr_with_binders add_var f (add_var nm ctx) body in
+       Glob_term.GLambda (loc, nm, b_kind, tp', body')
+    | Glob_term.GProd (loc, nm, b_kind, tp, body) ->
+       let tp' = map_rec_glob_constr_with_binders add_var f ctx tp in
+       let body' =
+         map_rec_glob_constr_with_binders add_var f (add_var nm ctx) body in
+       Glob_term.GProd (loc, nm, b_kind, tp', body')
+    | Glob_term.GLetIn (loc, nm, rhs, body) ->
+       let rhs' = map_rec_glob_constr_with_binders add_var f ctx rhs in
+       let body' =
+         map_rec_glob_constr_with_binders add_var f (add_var nm ctx) body in
+       Glob_term.GLetIn (loc, nm, rhs', body')
+    | Glob_term.GCases (loc, style, r_opt, scruts, clauses) ->
+       let scruts_vars =
+         concat_map (function
+                      | (_, (as_name, None)) -> [as_name]
+                      | (_, (as_name, Some (_, _, in_vars))) ->
+                         as_name::in_vars) scruts in
+       let r_opt' =
+         Option.map
+           (map_rec_glob_constr_with_binders add_var f (add_vars scruts_vars))
+           r_opt
+       in
+       let scruts' =
+         List.map (fun (tm, stuff) ->
+                   (map_rec_glob_constr_with_binders add_var f ctx tm, stuff))
+                  scruts in
+       let clauses' =
+         List.map (fun (loc, pvars, pats, body) ->
+                   let ctx' = add_vars (List.map (fun x -> Name x) pvars) in
+                   (loc, pvars, pats,
+                    map_rec_glob_constr_with_binders add_var f ctx' body))
+                  clauses in
+       Glob_term.GCases (loc, style, r_opt', scruts', clauses')
+    | Glob_term.GLetTuple (loc, vars, (as_var, ret_opt), rhs, body) ->
+       let ret_opt' =
+         Option.map (map_rec_glob_constr_with_binders
+                       add_var f (add_var as_var ctx)) ret_opt in
+       let rhs' = map_rec_glob_constr_with_binders add_var f ctx rhs in
+       let body' =
+         map_rec_glob_constr_with_binders add_var f (add_vars vars) body
+       in
+       Glob_term.GLetTuple (loc, vars, (as_var, ret_opt'), rhs', body')
+    | Glob_term.GIf (loc, scrut, (as_var, ret_opt), sub1, sub2) ->
+       let scrut' = map_rec_glob_constr_with_binders add_var f ctx scrut in
+       let ret_opt' =
+         Option.map (map_rec_glob_constr_with_binders
+                       add_var f (add_var as_var ctx)) ret_opt in
+       let sub1' = map_rec_glob_constr_with_binders add_var f ctx sub1 in
+       let sub2' = map_rec_glob_constr_with_binders add_var f ctx sub2 in
+       Glob_term.GIf (loc, scrut', (as_var, ret_opt'), sub1', sub2')
+    | Glob_term.GRec (loc, fix_kind, _, _, _, _) ->
+       raise dummy_loc (Failure "map_rec_glob_constr_with_binders: does not yet handle GRec")
+    | Glob_term.GCast (loc, tm, cast) ->
+       let tm' = map_rec_glob_constr_with_binders add_var f ctx tm in
+       let cast' = Miscops.map_cast_type
+                     (map_rec_glob_constr_with_binders add_var f ctx) cast in
+       Glob_term.GCast (loc, tm', cast')
+    | (Glob_term.GVar _ | Glob_term.GSort _ | Glob_term.GHole _ |
+       Glob_term.GRef _ | Glob_term.GEvar _ | Glob_term.GPatVar _) as x -> x
+  in
+  f ctx glob_subterms
+
 
 
 (***

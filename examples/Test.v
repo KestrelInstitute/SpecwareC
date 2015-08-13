@@ -53,7 +53,6 @@ Qed.
 End Monoid_Thms.
 
 
-
 (***
  *** The point of the Spec object created above for Monoid is that it allows us
  *** operate (indirectly) on the Monoid type-class as a first-class object in
@@ -74,6 +73,11 @@ Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
 Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 
 Spec End Group.
+
+Print HintDb typeclass_instances.
+Import Group.
+Print HintDb typeclass_instances.
+
 
 
 (***
@@ -195,8 +199,7 @@ Instance grp_spec_instance0__import0
          {g_zero_left__param:Group.g_zero_left__class}
          {g_zero_right__param:Group.g_zero_right__class}
          {g_plus_assoc__param:Group.g_plus_assoc__class} :
-(*  @Monoid.Monoid T__param g_zero__param g_plus__param := *)
-  Monoid.Monoid :=
+  @Monoid.Monoid T__param g_zero__param g_plus__param :=
   proj2 (spec_models_iso
            (IsoToSpecModels:= @Monoid.Monoid__Iso T__param g_zero__param g_plus__param))
         (map_model grp_spec_interp0__import0
