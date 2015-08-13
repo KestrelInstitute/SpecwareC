@@ -837,13 +837,25 @@ let import_refinement_constr_expr loc constr_expr =
                  env evd (mk_var (loc, spec_import_ops_id imp_num))))
      in
 
+     (* FIXME HERE NOW: the globals that refer to the newly-created typeclasses
+     are not valid outside the current section; so, need to re-generate these
+     hints altogether in complete_spec *)
+
      (* Helper function for replacing free variables f__param or f__proof with
      the hole (_:f__class) or (_:<type of f proofs>), respectively *)
      let field_var_type_map =
        List.fold_left
          (fun map (op_id, op_tp, oppred) ->
+          let tp_glob =
+            (Constrintern.intern_constr
+               env
+               (mk_var (loc, field_class_id op_id))) in
+          let _ = debug_printf 1 "@[tp_glob: %a@]\n"
+                               pp_glob_constr tp_glob in
           let map1 = Id.Map.add
                        (field_param_id op_id)
+                       tp_glob
+                       (*
                        (Glob_term.GRef
                           (loc,
                            (* FIXME HERE NOW: the following global reference is
@@ -854,7 +866,7 @@ let import_refinement_constr_expr loc constr_expr =
                             with Not_found ->
                               raise dummy_loc
                                     (Failure "import_refinement_constr_expr")),
-                           None))
+                           None)) *)
                        map
           in
           match oppred with
@@ -931,7 +943,6 @@ let import_refinement_constr_expr loc constr_expr =
                      [Genarg.in_gen
                         (Genarg.glbwit Constrarg.wit_constr)
                         (opexpr_repl, None)]
-                     (* [] *)
                  ))
                  (*
                  (Tacexpr.TacArg

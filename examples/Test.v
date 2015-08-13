@@ -63,10 +63,14 @@ End Monoid_Thms.
 
 Spec Group.
 
+Set Printing All.
 Spec ImportTerm
      (refinement_translate
         (id_refinement_import Monoid.Monoid__Spec)
         (cons (XlateWild "m_" "g_") nil)).
+
+Set Printing All.
+Print HintDb typeclass_instances.
 
 Spec Variable g_inv : (T -> T).
 Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
