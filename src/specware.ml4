@@ -122,6 +122,13 @@ let spec_typeclass_qualid locref =
 let spec_typeclass_ref loc locref =
   Qualid (loc, spec_typeclass_qualid locref)
 
+(* Return a local reference to the Build_ constructor of the spec typeclass of a
+spec given by local reference *)
+let spec_typeclass_builder_qualid locref =
+  field_in_spec locref
+                (Id.of_string
+                   ("Build_" ^ Id.to_string (spec_locref_basename locref)))
+
 (* Return a local reference to the Spec object for a spec *)
 let spec_repr_qualid locref =
   qualid_cons locref (spec_repr_id (spec_locref_basename locref))
@@ -178,6 +185,10 @@ let global_field_in_global_spec globref fname =
 (* Return a reference to the Spec object for a spec *)
 let global_spec_repr_ref loc globref =
   spec_repr_ref loc (spec_globref_to_locref globref)
+
+(* Extract the name of a spec as an Id.t from a spec_globref *)
+let spec_globref_basename globref =
+  spec_locref_basename (spec_globref_to_locref globref)
 
 (* Return the constant for the Spec object of a spec *)
 let global_spec_repr_constant loc globref =
@@ -707,6 +718,7 @@ let add_import_hints loc free_vars hole_map imp =
                  (Detyping.detype true free_vars env evd constr)
     in
     let tacexpr =
+      (*
       (Tacexpr.TacML
          (loc,
           {Tacexpr.mltac_tactic = "refine";
@@ -714,21 +726,17 @@ let add_import_hints loc free_vars hole_map imp =
           [Genarg.in_gen
              (Genarg.glbwit Constrarg.wit_constr)
              (glob, None)]
-      ))
-      (* (Tacexpr.TacArg
+      )) *)
+      (Tacexpr.TacArg
            (loc,
             Tacexpr.TacCall
               (loc, ArgArg (loc, Nametab.locate_tactic
-                                   (qualid_of_ident (Id.of_string "refine"))),
-               [Tacexpr.ConstrMayEval
-                  (ConstrTerm (opexpr_repl, None))]
-        (* [] *)
-        ))) *)
+                                   (qualid_of_ident (Id.of_string "specware_refine"))),
+               [Tacexpr.ConstrMayEval (ConstrTerm (glob, None))]
+      )))
     in
-    (*
     let _ = debug_printf 1 "@[hint tactic: %a@]\n"
                          pp_autotactic (Hints.Extern tacexpr) in
-     *)
     Hints.HintsExternEntry
       (1,
        Some ([], Pattern.PRef
@@ -739,33 +747,50 @@ let add_import_hints loc free_vars hole_map imp =
        tacexpr)
   in
 
-  (* Now add the hints! *)
+  (* Add the op hints *)
+  let _ = add_typeclass_hints
+            (concat_map
+               (fun (op_id, op_constr, op_pf_constr_opt) ->
+                mk_refine_hint (field_class_id op_id) op_constr
+                ::(match op_pf_constr_opt with
+                   | None -> []
+                   | Some op_pf_constr ->
+                      [mk_refine_hint (field_pred_id op_id) op_constr]))
+               imp.spec_import_op_constrs)
+  in
+
+  (* Build the constr Build_spec op1 ... opn ax_proof1 ... ax_proofn *)
+  let spec_args =
+    List.fold_right
+      (fun (op_id, op_constr, op_pf_constr_opt) args ->
+       op_constr::
+         (match op_pf_constr_opt with
+          | None -> args
+          | Some op_pf_constr -> op_pf_constr::args))
+      imp.spec_import_op_constrs
+      (List.map snd imp.spec_import_axiom_constrs) in
+  let builder_ctor =
+    match Nametab.locate (spec_typeclass_builder_qualid imp_spec_locref) with
+    | ConstructRef ctor -> ctor
+    | _ -> raise loc (Failure "add_import_hints")
+  in
+  let spec_constr =
+    Term.mkApp (Term.mkConstruct builder_ctor,
+                Array.of_list spec_args) in
+  (* Now add spec_constr as a hint for building the imported spec *)
   add_typeclass_hints
-    (concat_map
-       (fun (op_id, op_constr, op_pf_constr_opt) ->
-        mk_refine_hint (field_class_id op_id) op_constr
-        ::(match op_pf_constr_opt with
-           | None -> []
-           | Some op_pf_constr ->
-              [mk_refine_hint (field_pred_id op_id) op_constr]))
-       imp.spec_import_op_constrs
-     @
-       List.map
-         (fun (ax_id, ax_constr) ->
-          mk_refine_hint (field_class_id ax_id) ax_constr)
-       imp.spec_import_axiom_constrs)
+    [mk_refine_hint (spec_locref_basename imp_spec_locref) spec_constr]
 
 
 let add_import_group_hints loc impgrp =
   let env = Global.env () in
-  let evd = Evd.from_env env in
 
   (* Build a list of all the fields in the current spec that might be involed,
   paired with the id for the respective class of each id *)
   let free_var_class_list =
     concat_map
       (fun (op_id, has_oppred) ->
-       (op_id, field_class_id op_id)
+       (field_param_id op_id, field_class_id op_id)
        ::(if has_oppred then
             [field_proof_id op_id, field_pred_id op_id]
           else []))
@@ -782,8 +807,7 @@ let add_import_group_hints loc impgrp =
       (Constrintern.intern_constr
          env
          (mk_var (loc, tp_id))) in
-    let _ = debug_printf 1 "@[tp_glob: %a@]\n"
-                         pp_glob_constr tp_glob in
+    let _ = debug_printf 1 "@[tp_glob: %a@]\n" pp_glob_constr tp_glob in
     Id.Map.add id (mk_glob_cast loc (mk_glob_hole loc) tp_glob) map
   in
   let hole_map =
@@ -876,7 +900,7 @@ let import_refinement_constr_expr loc constr_expr =
      let env = Global.env () in
      let evd = Evd.from_env env in
      (* Add the axioms of this import to the current environment *)
-     let env_with_axioms =
+     let env_with_axs =
        List.fold_left
          (fun env (ax_id,_) ->
           let (class_constr,_) =
@@ -894,8 +918,9 @@ let import_refinement_constr_expr loc constr_expr =
      in
      (* Interpret the value of spec_model__import<i> to a constr *)
      let model_constr =
-       fst (Constrintern.interp_constr
-              env_with_axioms evd (mk_var (loc, spec_import_model_id imp_num)))
+       compute_constr
+         (fst (Constrintern.interp_constr
+                 env_with_axs evd (mk_var (loc, spec_import_model_id imp_num))))
      in
 
      (* Now build the spec_import list for this import *)
@@ -935,8 +960,8 @@ let import_refinement_constr_expr loc constr_expr =
 
           (* Build (map_model interp spec_ops__import<i> spec_model__import<i>)
           to get the proofs of the imp_spec axioms in the current spec *)
-          let imp_model_constr =
-            hnf_constr
+          let imp_ax_proofs_constr =
+            compute_constr
               (Term.mkApp
                  (Term.mkConst (mk_constant loc specware_mod "map_model"),
                   [| Term.mkConst (global_spec_repr_constant
@@ -947,49 +972,25 @@ let import_refinement_constr_expr loc constr_expr =
                                            loc src_spec_globref);
                            Term.mkVar (spec_import_id imp_num) |]);
                      refimp.ref_import_interp;
-                     ops_constr; model_constr |]))
+                     ops_constr; model_constr |])) in
+          let imp_ax_constr_list =
+            destruct_constr spec_model_descr imp_ax_proofs_constr
+          in
+          let _ =
+            if List.length imp_ax_constr_list
+               = List.length imp_spec.spec_axioms
+            then () else
+              raise loc (MalformedRefinement
+                           (constr, "axiom proofs", imp_ax_proofs_constr))
           in
 
-          (* Build a list that maps each axiom in the imported spec to a constr
-          that proves it in the current spec *)
-          (*
-          let (_, imp_ax_constrs) =
-            List.fold_left
-              (fun (proof_glob,rest) (ax_id, _) ->
-               let _ = debug_printf 1 "debug 1: %s\n" (Id.to_string ax_id) in
-               let ax_proof =
-                 hnf_constr
-                   (fst (Pretyping.understand
-                           env_with_axioms evd
-                           (Glob_term.GApp
-                              (loc,
-                               Glob_term.GRef
-                                 (loc,
-                                  Nametab.locate
-                                    (mk_qualid ["Coq"; "Init"; "Logic"] "proj1"),
-                                  None),
-                               [mk_glob_hole loc; mk_glob_hole loc; proof_glob]))))
-               in
-               let _ = debug_printf 1 "debug 2: %s\n" (Id.to_string ax_id) in
-               let proof_glob_rest =
-                 Glob_term.GApp
-                   (loc,
-                    Glob_term.GRef
-                      (loc,
-                       Nametab.locate
-                         (mk_qualid ["Coq"; "Init"; "Logic"] "proj1"),
-                       None),
-                    [mk_glob_hole loc; mk_glob_hole loc; proof_glob])
-               in
-               let _ = debug_printf 1 "debug 3: %s\n" (Id.to_string ax_id) in
-               (proof_glob_rest, (ax_id, ax_proof)::rest))
-              (Detyping.detype true (List.map (fun (ax_id,_) -> ax_id) axioms)
-                               env_with_axioms evd imp_model_constr,
-               [])
-              (List.rev imp_spec.spec_axioms)
+          (* Build a list that maps each axiom in the imported spec to the
+          constrs that build its proof in the current spec *)
+          let imp_ax_constrs =
+            List.map2
+              (fun (ax_id, _) ax_constr -> (ax_id, ax_constr))
+              (List.rev imp_spec.spec_axioms) imp_ax_constr_list
           in
-           *)
-          let imp_ax_constrs = [] in
 
           { spec_import_globref = refimp.ref_import_fromspec;
             spec_import_op_constrs = imp_op_constrs;
@@ -998,18 +999,18 @@ let import_refinement_constr_expr loc constr_expr =
          imports
      in
 
-     (* FIXME HERE NOW: add the hints! *)
-
-     (* Add the import list to the currernt spec *)
-     {spec with spec_imports =
-                  { spec_impgrp_num = imp_num;
+     let impgrp = { spec_impgrp_num = imp_num;
                     spec_impgrp_ops =
                       List.map (fun (op_id,_,oppred) ->
                                 (op_id, Option.has_some oppred)) ops;
                     spec_impgrp_axioms =
                       List.map (fun (ax_id,_) -> ax_id) axioms;
-                    spec_impgrp_imports = spec_imports
-                  }::spec.spec_imports})
+                    spec_impgrp_imports = spec_imports }
+     in
+     let _ = add_import_group_hints loc impgrp in
+
+     (* Add the import list to the currernt spec *)
+     {spec with spec_imports = impgrp::spec.spec_imports})
 
 
 (***

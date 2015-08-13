@@ -848,7 +848,7 @@ Lemma translate_spec_axioms_impl xlate axioms :
   intro H; destruct H; split.
   assumption.
   apply IHaxioms; assumption.
-Qed.
+Defined.
 
 Program Definition translate_spec_interp xlate spec :
   Interpretation spec (translate_spec xlate spec) :=
@@ -857,10 +857,13 @@ Next Obligation.
 revert ops H; induction spec; intros.
 apply (translate_spec_axioms_impl xlate); assumption.
 apply H. assumption.
-Qed.
+Defined.
 
 
 (*** Refinement ***)
+
+(* Helper wrapper around the refine tactic *)
+Ltac specware_refine arg := refine arg.
 
 (* A refinement import into spec is some spec', an interpretation from spec' to
 spec, and a type that is isomorphic to spec' *)

@@ -413,27 +413,7 @@ let within_module mod_name f =
 
 (* Add a list of hints to the typeclass_instances database *)
 let add_typeclass_hints hints =
-  List.iter (fun hint ->
-             let _ =
-               match hint with
-               | Hints.HintsExternEntry (_, _, (Tacexpr.TacML (_, _, [genarg]) as tac)) ->
-                  let (arg, _) = Genarg.out_gen (Genarg.glbwit Constrarg.wit_constr) genarg in
-                  let _ =
-                    match arg with
-                    | Glob_term.GCast (_, _, CastConv (Glob_term.GRef (_, gr, _))) ->
-                       let _ = debug_printf 1 "debug 1: %s\n" (global_to_string gr) in
-                       let qualid = Nametab.shortest_qualid_of_global Id.Set.empty gr in
-                       let _ = debug_printf 1 "debug 2: %s\n"
-                                            (string_of_qualid qualid) in
-                       ()
-                    | _ -> ()
-                  in
-                  debug_printf 1 "@[add_typeclass_hints: hint tactic: %a@]\n"
-                               pp_autotactic (Hints.Extern tac)
-               | _ -> ()
-             in
-             Hints.add_hints false ["typeclass_instances"] hint)
-            hints
+  List.iter (Hints.add_hints false ["typeclass_instances"]) hints
 
 (* Reduce a constr using a list of reduction expressions *)
 let reduce_constr reds constr =
