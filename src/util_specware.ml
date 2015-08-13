@@ -701,6 +701,20 @@ let rec map_rec_glob_constr_with_binders add_var f ctx glob =
   in
   f ctx glob_subterms
 
+(* Replace the free variables of a glob_term using a Map *)
+let replace_glob_free_vars map glob =
+  map_rec_glob_constr_with_binders
+    (function
+      | Name x -> Id.Map.remove x
+      | Anonymous -> fun map -> map)
+    (fun map g ->
+     match g with
+     | (Glob_term.GVar (loc, x) | Glob_term.GRef (loc, VarRef x, _)) as glob ->
+        (try Id.Map.find x map
+         with Not_found -> glob)
+     | glob -> glob)
+    map
+    glob
 
 
 (***
@@ -778,17 +792,28 @@ let rec destruct_constr : type t f. (t,f) constr_descr -> Constr.t -> t = functi
        | Term.Construct (c, _) -> (c, [| |])
        | _ -> raise dummy_loc DescrFailedInternal
      in
-     let (c,args) = destruct_ctor_app constr
-     (* README: don't do the below: it reduces constr once for each ctor match *)
-       (*
-       try destruct_ctor_app constr
-       with DescrFailedInternal -> destruct_ctor_app constr
-        *)
-     in
-     if eq_constructor c ctor then
-       Left (destruct_constr_array array_descr args)
-     else
-       Right (destruct_constr descr' constr)
+     (try
+         (*
+         let _ =
+           debug_printf
+             1
+             "destruct_constr:\n@[ matching constr@ %a@]\n@[ against ctor %a@]\n"
+             pp_constr constr pp_constr
+             (Globnames.printable_constr_of_global (ConstructRef ctor))
+         in
+          *)
+         let (c,args) = destruct_ctor_app constr
+         (* README: don't do the below: it reduces constr once for each ctor match *)
+           (*
+           try destruct_ctor_app constr
+           with DescrFailedInternal -> destruct_ctor_app constr
+            *)
+         in
+         if eq_constructor c ctor then
+           Left (destruct_constr_array array_descr args)
+         else
+           Right (destruct_constr descr' constr)
+       with DescrFailedInternal -> Right (destruct_constr descr' constr))
   | Descr_Fail -> fun constr -> raise dummy_loc DescrFailedInternal
   | Descr_Constr -> fun constr -> constr
   | Descr_Iso (name,iso_to, iso_from, descr') ->

@@ -63,7 +63,6 @@ End Monoid_Thms.
 
 Spec Group.
 
-Set Printing All.
 Spec ImportTerm
      (refinement_translate
         (id_refinement_import Monoid.Monoid__Spec)
@@ -74,10 +73,6 @@ Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
 Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 
 Spec End Group.
-
-Print HintDb typeclass_instances.
-Import Group.
-Print HintDb typeclass_instances.
 
 
 
@@ -186,12 +181,14 @@ Eval cbv in
        map_ops grp_spec_interp0__import0
                Group.spec_ops__import0).
 
+(*
 Hint Extern 1 Monoid.T__class =>
   refine (_ : Group.T__class) : typeclass_instances.
 Hint Extern 1 Monoid.m_zero__class =>
   refine (_ : Group.g_zero__class) : typeclass_instances.
 Hint Extern 1 Monoid.m_plus__class =>
   refine (_ : Group.g_plus__class) : typeclass_instances.
+*)
 
 Instance grp_spec_instance0__import0
          {T__param:Group.T__class}
