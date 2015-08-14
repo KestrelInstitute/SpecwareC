@@ -344,11 +344,13 @@ let add_typeclass class_id is_op_class is_prop_class params fields =
 
 (* Add an instance of an typeclass that is a single term *)
 let add_term_instance inst_name inst_params inst_tp inst_body =
-  let cmd = VernacInstance
-              (false, inst_params,
-               (inst_name, Decl_kinds.Explicit, inst_tp),
-               Some (false, inst_body),
-               None)
+  let cmd = VernacLocal
+              (false,
+               VernacInstance
+                 (false, inst_params,
+                  (inst_name, Decl_kinds.Explicit, inst_tp),
+                  Some (false, inst_body),
+                  None))
   in
   let _ = debug_printf 1 "@[add_term_instance command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc inst_name, cmd)

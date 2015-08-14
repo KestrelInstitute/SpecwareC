@@ -68,12 +68,13 @@ Spec ImportTerm
         (id_refinement_import Monoid.Monoid__Spec)
         (cons (XlateWild "m_" "g_") nil)).
 
+(* Print HintDb typeclass_instances. *)
+
 Spec Variable g_inv : (T -> T).
 Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
 Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 
 Spec End Group.
-
 
 
 (***
@@ -85,185 +86,15 @@ Print Group.
 
 
 (***
- *** The eventual goal is to automatically add type-class instance declarations
- *** as a result of imports and other refinements. This is currently in
- *** progress: the stuff in comments is automatically generated, while the stuff
- *** below not in comments is still in progress.
- ***
- *** Don't really look at any of this...
- ***)
-
-(*
-Definition mon_repr__ops {T__param:Monoid.T__class}
-           {m_zero__param:Monoid.m_zero__class} {m_plus__param:Monoid.m_plus__class} :
-  spec_ops Monoid.Monoid__Spec :=
-  ops_cons
-    T__param (I : sats_op_pred None _)
-    (ops_cons
-       m_zero__param (I : sats_op_pred None _)
-       (ops_cons
-          m_plus__param (I : sats_op_pred None _)
-          (tt : spec_ops (Spec_Axioms _)))).
-
-Instance Monoid__IsoM {T__param m_zero__param m_plus__param} :
-  IsoToSpecModels mon_repr__ops (@Monoid.Monoid T__param m_zero__param m_plus__param).
-  compute; split;
-  [ intro H; destruct H;
-    repeat (first [ assumption | split; [assumption|] | apply I])
-  | intro H; repeat (let Hi := fresh "H" in
-                     destruct H as [Hi H]); constructor; assumption ].
-Qed.
-
-
-Definition grp_repr__ops {T__param:Group.T__class}
-           {g_zero__param:Group.g_zero__class} {g_plus__param:Group.g_plus__class}
-           {g_inv__param:Group.g_inv__class} : spec_ops Group.Group__Spec :=
-  ops_cons
-    T__param (I : sats_op_pred None _)
-    (ops_cons
-       g_zero__param (I : sats_op_pred None _)
-       (ops_cons
-          g_plus__param (I : sats_op_pred None _)
-          (ops_cons
-             g_inv__param (I : sats_op_pred None _)
-             (tt : spec_ops (Spec_Axioms _))))).
-
-Instance Group__IsoM {T__param g_zero__param g_plus__param g_inv__param} :
-  IsoToSpecModels grp_repr__ops (@Group.Group T__param g_zero__param g_plus__param g_inv__param).
-  compute; split;
-  [ intro H; destruct H;
-    repeat (first [ assumption | split; [assumption|] | apply I])
-  | intro H; repeat (let Hi := fresh "H" in
-                     destruct H as [Hi H]); constructor; assumption ].
-Qed.
-*)
-
-
-(*
-Print Group.spec__import0.
-Print Group.spec_ops__import0.
-Print Group.spec_model__import0.
-*)
-
-(*
-Definition grp_spec_ops__import0 {T__param:Group.T__class}
-           {g_zero__param:Group.g_zero__class}
-           {g_plus__param:Group.g_plus__class} : spec_ops (ref_spec _ Group.spec__import0) :=
-  existT _ T__param
-         (existT _ I
-                 (existT _ g_zero__param
-                         (existT _ I
-                                 (existT _ g_plus__param
-                                         (existT _ I
-                                                 tt))))).
-
-Definition grp_spec_model__import0 {T__param:Group.T__class}
-           {g_zero__param:Group.g_zero__class}
-           {g_plus__param:Group.g_plus__class}
-           {g_zero_left__param:Group.g_zero_left__class}
-           {g_zero_right__param:Group.g_zero_right__class}
-           {g_plus_assoc__param:Group.g_plus_assoc__class}
-: spec_model (ref_spec _ Group.spec__import0) grp_spec_ops__import0 :=
-  conj g_zero_left__param (conj g_zero_right__param g_plus_assoc__param).
-*)
-
-(*
-Definition grp_spec_interp0__import0 :
-  Interpretation Monoid.Monoid__Spec (ref_spec _ Group.spec__import0) :=
-  ref_import_interp _ (nth_refinement_import Group.spec__import0 0 $(auto)$).
-*)
-
-(*
-Eval cbv in
-    (fun {T__param g_zero__param g_plus__param} =>
-       @map_ops Monoid.Monoid__Spec
-                (ref_spec Monoid.Monoid__Spec Group.spec__import0)
-                grp_spec_interp0__import0
-                Group.spec_ops__import0).
-
-Eval cbv in
-    (fun {T__param g_zero__param g_plus__param} =>
-       map_ops grp_spec_interp0__import0
-               Group.spec_ops__import0).
-*)
-
-(*
-Hint Extern 1 Monoid.T__class =>
-  refine (_ : Group.T__class) : typeclass_instances.
-Hint Extern 1 Monoid.m_zero__class =>
-  refine (_ : Group.g_zero__class) : typeclass_instances.
-Hint Extern 1 Monoid.m_plus__class =>
-  refine (_ : Group.g_plus__class) : typeclass_instances.
-*)
-
-(*
-Instance grp_spec_instance0__import0
-         {T__param:Group.T__class}
-         {g_zero__param:Group.g_zero__class}
-         {g_plus__param:Group.g_plus__class}
-         {g_zero_left__param:Group.g_zero_left__class}
-         {g_zero_right__param:Group.g_zero_right__class}
-         {g_plus_assoc__param:Group.g_plus_assoc__class} :
-  @Monoid.Monoid T__param g_zero__param g_plus__param :=
-  proj2 (spec_models_iso
-           (IsoToSpecModels:= @Monoid.Monoid__Iso T__param g_zero__param g_plus__param))
-        (map_model grp_spec_interp0__import0
-                   Group.spec_ops__import0 Group.spec_model__import0).
-*)
-
-(*
-Set Printing All.
-Check grp_spec_instance0__import0.
-*)
-
-
-(* NOTE: do not use nth_refinement_import in generated code, just destruct the
-actual RefinementOf object and its imports *)
-(*
-Program Definition mon_group_interp :
-  Interpretation Monoid.Monoid__Spec Group.Group__Spec :=
-  ref_import_interp
-    _ (nth_refinement_import
-         (refinement_interp Group.spec__import0
-                            (@sub_spec_interp
-                               _ Group.Group__Spec
-                               _ (* $(prove_sub_spec)$ *)
-         )) 0 $(auto)$).
-Next Obligation.
-prove_sub_spec.
-Defined.
-
-Instance grp_mon__instance {T__param g_zero__param g_plus__param g_inv__param}
-         {H:@Group.Group T__param g_zero__param g_plus__param g_inv__param} :
-  @Monoid.Monoid T__param g_zero__param g_plus__param :=
-  proj2 (spec_models_iso
-           (IsoToSpecModels:= @Monoid.Monoid__Iso T__param g_zero__param g_plus__param))
-        (map_model mon_group_interp Group.Group__ops
-                   (proj1 (spec_models_iso (IsoToSpecModels:=Group.Group__Iso)) H)).
-*)
-
-
-(***
- *** Phew, now that that is over with, we can prove theorems in the Group spec
- *** using theorems we proved in the context of the Monoid spec; e.g.,
- *** left_id_uniq, used below, was proved above for Monoids. (We prove it again
- *** with a different name just so that we can apply it directly, as a demo.)
+ *** We can prove theorems in the Group spec using theorems we proved in the
+ *** context of the Monoid spec; e.g., left_id_uniq, used below, was proved
+ *** above for Monoids. (We prove it again with a different name just so that we
+ *** can apply it directly, as a demo.)
  ***)
 
 Section Group_Thms.
 Import Group.
 Context `{Group}.
-
-(* Print HintDb typeclass_instances. *)
-
-(*
-Instance mon_T : Monoid.T__class.
-specware_refine (_:T__class).
-Set Printing All.
-Definition mon : Monoid.Monoid.
-*)
-
-Check left_id_uniq.
 
 Lemma g_left_id_uniq (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
   apply left_id_uniq.
