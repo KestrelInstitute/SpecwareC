@@ -815,7 +815,10 @@ Fixpoint translate_field xlate f : Field :=
   end.
 
 Definition translate_spec_axioms xlate axioms : list (Field * Prop) :=
-  map (fun fP => (translate_field xlate (fst fP), snd fP)) axioms.
+  map (fun fP =>
+         match fP with
+           | (f, P) => (translate_field xlate f, P)
+         end) axioms.
 
 Fixpoint translate_spec xlate spec : Spec :=
   match spec with
