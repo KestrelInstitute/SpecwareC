@@ -341,6 +341,19 @@ let lookup_spec_and_globref locref =
 (* Look up a spec from a local spec reference *)
 let lookup_spec locref = fst (lookup_spec_and_globref locref)
 
+(* Map over all registered specs, removing any that are "stale", i.e., that are
+no longer valid (because of Undos) *)
+let registered_spec_map f =
+  MPmap.fold (fun globref spec l ->
+              try
+                if Nametab.exists_dir (Nametab.dirpath_of_module globref) then
+                  f (globref, spec)::l
+                else
+                  raise dummy_loc Not_found
+              with Not_found ->
+                let _ = spec_table := MPmap.remove globref !spec_table in
+                l) !spec_table []
+
 
 (***
  *** Inductive Descriptions of Specs and Refinements
@@ -470,10 +483,9 @@ let destruct_spec_globref_constr constr =
     reduce_constr
       [Cbn (Redops.make_red_flag
               [FBeta;FIota;FZeta;
-               FDeltaBut (List.map
+               FDeltaBut (registered_spec_map
                             (fun (spec_globref,_) ->
-                             AN (global_spec_repr_ref dummy_loc spec_globref))
-                            (MPmap.bindings !spec_table))])]
+                             AN (global_spec_repr_ref dummy_loc spec_globref)))])]
       constr
   in
   match Term.kind_of_term constr_red with
