@@ -1266,38 +1266,36 @@ let reporting_exceptions f =
                    ++ brk (0,0)
                    ++ Printer.pr_constr sub_constr)
 
-(* FIXME: get the locations of all the identifiers right! *)
-
 (* Top-level syntax for specs *)
 VERNAC COMMAND EXTEND Spec
 
   (* Start an interactive spec definition *)
-  | [ "Spec" ident(spec_name) ]
-    => [ (Vernacexpr.VtSideff [spec_name], Vernacexpr.VtLater) ]
+  | [ "Spec" var(lspec_name) ]
+    => [ (Vernacexpr.VtSideff [located_elem lspec_name], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
            (fun () ->
-            begin_new_spec (dummy_loc, spec_name)) ]
+            begin_new_spec lspec_name) ]
 
   (* End an interactive spec definition *)
-  | [ "Spec" "End" ident(spec_name) ]
-    => [ (Vernacexpr.VtSideff [spec_name], Vernacexpr.VtLater) ]
+  | [ "Spec" "End" var(lspec_name) ]
+    => [ (Vernacexpr.VtSideff [located_elem lspec_name], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
            (fun () ->
-            ignore (end_new_spec (dummy_loc, spec_name))) ]
+            ignore (end_new_spec lspec_name)) ]
 
   (* Add a declared op *)
-  | [ "Spec" "Variable" ident(id) ":" constr(tp) ]
-    => [ (Vernacexpr.VtSideff [id], Vernacexpr.VtLater) ]
+  | [ "Spec" "Variable" var(lid) ":" constr(tp) ]
+    => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () -> add_spec_field false (dummy_loc,id) tp None) ]
+           (fun () -> add_spec_field false lid tp None) ]
 
   (* Add a defined op with a type *)
-  | [ "Spec" "Definition" ident(id) ":" constr(tp) ":=" constr(body) ]
-    => [ (Vernacexpr.VtSideff [id], Vernacexpr.VtLater) ]
+  | [ "Spec" "Definition" var(lid) ":" constr(tp) ":=" constr(body) ]
+    => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
            (fun () ->
-            add_spec_field false (dummy_loc,id) tp
-                           (Some (mk_equality (mk_var (dummy_loc,id)) body))) ]
+            add_spec_field false lid tp
+                           (Some (mk_equality (mk_var lid) body))) ]
 
   (* Add a defined op without a type *)
   (* FIXME: figure out how to handle defs with no type... *)
@@ -1309,15 +1307,16 @@ VERNAC COMMAND EXTEND Spec
  *)
 
   (* Add an axiom *)
-  | [ "Spec" "Axiom" ident(id) ":" constr(tp) ]
-    => [ (Vernacexpr.VtSideff [id], Vernacexpr.VtLater) ]
+  | [ "Spec" "Axiom" var(lid) ":" constr(tp) ]
+    => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () -> add_spec_field true (dummy_loc,id) tp None) ]
+           (fun () -> add_spec_field true lid tp None) ]
 
   | [ "Spec" "ImportTerm" constr(tm) ]
     => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () -> import_refinement_constr_expr dummy_loc tm) ]
+           (fun () ->
+            import_refinement_constr_expr (constr_loc tm) tm) ]
 
   (* Import a spec term *)
   (* FIXME HERE: add imports!! *)
