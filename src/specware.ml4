@@ -423,14 +423,9 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
   let spec_expr =
     build_constr_expr spec_descr (List.rev spec.spec_ops,
                                   List.rev spec.spec_axioms) in
-  let _ = debug_printf 1 "@[build_spec_repr term: %a@]\n"
-                       pp_constr_expr spec_expr in
   (* Internalize spec_expr into a construction *)
   let (constr,uctx) = Constrintern.interp_constr env evd spec_expr in
-  let _ = debug_printf 1 "@[build_spec_repr constr:@ %a @]\n"
-                       pp_constr constr in
   (* Unfold all the f accessors to f__param variables *)
-  let _ = debug_printf 1 "debug 1\n" in
   let constr_unfolded =
     reduce_constr
       [Unfold (concat_map
@@ -444,8 +439,6 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
                  spec.spec_ops)]
       constr
   in
-  let _ = debug_printf 1 "@[build_spec_repr return:@ %a @]\n"
-                       pp_constr constr_unfolded in
   (constr_unfolded, uctx)
 
 exception MalformedSpec of Constr.t * string * Constr.t
