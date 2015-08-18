@@ -319,6 +319,19 @@ let add_definition id params type_opt body =
   let _ = debug_printf 1 "@[add_definition command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc id, cmd)
 
+(* Add a definition using constrs, not constr_exprs *)
+let add_definition_constr id type_opt (body, uctx) =
+  let def_entry =
+    Declare.definition_entry ?types:type_opt
+                             ~univs:(Evd.evar_context_universe_context uctx) body
+  in
+  let _ = debug_printf 1 "@[add_definition_constr: %s :=@ %a @]\n"
+                       (Id.to_string id) pp_constr body in
+  Command.declare_definition
+    id (Local, false, Definition) def_entry []
+    (Lemmas.mk_hook (fun _ x -> x))
+
+
 (* Add a type-class to the current Coq image, where is_op_class says
    whether to add an operational type-class in Type (if true) or a
    normal type-class in Prop (if false), and fields is a list of

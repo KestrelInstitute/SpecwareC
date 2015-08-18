@@ -373,11 +373,10 @@ type spec_fields_constr =
 
 (* The description of the Spec inductive type.
 
-NOTE: there is some trickiness here, where we capture the fields themselves, and
-not the f__param arguments, as bound variables when we build a Spec object, and,
-similarly, we apply the "rest" argument of a Spec object to variable f, not
-f__param, when we destruct a Spec object. This will mess us up if any
-types/definitions ever do use an f__param variable directly. *)
+NOTE: there is some trickiness here, where we apply the "rest" argument of a
+Spec object to variable f, not f__param, when we destruct a Spec object. This
+will mess us up if any types/definitions ever need to use an f__param variable
+directly. *)
 let spec_descr : (spec_fields_constr,spec_fields) constr_descr =
   Descr_Rec
     (fun spec_descr ->
@@ -406,7 +405,7 @@ let spec_descr : (spec_fields_constr,spec_fields) constr_descr =
               (fun rest_expr ->
                (mkCLambdaN
                   dummy_loc
-                  [LocalRawAssum ([dummy_loc, Name f], Default Explicit,
+                  [LocalRawAssum ([dummy_loc, Name (field_param_id f)], Default Explicit,
                                   mk_var (dummy_loc, field_class_id f));
                    LocalRawAssum ([dummy_loc, Name (field_proof_id f)], Default Explicit,
                                   CHole (dummy_loc, None, IntroAnonymous, None))]
@@ -417,8 +416,37 @@ let spec_descr : (spec_fields_constr,spec_fields) constr_descr =
              Descr_Fail)))
 
 (* Build a term of type Spec that represents a spec *)
-let build_spec_repr loc spec : constr_expr =
-  build_constr_expr spec_descr (List.rev spec.spec_ops, List.rev spec.spec_axioms)
+let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
+  (* Get the current Coq context *)
+  let (evd,env) = Lemmas.get_current_context () in
+  (* Build the constr_expr the represents the spec *)
+  let spec_expr =
+    build_constr_expr spec_descr (List.rev spec.spec_ops,
+                                  List.rev spec.spec_axioms) in
+  let _ = debug_printf 1 "@[build_spec_repr term: %a@]\n"
+                       pp_constr_expr spec_expr in
+  (* Internalize spec_expr into a construction *)
+  let (constr,uctx) = Constrintern.interp_constr env evd spec_expr in
+  let _ = debug_printf 1 "@[build_spec_repr constr:@ %a @]\n"
+                       pp_constr constr in
+  (* Unfold all the f accessors to f__param variables *)
+  let _ = debug_printf 1 "debug 1\n" in
+  let constr_unfolded =
+    reduce_constr
+      [Unfold (concat_map
+                 (fun (op_id, _, oppred) ->
+                  (Locus.AllOccurrences, AN (Ident (loc, op_id)))::
+                    (match oppred with
+                     | None -> []
+                     | Some _ ->
+                        [(Locus.AllOccurrences,
+                          AN (Ident (loc, field_proof_id op_id)))]))
+                 spec.spec_ops)]
+      constr
+  in
+  let _ = debug_printf 1 "@[build_spec_repr return:@ %a @]\n"
+                       pp_constr constr_unfolded in
+  (constr_unfolded, uctx)
 
 exception MalformedSpec of Constr.t * string * Constr.t
 
@@ -691,7 +719,7 @@ let add_spec_field axiom_p field_name tp pred_opt =
              else ()
      in
      (* Add a type-class f__class : Type := f : op_type *)
-     let _ = add_typeclass (loc, field_class_id f) true false []
+     let _ = add_typeclass (loc, field_class_id f) true axiom_p []
                            [((loc, f), tp, false)]
      in
      if axiom_p then
@@ -1041,29 +1069,28 @@ let import_refinement_constr_expr loc constr_expr =
        List.iteri
          (fun j imp ->
           (* Add spec__importi__interpj : Interpretation s (ref_spec _ constr) *)
-          let def_entry =
-            Declare.definition_entry
-              ~types:(Term.mkApp
-                        (Term.mkConst
-                           (mk_constant loc specware_mod "Interpretation"),
-                         [| Term.mkConst (global_spec_repr_constant
-                                            loc imp.spec_import_globref);
-                            Term.mkApp
-                              (Term.mkConst
-                                 (mk_constant loc specware_mod "ref_spec"),
-                               [| Term.mkConst (global_spec_repr_constant
-                                                  loc src_spec_globref);
-                                  Term.mkConst
-                                    (mk_constant loc []
-                                                 (Id.to_string
-                                                    (spec_import_id imp_num)))
-                                 |])|]))
-              imp.spec_import_interp in
           let _ =
             ignore
-              (Command.declare_definition (spec_import_interp_id imp_num j)
-                                          (Local, false, Definition) def_entry []
-                                          (Lemmas.mk_hook (fun _ x -> x))) in
+              (add_definition_constr
+                 (spec_import_interp_id imp_num j)
+                 (Some
+                    (Term.mkApp
+                       (Term.mkConst
+                          (mk_constant loc specware_mod "Interpretation"),
+                        [| Term.mkConst (global_spec_repr_constant
+                                           loc imp.spec_import_globref);
+                           Term.mkApp
+                             (Term.mkConst
+                                (mk_constant loc specware_mod "ref_spec"),
+                              [| Term.mkConst (global_spec_repr_constant
+                                                 loc src_spec_globref);
+                                 Term.mkConst
+                                   (mk_constant loc []
+                                                (Id.to_string
+                                                   (spec_import_id imp_num)))
+                                |])|])))
+                 (imp.spec_import_interp, Evd.empty_evar_universe_context))
+          in
 
           (* Add spec__importi__instancej *)
           let typeclass_args =
@@ -1149,8 +1176,8 @@ let complete_spec loc =
   in
   let _ = add_typeclass (loc, spec.spec_name) false true op_params ax_fields in
   (* Build the spec representation spec__Spec *)
-  let _ = add_definition (loc, spec_repr_id spec.spec_name) [] None
-                         (build_spec_repr loc spec) in
+  let _ = add_definition_constr (spec_repr_id spec.spec_name) None
+                                (build_spec_repr loc spec) in
   (* Build spec__ops {op_params} : spec_ops spec__Spec *)
   let _ = add_definition
             (loc, spec_ops_id spec.spec_name)

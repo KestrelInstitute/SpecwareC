@@ -110,8 +110,7 @@ Qed.
 Lemma left_inv_uniq (x x_inv:T) :
   g_plus x_inv x = g_zero -> x_inv = g_inv x.
   intro left_inv.
-  (* FIXME: can we get rid of the T__param argument here? *)
-  rewrite <- (g_zero_right (T__param:=T__param) x_inv).
+  rewrite <- (g_zero_right x_inv).
   rewrite <- (g_inv_right x).
   rewrite g_plus_assoc.
   rewrite left_inv.
