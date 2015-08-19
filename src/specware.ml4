@@ -1343,6 +1343,84 @@ let import_refinement_constr_expr loc constr_expr =
 
 
 (***
+ *** Spec Terms
+ ***)
+
+(* A spec translation specifies a map on identifiers *)
+type spec_translation_elem =
+  (* Map a single name to another *)
+  | XlateSingle of Id.t * Id.t
+  (* Map all names with a given prefix to instead use a different prefix *)
+  | XlateWild of string * string
+
+type spec_translation = spec_translation_elem list
+
+(* Inductive description of SpecTranslationElem objects *)
+let spec_translation_elem_descr : (spec_translation_elem,
+                                   spec_translation_elem) constr_descr =
+  Descr_Iso
+    ("SpecTranslationElem",
+     (function
+       | Left (f_from, (f_to, ())) -> XlateSingle (f_from, f_to)
+       | Right (Left (f_from_prefix, (f_to_prefix, ()))) ->
+          XlateWild (f_from_prefix, f_to_prefix)
+       | Right (Right emp) -> emp.elim_empty),
+     (function
+       | XlateSingle (f_from, f_to) -> Left (f_from, (f_to, ()))
+       | XlateWild (f_from_prefix, f_to_prefix) ->
+          Right (Left (f_from_prefix, (f_to_prefix, ())))),
+     binary_ctor
+       specware_mod "XlateSingle" id_descr (fun _ -> id_descr)
+       (binary_ctor
+          specware_mod "XlateWild"
+          string_fast_descr (fun _ -> string_fast_descr)
+          Descr_Fail))
+
+(* Inductive description of SpecTranslation objects *)
+let spec_translation_descr : (spec_translation, spec_translation) constr_descr =
+  list_descr spec_translation_elem_descr
+
+(* A spec term is shorthand for refinements involving named specs, translations,
+and spec substitutions *)
+type spec_term =
+  (* A reference by name to an existing spec *)
+  | SpecRef of reference
+  (* A translation of the names of a spec *)
+  | SpecXlate of spec_term * spec_translation
+  (* A spec substitution, where the morphism must be named *)
+  | SpecSubst of spec_term * reference
+  (* Adding definitions to ops in a spec *)
+  (* | SpecAddDefs of spec_term * Loc.t * (lident * Constrexpr.constr_expr) list *)
+
+(* Build a RefinementOf expr from a spec_term *)
+let refinement_expr_of_spec_term st =
+  let rec helper st =
+    match st with
+    | SpecRef r ->
+       let (loc, spec_locref) = qualid_of_reference r in
+       mkAppC (mk_specware_ref "id_refinement_import",
+               [CRef (Qualid (loc, spec_repr_qualid spec_locref), None)])
+    | SpecXlate (st', xlate) ->
+       let ref_expr' = helper st' in
+       mkAppC (mk_specware_ref "refinement_translate",
+               [ref_expr'; build_constr_expr spec_translation_descr xlate])
+    | SpecSubst (st', r) ->
+       let ref_expr' = helper st' in
+       mkAppC (mk_specware_ref "refinement_subst_import",
+               [ref_expr'; CRef (r, None);
+                mk_named_tactic_hole (loc_of_reference r)
+                                     (mk_qualid specware_mod "prove_sub_spec")])
+  in
+  (* FIXME: need to remove existing ops and axioms from an imported spec *)
+  helper st
+
+
+(* Import a spec_term *)
+let import_spec_term loc st =
+  import_refinement_constr_expr loc (refinement_expr_of_spec_term st)
+
+
+(***
  *** Beginning and Ending the Current Spec
  ***)
 
@@ -1467,6 +1545,27 @@ let reporting_exceptions f =
                    ++ brk (0,0)
                    ++ Printer.pr_constr sub_constr)
 
+(* Syntactic class to parse name translation elements *)
+VERNAC ARGUMENT EXTEND name_translation_elem
+  | [ ident(lhs) "+->" ident(rhs) ] -> [ XlateSingle (lhs,rhs) ]
+  | [ ident(lhs) "%" "+->" ident(rhs) "%" ] ->
+     [ XlateWild (Id.to_string lhs, Id.to_string rhs) ]
+END
+
+(* Syntactic class to parse name translations *)
+VERNAC ARGUMENT EXTEND name_translation
+  | [ name_translation_elem(elem) ";" name_translation (rest) ] -> [ elem::rest ]
+  | [ name_translation_elem(elem) ] -> [ [elem] ]
+END
+
+(* Syntactic class to parse spec terms *)
+VERNAC ARGUMENT EXTEND spec_term
+  | [ global(r) ] -> [ SpecRef r ]
+  | [ spec_term(st) "{" name_translation(xlate) "}" ] -> [ SpecXlate (st, xlate) ]
+  | [ spec_term(st) "[" global(morph_ref) "]" ] -> [ SpecSubst (st, morph_ref) ]
+END
+
+
 (* Top-level syntax for specs *)
 VERNAC COMMAND EXTEND Spec
 
@@ -1519,13 +1618,12 @@ VERNAC COMMAND EXTEND Spec
             import_refinement_constr_expr (constr_loc tm) tm) ]
 
   (* Import a spec term *)
-  (* FIXME HERE: add imports!! *)
-  (*
+  (* FIXME: get the location right *)
   | [ "Spec" "Import" spec_term(st) ]
     => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
            (fun () -> import_spec_term dummy_loc st) ]
-   *)
+
 END
 
 (* Top-level syntax for morphisms *)
@@ -1533,7 +1631,7 @@ END
 VERNAC COMMAND EXTEND Morphism
   (* Define a named morphism with the given name translation *)
   | [ "Spec" "Morphism" ident(morph_name) ":" global(s1) "->" global(s2)
-             "{" name_translation(xlate) "}" ]
+             "{" spec_translation(xlate) "}" ]
     => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity, [morph_name]),
           Vernacexpr.VtLater) ]
     -> [ start_morphism (dummy_loc, morph_name) s1 s2 xlate ]

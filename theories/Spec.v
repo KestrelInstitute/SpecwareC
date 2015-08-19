@@ -948,7 +948,7 @@ Record RefinementImport spec : Type :=
    ref_import_interp: Interpretation ref_import_fromspec spec}.
 
 (* A refinement of spec is some ref_spec, an interpretation from spec to
-ref_spec, and a list of simple refinements to ref_spec *)
+ref_spec, and a list of refinement imports for ref_spec *)
 Record RefinementOf spec : Type :=
   {ref_spec: Spec;
    ref_interp: Interpretation spec ref_spec;
@@ -960,7 +960,7 @@ Definition id_refinement spec : RefinementOf spec :=
      ref_interp := interp_id spec;
      ref_imports := [] |}.
 
-(* Add a simple refinement to a refinement *)
+(* Add a refinement import to a refinement *)
 Definition refinement_add_import {spec} (R: RefinementOf spec)
            (imp: RefinementImport (ref_spec _ R)) : RefinementOf spec :=
   {| ref_spec := ref_spec _ R;
@@ -978,8 +978,8 @@ Definition id_refinement_import spec : RefinementOf spec :=
                         {| ref_import_fromspec := spec;
                            ref_import_interp := interp_id spec |}.
 
-(* Compose an interpretation with a simple refinement *)
-Definition simple_refinement_interp {spec spec'}
+(* Compose an interpretation with a refinement import *)
+Definition refinement_import_interp {spec spec'}
            (imp: RefinementImport spec)
            (i: Interpretation spec spec') : RefinementImport spec' :=
   {| ref_import_fromspec := ref_import_fromspec _ imp;
@@ -991,7 +991,7 @@ Definition refinement_interp {spec spec'}
            (i: Interpretation (ref_spec _ R) spec') : RefinementOf spec :=
   {| ref_spec := spec';
      ref_interp := interp_compose i (ref_interp _ R);
-     ref_imports := map (fun imp => simple_refinement_interp imp i)
+     ref_imports := map (fun imp => refinement_import_interp imp i)
                          (ref_imports _ R) |}.
 
 (* Apply a spec substitution to a refinement *)
@@ -1002,9 +1002,8 @@ Definition refinement_subst {spec spec1 spec2}
 
 (* Apply a spec substitution to a refinement, importing the co-domain spec *)
 Definition refinement_subst_import {spec spec1 spec2}
-           (R: RefinementOf spec) (sub: SubSpec spec1 (ref_spec _ R))
-           (i: Interpretation spec1 spec2)
-           P (iso: IsoToSpec spec2 P) : RefinementOf spec :=
+           (R: RefinementOf spec) (i: Interpretation spec1 spec2)
+           (sub: SubSpec spec1 (ref_spec _ R)) : RefinementOf spec :=
   refinement_add_import
     (refinement_subst R sub i)
     {| ref_import_fromspec := spec2;

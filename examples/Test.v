@@ -63,12 +63,7 @@ End Monoid_Thms.
 
 Spec Group.
 
-Spec ImportTerm
-     (refinement_translate
-        (id_refinement_import Monoid.Monoid__Spec)
-        (cons (XlateWild "m_" "g_") nil)).
-
-(* Print HintDb typeclass_instances. *)
+Spec Import Monoid {m_% +-> g_%}.
 
 Spec Variable g_inv : (T -> T).
 Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
@@ -81,7 +76,7 @@ Spec End Group.
  *** We can see the type-class that was created:
  ***)
 
-Print Group.
+Print Group.Group.
 
 
 
@@ -130,9 +125,8 @@ End Group_Thms.
 Spec NatMonoid.
 
 Spec Definition T : Type := nat.
-Spec Definition m_zero : T := O.
+Spec Definition m_zero : T := 0.
 Spec Definition m_plus : (T -> T -> T) := plus.
-(* Spec Variable m_plus : (T -> T -> T). *)
 
 Spec Axiom m_zero_left : (forall x, m_plus m_zero x = x).
 Spec Axiom m_zero_right : (forall x, m_plus x m_zero = x).
@@ -145,7 +139,7 @@ Print NatMonoid.NatMonoid__Spec.
 
 
 Spec NatMonoid_Import.
-Spec ImportTerm (id_refinement_import NatMonoid.NatMonoid__Spec).
+Spec Import NatMonoid.
 Spec End NatMonoid_Import.
 
 Print NatMonoid_Import.NatMonoid_Import__Spec.
