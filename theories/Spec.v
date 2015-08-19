@@ -44,14 +44,27 @@ Qed.
 
 (*** Specs ***)
 
-(* A predicate on an op, where None represents the trivial True predicate *)
-Definition OpPred T := option (T -> Prop).
+(* Subtype predicates on ops, which include:
+   + The trivial True predicate;
+   + An equality to an existing object; and
+   + An arbitrary functional predicate
+ *)
+Inductive OpPred (T:Type) : Type :=
+| Pred_Trivial
+| Pred_Eq (t':T)
+| Pred_Fun (P:T -> Prop)
+.
+
+Arguments Pred_Trivial {T}.
+Arguments Pred_Eq {T} t'.
+Arguments Pred_Fun {T} P.
 
 (* Whether an op satisfies an OpPred *)
 Definition sats_op_pred {T} (p: OpPred T) : T -> Prop :=
   match p with
-    | Some pred => pred
-    | None => fun _ => True
+    | Pred_Trivial => fun _ => True
+    | Pred_Eq t' => fun t => t = t'
+    | Pred_Fun P => P
   end.
 
 (* Allows writing "oppred t" instead of "sats_op_pred oppred t" *)
@@ -149,32 +162,32 @@ Notation "'Axioms f1 t1 ; .. ; fn tn'" :=
 
 (* Example 1:  op n:nat;  axiom gt1: n > 1 *)
 Definition spec_example_1 :=
-  Spec_ConsOp "n" nat None
+  Spec_ConsOp "n" nat Pred_Trivial
               (fun n _ => Spec_Axioms [ax_pair "gt1" (n > 1)]).
 
 (* Example 2:  op n:nat := 2;  (no axioms) *)
 Definition spec_example_2 :=
-  Spec_ConsOp "n" nat (Some (fun n => n = 2))
+  Spec_ConsOp "n" nat (Pred_Eq 2)
               (fun n _ => Spec_Axioms []).
 
 (* Example 3:  op T:Set := nat;  op n:T__def;  axiom gt1: n > 1 *)
 Definition spec_example_3 :=
   Spec_ConsOp
-    "T" Set (Some (fun T => T = nat))
+    "T" Set (Pred_Eq nat)
     (fun T T__pf =>
-       Spec_ConsOp "n" (unfold_def T T__pf) None
+       Spec_ConsOp "n" (unfold_def T T__pf) Pred_Trivial
                    (fun n _ => Spec_Axioms [ax_pair "gt1" (n > 1)])).
 
 (* Example 4: Monoids *)
 Definition spec_example_monoid :=
   Spec_ConsOp
-    "T" Set None
+    "T" Set Pred_Trivial
     (fun T _ =>
        Spec_ConsOp
-         "m_zero" T None
+         "m_zero" T Pred_Trivial
          (fun m_zero _ =>
             Spec_ConsOp
-              "m_plus" (T -> T -> T) None
+              "m_plus" (T -> T -> T) Pred_Trivial
               (fun m_plus _ =>
                  Spec_Axioms
                    [ax_pair "m_zero_left" (forall x, m_plus m_zero x = x);
@@ -186,16 +199,16 @@ Definition spec_example_monoid :=
 (* Example 5: Groups *)
 Definition spec_example_group :=
   Spec_ConsOp
-    "T" Set None
+    "T" Set Pred_Trivial
     (fun T _ =>
        Spec_ConsOp
-         "g_zero" T None
+         "g_zero" T Pred_Trivial
          (fun g_zero _ =>
             Spec_ConsOp
-              "g_plus" (T -> T -> T) None
+              "g_plus" (T -> T -> T) Pred_Trivial
               (fun g_plus _ =>
                  Spec_ConsOp
-                   "g_inv" (T -> T) None
+                   "g_inv" (T -> T) Pred_Trivial
                    (fun g_inv _ =>
                         Spec_Axioms
                           [ax_pair "g_zero_left" (forall x, g_plus g_zero x = x);
@@ -270,8 +283,8 @@ Definition interp_cons_r f T (oppred: OpPred T)
 (* Interpret T as nat and n as n for spec_example_3 into spec_example_2 *)
 Program Definition interp_example_3_2 : Interpretation spec_example_3 spec_example_2 :=
   fun ops2 =>
-    (ops_cons (oppred:= Some (fun T => T = nat)) nat eq_refl
-              (ops_cons (oppred:=None) (ops_head ops2) I (tt : spec_ops (Spec_Axioms _)))) : spec_ops spec_example_3.
+    (ops_cons (oppred:= Pred_Eq nat) nat eq_refl
+              (ops_cons (oppred:=Pred_Trivial) (ops_head ops2) I (tt : spec_ops (Spec_Axioms _)))) : spec_ops spec_example_3.
 
 (* Interpret monoids in groups *)
 (* FIXME: this sucks! *)
@@ -525,23 +538,23 @@ Definition spec_subst_interp2 {spec1sub spec1 spec2} sub i :
 
 Definition ForallOp T (oppred: OpPred T) : (forall t, oppred t -> Type) -> Type :=
   match oppred return (forall t, sats_op_pred oppred t -> Type) -> Type with
-    | None => fun A => forall t, A t I 
-    | Some pred => fun A => forall t pf, A t pf
+    | Pred_Trivial => fun A => forall t, A t I
+    | _ => fun A => forall t pf, A t pf
   end.
 
 Definition LambdaOp T oppred : forall body_tp, (forall t pf, body_tp t pf) ->
                                                ForallOp T oppred body_tp :=
   match oppred return forall body_tp, (forall t pf, body_tp t pf) ->
                                       ForallOp T oppred body_tp with
-    | None => fun body_tp body => fun t => body t I
-    | Some pred => fun body_tp body => fun t pf => body t pf
+    | Pred_Trivial => fun body_tp body => fun t => body t I
+    | _ => fun body_tp body => fun t pf => body t pf
   end.
 
 Definition replace_op_proof T (oppred: OpPred T) : forall t, oppred t -> oppred t :=
   match oppred return forall t, sats_op_pred oppred t ->
                                 sats_op_pred oppred t with
-    | None => fun t _ => I
-    | Some pred => fun t pf => pf
+    | Pred_Trivial => fun t _ => I
+    | _ => fun t pf => pf
   end.
 
 (* Helper: all proofs of True are equal *)
@@ -559,8 +572,8 @@ proof of True) *)
 Definition replace_op_proof_eq T (oppred: OpPred T) :
   forall t pf, pf = replace_op_proof T oppred t pf :=
   match oppred return forall t pf, pf = replace_op_proof T oppred t pf with
-    | None => fun t _ => True_eq _ _
-    | Some pred => fun t pf => eq_refl
+    | Pred_Trivial => fun t _ => True_eq _ _
+    | _ => fun t pf => eq_refl
   end.
 
 (* Apply an op function to an op and its proof *)
@@ -570,8 +583,8 @@ Definition ApplyOp T (oppred: OpPred T) :
   match oppred return forall body_tp,
                         ForallOp T oppred body_tp ->
                         forall t pf, body_tp t (replace_op_proof T oppred t pf) with
-    | None => fun body_tp body t pf => body t
-    | Some pred => fun body_tp body t pf => body t pf
+    | Pred_Trivial => fun body_tp body t pf => body t
+    | _ => fun body_tp body t pf => body t pf
   end.
 
 (* The type of Curried functions on the ops of spec *)
@@ -621,11 +634,12 @@ Lemma replace_op_proofs_eq spec ops : replace_op_proofs spec ops = ops.
   induction spec.
   reflexivity.
   unfold replace_op_proofs; fold replace_op_proofs.
-  destruct oppred; unfold replace_op_proof; unfold replace_op_proof_eq;
-  rewrite H; unfold eq_rect;
   destruct ops as [t ops]; destruct ops as [pf ops].
-  reflexivity.
-  destruct pf. reflexivity.
+  unfold ops_head; unfold ops_proof; unfold ops_rest; unfold ops_cons;
+    unfold projT1; unfold projT2.
+  destruct oppred; unfold replace_op_proof; unfold replace_op_proof_eq;
+    rewrite H; unfold eq_rect;
+    [ destruct pf | | ]; reflexivity.
 Qed.
 
 (* Apply a Curried predicate to some candidate ops for spec *)

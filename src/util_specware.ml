@@ -34,12 +34,6 @@ let debug_printf level args =
 
 let dummy_loc = Loc.ghost
 
-(* Map f over an option type *)
-let map_opt f opt =
-  match opt with
-  | Some x -> Some (f x)
-  | None -> None
-
 (* Map f on a list but only keep the "Some"s *)
 let rec filter_map f l =
   match l with
@@ -319,14 +313,23 @@ let add_definition id params type_opt body =
   let _ = debug_printf 1 "@[add_definition command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc id, cmd)
 
+(* Add a local definition, i.e., do a Let vernacular command *)
+let add_local_definition id params type_opt body =
+  let cmd = VernacDefinition
+              ((Some Discharge, Definition), id,
+               DefineBody (params, None, body, type_opt))
+  in
+  let _ = debug_printf 1 "@[add_local_definition command:@ %a@]\n" pp_vernac cmd in
+  interp (located_loc id, cmd)
+
 (* Add a definition using constrs, not constr_exprs *)
 let add_definition_constr id type_opt (body, uctx) =
+  let _ = debug_printf 1 "@[add_definition_constr: %s :=@ %a @]\n"
+                       (Id.to_string id) pp_constr body in
   let def_entry =
     Declare.definition_entry ?types:type_opt
                              ~univs:(Evd.evar_context_universe_context uctx) body
   in
-  let _ = debug_printf 1 "@[add_definition_constr: %s :=@ %a @]\n"
-                       (Id.to_string id) pp_constr body in
   Command.declare_definition
     id (Local, false, Definition) def_entry []
     (Lemmas.mk_hook (fun _ x -> x))
