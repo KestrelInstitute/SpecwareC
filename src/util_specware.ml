@@ -265,7 +265,7 @@ let mk_global_expl gr =
             [])
 
 (* Look up a defined constant by path list and string name *)
-let mk_constant loc dir name =
+let mk_constant dir name =
   let qualid = mk_qualid dir name in
   match Nametab.locate qualid with
   | ConstRef c -> c

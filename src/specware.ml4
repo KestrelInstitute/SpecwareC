@@ -47,6 +47,19 @@ let field_pred_id f = add_suffix f "pred"
 (* Get the identifier used for the proof of a field predicate *)
 let field_proof_id f = add_suffix f "proof"
 
+(* Test if an id has the form f__proof, returning f if so *)
+let match_proof_id id =
+  let id_str = Id.to_string id in
+  let _ = debug_printf 1 "match_proof_id: %s\n" id_str in
+  let str_len = String.length id_str in
+  if str_len > 7 &&
+       String.compare (String.sub id_str (str_len - 7) 7) "__proof" = 0 then
+    let _ = debug_printf 1 "match_proof_id: true\n" in
+    Some (Id.of_string (String.sub id_str 0 (str_len - 7)))
+  else
+    let _ = debug_printf 1 "match_proof_id: false\n" in
+    None
+
 (* The name of the instance associated with a field *)
 let field_inst_id f = add_suffix f "inst"
 
@@ -239,7 +252,7 @@ let map_oppred f oppred =
   | Pred_Eq x -> Pred_Eq (f x)
   | Pred_Fun x -> Pred_Fun (f x)
 
-let oppred_nontrivial_p oppred =
+let oppred_is_nontrivial oppred =
   match oppred with
   | Pred_Trivial -> false
   | _ -> true
@@ -462,25 +475,28 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
            in
            let (is_eq, is_nontrivial) =
              match oppred_sum with
-             | Left oppred -> (oppred_is_eq oppred, oppred_nontrivial_p oppred)
+             | Left oppred -> (oppred_is_eq oppred, oppred_is_nontrivial oppred)
              | Right (_, oppred) ->
-                (oppred_is_eq oppred, oppred_nontrivial_p oppred)
+                (oppred_is_eq oppred, oppred_is_nontrivial oppred)
            in
            Descr_ConstrMap
              ((fun rest_constr ->
                let rest_body_constr =
                  reduce_constr
-                   [Cbv (Redops.make_red_flag [FBeta;FIota;FDeltaBut []])]
+                   [Cbv (Redops.make_red_flag [FBeta])]
                    (Term.mkApp
                       (rest_constr,
                        [| Term.mkVar f_accessor;
                           Term.mkVar (field_proof_id f) |]))
                in
-               match is_eq, Term.kind_of_term rest_body_constr with
-               | true, Term.LetIn (Name let_f, _, _, let_body) ->
-                  if Id.equal f let_f then let_body else
-                    rest_body_constr
-               | _, _ -> rest_body_constr),
+               let rest_body_nolet =
+                 match is_eq, Term.kind_of_term rest_body_constr with
+                 | true, Term.LetIn (Name let_f, _, _, let_body) ->
+                    if Id.equal f let_f then let_body else
+                      rest_body_constr
+                 | _, _ -> rest_body_constr
+               in
+               hnf_constr rest_body_nolet),
               (fun rest_expr ->
                (mkCLambdaN
                   dummy_loc
@@ -493,7 +509,7 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
                                     CHole (dummy_loc, None, IntroAnonymous, None))]
                   (if is_eq then
                      CLetIn (dummy_loc, (dummy_loc, Name f),
-                             mkAppC (mk_specware_ref "unfold_def",
+                             mkAppC (mk_specware_ref "def",
                                      [mk_var (dummy_loc, field_param_id f);
                                       mk_var (dummy_loc, field_proof_id f)]),
                              rest_expr)
@@ -521,9 +537,14 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
   (* Unfold all the f accessors to f__param variables *)
   let constr_unfolded =
     reduce_constr
-      [Unfold (List.map
+      [Unfold (concat_map
                  (fun op ->
-                  (Locus.AllOccurrences, AN (Ident (loc, op_accessor_id op))))
+                  let (op_id,_,oppred) = op in
+                  (Locus.AllOccurrences, AN (Ident (loc, op_accessor_id op)))::
+                    (if oppred_is_nontrivial oppred then
+                       [Locus.AllOccurrences,
+                        AN (Ident (loc, field_proof_id op_id))]
+                     else []))
                  spec.spec_ops)]
       constr
   in
@@ -842,12 +863,12 @@ let add_spec_field axiom_p lid tp oppred =
                                 (field_proof_param_id f)
                                 (mk_var (loc, field_pred_id f))] in
             (* For defined ops, also add a local definition of the form
-               f := unfold_def f__var f__proof *)
+               f := def f__var f__proof *)
             (match oppred with
              | Pred_Eq _ ->
                 add_local_definition lid [] None
                                      (mkAppC
-                                        (mk_specware_ref "unfold_def",
+                                        (mk_specware_ref "def",
                                          [mk_var (loc, acc_id);
                                           mk_var (loc, field_proof_id f)]))
              | _ -> ())
@@ -1003,15 +1024,45 @@ let import_refinement_constr_expr loc constr_expr =
   in
   let src_spec_globref = destruct_spec_globref_constr src_spec_constr in
 
+  (* Helper function to fold "def f__param f__proof" into f (Coq's built-in fold
+  does not seem to work...) *)
+  let rec fold_defs eq_ids constr =
+    Term.map_constr
+      (fun c ->
+       match Term.kind_of_term c with
+       | Term.App (head, args) ->
+          let args_len = Array.length args in
+          if (constr_is_constant
+                (mk_constant specware_mod "def") head)
+             && args_len >= 4 then
+            (match Term.kind_of_term args.(3) with
+             | Term.Var f__proof ->
+                (match match_proof_id f__proof with
+                 | Some f ->
+                    if Id.Set.mem f eq_ids then
+                      Term.mkApp (Term.mkVar f,
+                                  Array.sub args 4 (args_len - 4))
+                    else fold_defs eq_ids c
+                 | None -> fold_defs eq_ids c)
+             | _ -> fold_defs eq_ids c)
+          else fold_defs eq_ids c
+       | _ -> fold_defs eq_ids c)
+      constr in
+  let extern_with_folds eq_ids constr =
+    Constrextern.extern_constr true env evd (fold_defs eq_ids constr)
+  in
+
   (* Add all the ops specified by constr *)
-  let _ =
-    List.iter (fun (f,tp,oppred) ->
-               add_spec_field
-                 false
-                 (loc, f)
-                 (Constrextern.extern_constr true env evd tp)
-                 (map_oppred (Constrextern.extern_constr true env evd) oppred))
-              ops
+  let eq_ids =
+    List.fold_left
+      (fun eq_ids (f,tp,oppred) ->
+       let _ =
+         add_spec_field false (loc, f)
+                        (extern_with_folds eq_ids tp)
+                        (map_oppred (extern_with_folds eq_ids) oppred) in
+       if oppred_is_eq oppred then Id.Set.add f eq_ids else eq_ids)
+      Id.Set.empty
+      ops
   in
   (* Add all the axioms specified by constr *)
   let _ =
@@ -1019,7 +1070,7 @@ let import_refinement_constr_expr loc constr_expr =
       (fun (ax_name,ax_tp) ->
        add_spec_field true
                       (loc, ax_name)
-                      (Constrextern.extern_constr true env evd ax_tp)
+                      (extern_with_folds eq_ids ax_tp)
                       Pred_Trivial)
       axioms
   in
@@ -1103,11 +1154,11 @@ let import_refinement_constr_expr loc constr_expr =
               spec_ops_descr
               (compute_constr
                  (Term.mkApp
-                    (Term.mkConst (mk_constant loc specware_mod "map_ops"),
+                    (Term.mkConst (mk_constant specware_mod "map_ops"),
                      [| Term.mkConst (global_spec_repr_constant
                                         loc refimp.ref_import_fromspec);
                         Term.mkApp
-                          (Term.mkConst (mk_constant loc specware_mod "ref_spec"),
+                          (Term.mkConst (mk_constant specware_mod "ref_spec"),
                            [| Term.mkConst (global_spec_repr_constant
                                               loc src_spec_globref);
                               Term.mkVar (spec_import_id imp_num) |]);
@@ -1130,11 +1181,11 @@ let import_refinement_constr_expr loc constr_expr =
           let imp_ax_proofs_constr =
             compute_constr
               (Term.mkApp
-                 (Term.mkConst (mk_constant loc specware_mod "map_model"),
+                 (Term.mkConst (mk_constant specware_mod "map_model"),
                   [| Term.mkConst (global_spec_repr_constant
                                      loc refimp.ref_import_fromspec);
                      Term.mkApp
-                       (Term.mkConst (mk_constant loc specware_mod "ref_spec"),
+                       (Term.mkConst (mk_constant specware_mod "ref_spec"),
                         [| Term.mkConst (global_spec_repr_constant
                                            loc src_spec_globref);
                            Term.mkVar (spec_import_id imp_num) |]);
@@ -1171,7 +1222,7 @@ let import_refinement_constr_expr loc constr_expr =
      let impgrp = { spec_impgrp_num = imp_num;
                     spec_impgrp_ops =
                       List.map (fun (op_id,_,oppred) ->
-                                (op_id, oppred_nontrivial_p oppred)) ops;
+                                (op_id, oppred_is_nontrivial oppred)) ops;
                     spec_impgrp_axioms =
                       List.map (fun (ax_id,_) -> ax_id) axioms;
                     spec_impgrp_imports = spec_imports }
@@ -1192,16 +1243,16 @@ let import_refinement_constr_expr loc constr_expr =
                  (Some
                     (Term.mkApp
                        (Term.mkConst
-                          (mk_constant loc specware_mod "Interpretation"),
+                          (mk_constant specware_mod "Interpretation"),
                         [| Term.mkConst (global_spec_repr_constant
                                            loc imp.spec_import_globref);
                            Term.mkApp
                              (Term.mkConst
-                                (mk_constant loc specware_mod "ref_spec"),
+                                (mk_constant specware_mod "ref_spec"),
                               [| Term.mkConst (global_spec_repr_constant
                                                  loc src_spec_globref);
                                  Term.mkConst
-                                   (mk_constant loc []
+                                   (mk_constant []
                                                 (Id.to_string
                                                    (spec_import_id imp_num)))
                                 |])|])))
@@ -1216,11 +1267,11 @@ let import_refinement_constr_expr loc constr_expr =
                           (match op_pf_oppred with
                            | Pred_Trivial -> []
                            | Pred_Eq op_pf_constr ->
-                              [field_proof_id op_id,
+                              [field_proof_param_id op_id,
                                Constrextern.extern_constr true env evd
                                                           op_pf_constr]
                            | Pred_Fun op_pf_constr ->
-                              [field_proof_id op_id,
+                              [field_proof_param_id op_id,
                                Constrextern.extern_constr true env evd
                                                           op_pf_constr]))
                        imp.spec_import_op_constrs in
@@ -1288,7 +1339,7 @@ let complete_spec loc =
           let op_param =
             mk_implicit_assum (field_param_id op_id)
                               (mk_var (loc, field_class_id op_id)) in
-          if oppred_nontrivial_p oppred then
+          if oppred_is_nontrivial oppred then
             [op_param; mk_implicit_assum (field_proof_param_id op_id)
                                          (mk_var (loc, field_pred_id op_id))]
           else
@@ -1319,7 +1370,7 @@ let complete_spec loc =
                            (List.rev_map
                               (fun (op_id,_,oppred) ->
                                (mk_var (loc, field_param_id op_id))::
-                                 (if oppred_nontrivial_p oppred then
+                                 (if oppred_is_nontrivial oppred then
                                     [mk_var (loc, field_proof_param_id op_id)]
                                   else
                                     []

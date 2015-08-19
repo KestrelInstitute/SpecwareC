@@ -90,7 +90,7 @@ Definition ax_pair (f:Field) (P:Prop) : (Field * Prop) :=
 Arguments ax_pair f%string P.
 
 (* Unfold a definition *)
-Definition unfold_def {T x} (t:T) (t__pf: t = x) : T := x.
+Definition def {T x} (t:T) (t__pf: t = x) : T := x.
 
 
 (*** Models ***)
@@ -175,7 +175,7 @@ Definition spec_example_3 :=
   Spec_ConsOp
     "T" Set (Pred_Eq nat)
     (fun T T__pf =>
-       Spec_ConsOp "n" (unfold_def T T__pf) Pred_Trivial
+       Spec_ConsOp "n" (def T T__pf) Pred_Trivial
                    (fun n _ => Spec_Axioms [ax_pair "gt1" (n > 1)])).
 
 (* Example 4: Monoids *)
@@ -734,7 +734,7 @@ prove_spec_iso.
 Qed.
 
 (* Example 3:  op T:Set := nat;  op n:T__def;  axiom gt1: n > 1 *)
-Class spec_example_3_class (T:Set) (T__pf: T = nat) (n: unfold_def T T__pf) : Prop :=
+Class spec_example_3_class (T:Set) (T__pf: T = nat) (n: def T T__pf) : Prop :=
   { example_3__gt1 : n > 1 }.
 
 Instance iso_example_3 : IsoToSpec spec_example_3 spec_example_3_class.

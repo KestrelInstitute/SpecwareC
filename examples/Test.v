@@ -127,11 +127,10 @@ End Group_Thms.
 
 
 
-
 Spec NatMonoid.
 
 Spec Definition T : Type := nat.
-Spec Definition m_zero : T := 0.
+Spec Definition m_zero : T := O.
 Spec Definition m_plus : (T -> T -> T) := Nat.add.
 (* Spec Variable m_plus : (T -> T -> T). *)
 
@@ -141,11 +140,18 @@ Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus 
 
 Spec End NatMonoid.
 
-Print NatMonoid.
+Print NatMonoid.NatMonoid.
+Print NatMonoid.NatMonoid__Spec.
 
 
+Spec NatMonoid_Import.
+Spec ImportTerm (id_refinement_import NatMonoid.NatMonoid__Spec).
+FIXME HERE NOW: imports still don't work right for m_zero!
 
+Spec End NatMonoid_Import.
 
+Print NatMonoid_Import.NatMonoid_Import__Spec.
+Print NatMonoid.NatMonoid__Spec.
 
 
 Spec Group2.
