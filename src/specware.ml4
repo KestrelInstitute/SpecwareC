@@ -28,6 +28,16 @@ open Topconstr
    variable *)
 let field_param_id f = add_suffix f "param"
 
+(* Test if an id has the form f__param, returning f if so *)
+let match_param_id id =
+  let id_str = Id.to_string id in
+  let str_len = String.length id_str in
+  if str_len > 7 &&
+       String.compare (String.sub id_str (str_len - 7) 7) "__param" = 0 then
+    Some (Id.of_string (String.sub id_str 0 (str_len - 7)))
+  else
+    None
+
 (* Build the identifier used to quantify over the proof of a field's oppred as a
    local variable *)
 let field_proof_param_id f = add_suffix f "proof__param"
@@ -262,6 +272,13 @@ let oppred_is_eq oppred =
 (* The type of ops, using underlying term type 'a *)
 type 'a op = (Id.t * 'a * 'a oppred)
 
+let op_param_ids (op : 'a op) : Id.t list =
+  let (op_id,_,oppred) = op in
+  if oppred_is_nontrivial oppred then
+    [field_param_id op_id; field_proof_param_id op_id]
+  else
+    [field_param_id op_id]
+
 (* FIXME: documentation *)
 (* NOTE: the op constrs are all in the context of the ops (and their proofs) of
 the importing spec, while the axiom constrs are in the context of the ops and
@@ -438,12 +455,7 @@ let axiom_list_descr : ((Id.t * Constr.t) list,
 type spec_fields = (constr_expr op) list * (Id.t * constr_expr) list
 type spec_fields_constr = (Constr.t op) list * (Id.t * Constr.t) list
 
-(* The description of the Spec inductive type.
-
-NOTE: there is some trickiness here, where we apply the "rest" argument of a
-Spec object to variable f, not f__param, when we destruct a Spec object. This
-will mess us up if any types/definitions ever need to use an f__param variable
-directly. *)
+(* The description of the Spec inductive type. *)
 let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
   Descr_Rec
     (fun spec_descr ->
@@ -464,12 +476,6 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
           (fun _ _ -> oppred_descr)
           (fun f_sum tp_sum oppred_sum ->
            let f = match f_sum with Left f -> f | Right f -> f in
-           let f_accessor =
-             match tp_sum, oppred_sum with
-             | Left tp, Left oppred -> op_accessor_id (f, tp, oppred)
-             | Right tp, Right (_, oppred) -> op_accessor_id (f, tp, oppred)
-             | _, _ -> anomaly (str "spec_descr")
-           in
            let (is_eq, is_nontrivial) =
              match oppred_sum with
              | Left oppred -> (oppred_is_eq oppred, oppred_is_nontrivial oppred)
@@ -483,8 +489,8 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
                    [Cbv (Redops.make_red_flag [FBeta])]
                    (Term.mkApp
                       (rest_constr,
-                       [| Term.mkVar f_accessor;
-                          Term.mkVar (field_proof_id f) |]))
+                       [| Term.mkVar (field_param_id f);
+                          Term.mkVar (field_proof_param_id f) |]))
                in
                let rest_body_nolet =
                  match is_eq, Term.kind_of_term rest_body_constr with
@@ -499,7 +505,7 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
                   dummy_loc
                   [LocalRawAssum ([dummy_loc, Name (field_param_id f)], Default Explicit,
                                   mk_var (dummy_loc, field_class_id f));
-                   LocalRawAssum ([dummy_loc, Name (field_proof_id f)], Default Explicit,
+                   LocalRawAssum ([dummy_loc, Name (field_proof_param_id f)], Default Explicit,
                                   if is_nontrivial then
                                     mk_var (dummy_loc, field_pred_id f)
                                   else
@@ -508,7 +514,7 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
                      CLetIn (dummy_loc, (dummy_loc, Name f),
                              mkAppC (mk_specware_ref "def",
                                      [mk_var (dummy_loc, field_param_id f);
-                                      mk_var (dummy_loc, field_proof_id f)]),
+                                      mk_var (dummy_loc, field_proof_param_id f)]),
                              rest_expr)
                    else
                      rest_expr))),
@@ -525,9 +531,9 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
   let spec_expr =
     build_constr_expr spec_descr (List.rev spec.spec_ops,
                                   List.rev spec.spec_axioms) in
-  (* Internalize spec_expr into a construction *)
   let _ = debug_printf 1 "@[build_spec_repr (1):@ %a@]"
                        pp_constr_expr spec_expr in
+  (* Internalize spec_expr into a construction *)
   let (constr,uctx) = Constrintern.interp_constr env evd spec_expr in
   let _ = debug_printf 1 "@[build_spec_repr (2):@ %a@]"
                        pp_constr constr in
@@ -686,7 +692,7 @@ let make_ops_constr_expr loc ops =
                                (mk_var (loc, field_param_id op_id),
                                 match oppred with
                                 | Pred_Trivial -> mk_reference ["Coq"; "Init"; "Logic"] "I"
-                                | _ -> mk_var (loc, field_proof_id op_id)))
+                                | _ -> mk_var (loc, field_proof_param_id op_id)))
                               ops)
 
 (*
@@ -1011,6 +1017,8 @@ let import_refinement_constr_expr loc constr_expr =
   let constr_hnf = hnf_constr constr in
   (* Destruct constr as a RefinementOf object *)
   let ((ops,axioms),_,imports) = destruct_refinementof constr_hnf in
+  (* Get a fresh import number in the current spec *)
+  let imp_num = find_unused_import_id (get_current_spec loc) in
 
   (* Get the source spec of the refinement in constr *)
   let src_spec_constr =
@@ -1025,10 +1033,11 @@ let import_refinement_constr_expr loc constr_expr =
   in
   let src_spec_globref = destruct_spec_globref_constr src_spec_constr in
 
-  (* Helper function to fold "def f__param f__proof" into f (Coq's built-in fold
-  does not seem to work...) *)
-  let rec fold_defs eq_ids constr =
-    let recurse () = Term.map_constr (fold_defs eq_ids) constr in
+  (* Helper function to fold "f__param" into just "f" and to fold "def f__param
+  f__proof" into f (Coq's built-in fold does not seem to work...) *)
+  (* FIXME: remove ids from op_ids and eq_ids when going inside binders *)
+  let rec fold_defs op_ids eq_ids constr =
+    let recurse () = Term.map_constr (fold_defs op_ids eq_ids) constr in
     match Term.kind_of_term constr with
     | Term.App (head, args) ->
        let args_len = Array.length args in
@@ -1042,17 +1051,78 @@ let import_refinement_constr_expr loc constr_expr =
                  if Id.Set.mem f eq_ids then
                    Term.mkApp (Term.mkVar f,
                                Array.map
-                                 (fold_defs eq_ids)
+                                 (fold_defs op_ids eq_ids)
                                  (Array.sub args 4 (args_len - 4)))
                  else recurse ()
               | None -> recurse ())
           | _ -> recurse ())
        else recurse ()
+    | Term.Var f__param ->
+       (match match_param_id f__param with
+        | Some f ->
+           if Id.Set.mem f eq_ids then
+             Term.mkVar (field_var_id f)
+           else if Id.Set.mem f__param op_ids then
+             Term.mkVar f
+           else constr
+        | _ -> constr)
     | _ -> recurse ()
   in
-  let extern_with_folds eq_ids constr =
-    Constrextern.extern_constr true env evd (fold_defs eq_ids constr)
+  let extern_with_folds op_ids eq_ids constr =
+    Constrextern.extern_constr true env evd (fold_defs op_ids eq_ids constr)
   in
+
+  (*** Add definitions that contain the RefinementOf object itself as well as
+  ops and a model of the ref_spec of this RefinementOf object. NOTE: we do this
+  before adding the ops / axioms to the current spec, since having the latter in
+  the context seems to make things slow... ***)
+
+  (* Add a definition spec__import<i> := constr_expr *)
+  let _ = add_definition (loc, spec_import_id imp_num) [] None constr_expr in
+  (* Add spec_ops__import<i> : spec_ops (ref_spec _ spec__import<i>) := ... *)
+  let op_param_ids = (concat_map op_param_ids ops) in
+  let op_params = List.map mk_explicit_var_assum op_param_ids in
+  let op_param_vars = mk_vars loc op_param_ids in
+  let op_param_set = Id.Set.of_list op_param_ids in
+  let _ = add_definition
+            (loc, spec_import_ops_id imp_num)
+            op_params
+            (Some
+               (mkAppC (mk_specware_ref "spec_ops",
+                        [mkAppC (mk_specware_ref "ref_spec",
+                                 [mk_hole loc;
+                                  mk_var (loc, spec_import_id imp_num)])])))
+            (make_ops_constr_expr loc ops) in
+  (* Build the expr (spec_ops__import<i> op1__param op1__proof__param ...) *)
+  let spec_ops_expr =
+    mkAppC (mk_var (loc, spec_import_ops_id imp_num),
+            op_param_vars) in
+  (* Add spec_model__import<i> : spec_model spec_ops__import<i>
+                                      (ref_spec _ spec__import<i>) := ... *)
+  let axiom_params =
+    List.map (fun (ax_id, ax_tp) ->
+              mk_explicit_assum
+                (field_param_id ax_id)
+                (Constrextern.extern_constr true env evd ax_tp))
+             axioms in
+  let _ = add_definition
+            (loc, spec_import_model_id imp_num)
+            (op_params @ axiom_params)
+            (Some (mkAppC
+                     (mk_specware_ref "spec_model",
+                      [mkAppC (mk_specware_ref "ref_spec",
+                               [mk_hole loc;
+                                mk_var (loc, spec_import_id imp_num)]);
+                       spec_ops_expr])))
+            (make_model_constr_expr loc axioms) in
+  (* Build the expr (spec_model__import<i> <op params> <axiom params>) *)
+  let spec_model_expr =
+    mkAppC (mk_var (loc, spec_import_model_id imp_num),
+            op_param_vars
+            @ (List.map (fun (ax_id,_) ->
+                         mk_var (loc, field_param_id ax_id)) axioms)) in
+
+  (*** Now we add the imported ops and axioms to the current spec ***)
 
   (* Add all the ops specified by constr *)
   let eq_ids =
@@ -1060,8 +1130,8 @@ let import_refinement_constr_expr loc constr_expr =
       (fun eq_ids (f,tp,oppred) ->
        let _ =
          add_spec_field false (loc, f)
-                        (extern_with_folds eq_ids tp)
-                        (map_oppred (extern_with_folds eq_ids) oppred) in
+                        (extern_with_folds op_param_set eq_ids tp)
+                        (map_oppred (extern_with_folds op_param_set eq_ids) oppred) in
        if oppred_is_eq oppred then Id.Set.add f eq_ids else eq_ids)
       Id.Set.empty
       ops
@@ -1072,114 +1142,70 @@ let import_refinement_constr_expr loc constr_expr =
       (fun (ax_name,ax_tp) ->
        add_spec_field true
                       (loc, ax_name)
-                      (extern_with_folds eq_ids ax_tp)
+                      (extern_with_folds op_param_set eq_ids ax_tp)
                       Pred_Trivial)
       axioms
   in
 
-  (* The rest of this stuff runs in the context of the current spec *)
-  update_current_spec
-    loc
-    (fun spec ->
-     (* Get a fresh import number in the current spec *)
-     let imp_num = find_unused_import_id spec in
-     (* Add a definition spec__import<i> := constr_expr *)
-     let _ = add_definition (loc, spec_import_id imp_num) [] None constr_expr in
-     (* Add spec_ops__import<i> : spec_ops (ref_spec _ spec__import<i>) := ... *)
-     let _ = add_definition
-               (loc, spec_import_ops_id imp_num)
-               []
-               (Some
-                  (mkAppC (mk_specware_ref "spec_ops",
-                           [mkAppC (mk_specware_ref "ref_spec",
-                                    [mk_hole loc;
-                                     mk_var (loc, spec_import_id imp_num)])])))
-               (make_ops_constr_expr loc ops) in
-     (* Add spec_model__import<i> : spec_model spec_ops__import<i>
-                                      (ref_spec _ spec__import<i>) := ... *)
-     let _ = add_definition
-               (loc, spec_import_model_id imp_num)
-               (List.map (fun (ax_id,_) ->
-                          mk_implicit_assum
-                            (field_param_id ax_id)
-                            (mk_var (loc, field_class_id ax_id))) axioms)
-               (Some (mkAppC
-                        (mk_specware_ref "spec_model",
-                         [mkAppC (mk_specware_ref "ref_spec",
-                                  [mk_hole loc;
-                                   mk_var (loc, spec_import_id imp_num)]);
-                          mk_var (loc, spec_import_ops_id imp_num)])))
-               (make_model_constr_expr loc axioms) in
+  (*** Now we build the instances ***)
 
-     (* Get the Coq context again (because defs have been added...?) *)
-     let env = Global.env () in
-     let evd = Evd.from_env env in
-     (* Add the axioms of this import to the current environment *)
-     (*
-     let env_with_axs =
-       List.fold_left
-         (fun env (ax_id,_) ->
-          let (class_constr,_) =
-            Constrintern.interp_constr env evd
-                                       (mk_var (loc, field_class_id ax_id)) in
-          Environ.push_named (ax_id, None, class_constr) env)
-         env axioms
-     in
-      *)
+  (* Get the Coq context again, to have the ops and axioms in the context *)
+  let env = Global.env () in
+  let evd = Evd.from_env env in
 
-     (* Interpret the value of spec_ops__import<i> to a constr *)
-     let ops_constr =
-       hnf_constr
-         (fst (Constrintern.interp_constr
-                 env evd (mk_var (loc, spec_import_ops_id imp_num))))
-     in
-     (* Interpret the value of spec_model__import<i> to a constr *)
-     (*
+  (* Interpret the value of spec_ops__import<i> to a constr *)
+  let ops_constr =
+    hnf_constr
+      (fst (Constrintern.interp_constr env evd spec_ops_expr))
+  in
+  (* Interpret the value of spec_model__import<i> to a constr *)
+  (*
      let model_constr =
        compute_constr
          (fst (Constrintern.interp_constr
                  env_with_axs evd (mk_var (loc, spec_import_model_id imp_num))))
      in
-      *)
+   *)
 
-     (* Now build the spec_import list for this import *)
-     let spec_imports =
-       List.map
-         (fun refimp ->
-          (* Look up the spec structure *)
-          let imp_spec = lookup_global_spec refimp.ref_import_fromspec in
+  (* Build the spec_import list, which includes the constrs for the ops of each
+  source spec (needed to build the instances below) *)
+  let spec_imports =
+    List.map
+      (fun refimp ->
+       (* Look up the spec structure for the imported spec *)
+       let imp_spec = lookup_global_spec refimp.ref_import_fromspec in
 
-          (* Normalize the term (map_ops interp spec_ops__import<i>) to get the
+       (* Normalize the term (map_ops interp spec_ops__import<i>) to get the
           ops of imp_spec in terms of the ops of the current spec *)
-          let imp_op_constr_list =
-            destruct_constr
-              spec_ops_descr
-              (compute_constr
-                 (Term.mkApp
-                    (Term.mkConst (mk_constant specware_mod "map_ops"),
-                     [| Term.mkConst (global_spec_repr_constant
-                                        loc refimp.ref_import_fromspec);
-                        Term.mkApp
-                          (Term.mkConst (mk_constant specware_mod "ref_spec"),
-                           [| Term.mkConst (global_spec_repr_constant
-                                              loc src_spec_globref);
-                              Term.mkVar (spec_import_id imp_num) |]);
-                        refimp.ref_import_interp;
-                        ops_constr |])))
-          in
-          (* Build a list that maps each op in the imported spec to the constrs
+       let imp_op_constr_list =
+         destruct_constr
+           spec_ops_descr
+           (compute_constr
+              (Term.mkApp
+                 (Term.mkConst (mk_constant specware_mod "map_ops"),
+                  [| Term.mkConst (global_spec_repr_constant
+                                     loc refimp.ref_import_fromspec);
+                     Term.mkApp
+                       (Term.mkConst (mk_constant specware_mod "ref_spec"),
+                        [| Term.mkConst (global_spec_repr_constant
+                                           loc src_spec_globref);
+                           Term.mkVar (spec_import_id imp_num) |]);
+                     refimp.ref_import_interp;
+                     ops_constr |])))
+       in
+       (* Build a list that maps each op in the imported spec to the constrs
           that build it and (optionally) its proof in the current spec *)
-          let imp_op_constrs =
-            List.map2
-              (fun (op_id, _, oppred) (op_constr, op_proof_constr) ->
-               (op_id, op_constr,
-                map_oppred (fun _ -> op_proof_constr) oppred))
-              (List.rev imp_spec.spec_ops) imp_op_constr_list
-          in
+       let imp_op_constrs =
+         List.map2
+           (fun (op_id, _, oppred) (op_constr, op_proof_constr) ->
+            (op_id, op_constr,
+             map_oppred (fun _ -> op_proof_constr) oppred))
+           (List.rev imp_spec.spec_ops) imp_op_constr_list
+       in
 
-          (* Build (map_model interp spec_ops__import<i> spec_model__import<i>)
+       (* Build (map_model interp spec_ops__import<i> spec_model__import<i>)
           to get the proofs of the imp_spec axioms in the current spec *)
-          (*
+       (*
           let imp_ax_proofs_constr =
             compute_constr
               (Term.mkApp
@@ -1211,105 +1237,108 @@ let import_refinement_constr_expr loc constr_expr =
               (fun (ax_id, _) ax_constr -> (ax_id, ax_constr))
               (List.rev imp_spec.spec_axioms) imp_ax_constr_list
           in
-           *)
+        *)
 
-          { spec_import_globref = refimp.ref_import_fromspec;
-            spec_import_op_constrs = imp_op_constrs;
-            (* spec_import_axiom_constrs = imp_ax_constrs; *)
-            spec_import_interp = refimp.ref_import_interp }
-         )
-         imports
-     in
+       { spec_import_globref = refimp.ref_import_fromspec;
+         spec_import_op_constrs = imp_op_constrs;
+         (* spec_import_axiom_constrs = imp_ax_constrs; *)
+         spec_import_interp = refimp.ref_import_interp }
+      )
+      imports
+  in
 
-     let impgrp = { spec_impgrp_num = imp_num;
-                    spec_impgrp_ops =
-                      List.map (fun (op_id,_,oppred) ->
-                                (op_id, oppred_is_nontrivial oppred)) ops;
-                    spec_impgrp_axioms =
-                      List.map (fun (ax_id,_) -> ax_id) axioms;
-                    spec_impgrp_imports = spec_imports }
-     in
-     (*
-     let _ = add_import_group_hints loc impgrp in
-      *)
+  (* Build the impgrp structure *)
+  let impgrp = { spec_impgrp_num = imp_num;
+                 spec_impgrp_ops =
+                   List.map (fun (op_id,_,oppred) ->
+                             (op_id, oppred_is_nontrivial oppred)) ops;
+                 spec_impgrp_axioms =
+                   List.map (fun (ax_id,_) -> ax_id) axioms;
+                 spec_impgrp_imports = spec_imports }
+  in
+  (*
+  let _ = add_import_group_hints loc impgrp in
+   *)
 
-     (* Add instances for all the imported specs *)
-     let _ =
-       List.iteri
-         (fun j imp ->
-          (* Add spec__importi__interpj : Interpretation s (ref_spec _ constr) *)
-          let _ =
-            ignore
-              (add_definition_constr
-                 (spec_import_interp_id imp_num j)
-                 (Some
-                    (Term.mkApp
-                       (Term.mkConst
-                          (mk_constant specware_mod "Interpretation"),
-                        [| Term.mkConst (global_spec_repr_constant
-                                           loc imp.spec_import_globref);
-                           Term.mkApp
-                             (Term.mkConst
-                                (mk_constant specware_mod "ref_spec"),
-                              [| Term.mkConst (global_spec_repr_constant
-                                                 loc src_spec_globref);
-                                 Term.mkConst
-                                   (mk_constant []
-                                                (Id.to_string
-                                                   (spec_import_id imp_num)))
-                                |])|])))
-                 (imp.spec_import_interp, Evd.empty_evar_universe_context))
-          in
+  (* Add instances for all the imported specs *)
+  let _ =
+    List.iteri
+      (fun j imp ->
+       (* Add spec__importi__interpj : Interpretation s (ref_spec _ constr) *)
+       let _ =
+         ignore
+           (add_definition_constr
+              (spec_import_interp_id imp_num j)
+              (Some
+                 (Term.mkApp
+                    (Term.mkConst
+                       (mk_constant specware_mod "Interpretation"),
+                     [| Term.mkConst (global_spec_repr_constant
+                                        loc imp.spec_import_globref);
+                        Term.mkApp
+                          (Term.mkConst
+                             (mk_constant specware_mod "ref_spec"),
+                           [| Term.mkConst (global_spec_repr_constant
+                                              loc src_spec_globref);
+                              Term.mkConst
+                                (mk_constant []
+                                             (Id.to_string
+                                                (spec_import_id imp_num)))
+                             |])|])))
+              (imp.spec_import_interp, Evd.empty_evar_universe_context))
+       in
 
-          (* Add spec__importi__instancej *)
-          let typeclass_args =
-            concat_map (fun (op_id, op_constr, op_pf_oppred) ->
-                        (field_param_id op_id,
-                         Constrextern.extern_constr true env evd op_constr)::
-                          (match op_pf_oppred with
-                           | Pred_Trivial -> []
-                           | Pred_Eq op_pf_constr ->
-                              [field_proof_param_id op_id,
-                               Constrextern.extern_constr true env evd
-                                                          op_pf_constr]
-                           | Pred_Fun op_pf_constr ->
-                              [field_proof_param_id op_id,
-                               Constrextern.extern_constr true env evd
-                                                          op_pf_constr]))
-                       imp.spec_import_op_constrs in
-          let _ =
-            add_term_instance
-              (loc, Name (spec_import_instance_id imp_num j))
-              (List.map
-                 (fun (ax_id, _) ->
-                  (mk_implicit_assum
-                     (field_param_id ax_id)
-                     (mk_var (loc, field_class_id ax_id))))
-                 axioms)
-              (mk_ref_app_named_args loc
-                                     (global_spec_typeclass_ref
-                                        loc imp.spec_import_globref)
-                                     typeclass_args)
-              (mkAppC
-                 (mk_reference ["Coq"; "Init"; "Logic"] "proj2",
-                  [mk_ref_app_named_args
+       (* Add spec__importi__instancej *)
+       let typeclass_args =
+         concat_map (fun (op_id, op_constr, op_pf_oppred) ->
+                     (field_param_id op_id,
+                      Constrextern.extern_constr true env evd op_constr)::
+                       (match op_pf_oppred with
+                        | Pred_Trivial -> []
+                        | Pred_Eq op_pf_constr ->
+                           [field_proof_param_id op_id,
+                            Constrextern.extern_constr true env evd
+                                                       op_pf_constr]
+                        | Pred_Fun op_pf_constr ->
+                           [field_proof_param_id op_id,
+                            Constrextern.extern_constr true env evd
+                                                       op_pf_constr]))
+                    imp.spec_import_op_constrs in
+       let _ =
+         add_term_instance
+           (loc, Name (spec_import_instance_id imp_num j))
+           (List.map
+              (fun (ax_id, _) ->
+               (mk_implicit_assum
+                  (field_param_id ax_id)
+                  (mk_var (loc, field_class_id ax_id))))
+              axioms)
+           (mk_ref_app_named_args loc
+                                  (global_spec_typeclass_ref
+                                     loc imp.spec_import_globref)
+                                  typeclass_args)
+           (mkAppC
+              (mk_reference ["Coq"; "Init"; "Logic"] "proj2",
+               [mk_ref_app_named_args
+                  loc
+                  (Qualid (loc, mk_qualid specware_mod "spec_models_iso"))
+                  [Id.of_string "IsoToSpecModels",
+                   mk_ref_app_named_args
                      loc
-                     (Qualid (loc, mk_qualid specware_mod "spec_models_iso"))
-                     [Id.of_string "IsoToSpecModels",
-                      mk_ref_app_named_args
-                        loc
-                        (global_spec_iso_ref loc imp.spec_import_globref)
-                        typeclass_args];
-                   mkAppC
-                     (mk_specware_ref "map_model",
-                          [mk_var (loc, spec_import_interp_id imp_num j);
-                           mk_var (loc, spec_import_ops_id imp_num);
-                           mk_var (loc, spec_import_model_id imp_num)])]))
-          in
-          ()
-         ) spec_imports in
+                     (global_spec_iso_ref loc imp.spec_import_globref)
+                     typeclass_args];
+                mkAppC
+                  (mk_specware_ref "map_model",
+                   [mk_var (loc, spec_import_interp_id imp_num j);
+                    spec_ops_expr; spec_model_expr])]))
+       in
+       ()
+      ) spec_imports in
 
-     (* Add the import list to the currernt spec *)
+  (*** Now add the imports to the current spec, and we are done ***)
+  update_current_spec
+    loc
+    (fun spec ->
      {spec with spec_imports = impgrp::spec.spec_imports})
 
 
@@ -1370,13 +1399,9 @@ let complete_spec loc =
                         (loc, (None, Ident (loc, spec.spec_name), None),
                          List.concat
                            (List.rev_map
-                              (fun (op_id,_,oppred) ->
-                               (mk_var (loc, field_param_id op_id))::
-                                 (if oppred_is_nontrivial oppred then
-                                    [mk_var (loc, field_proof_param_id op_id)]
-                                  else
-                                    []
-                              ))
+                              (fun op ->
+                               List.map (fun id -> mk_var (loc, id))
+                                        (op_param_ids op))
                               spec.spec_ops))]))
             (mk_named_tactic_hole
                loc

@@ -177,7 +177,10 @@ let add_suffix_l lid suffix =
   (loc, add_suffix id suffix)
 
 (* Build an expression for a variable from a located identifier *)
-let mk_var id = CRef (Ident id, None)
+let mk_var lid = CRef (Ident lid, None)
+
+(* Build a list of variable expressions *)
+let mk_vars loc ids = List.map (fun id -> mk_var (loc, id)) ids
 
 (* Build an anonymous hole term *)
 let mk_hole loc =
@@ -299,10 +302,19 @@ let record_field_name fld =
   | (((_, AssumExpr (lid, _)), _), _) -> located_elem lid
   | _ -> raise dummy_loc (Failure "record_field_name")
 
-(* Make an implicit {name:tp} assumption, where name is an id and tp
-   is a construction (type constr) *)
-let mk_implicit_assum name tp =
-  LocalRawAssum ([(Loc.dummy_loc, Name name)], Default Implicit, tp)
+(* Make an implicit {id:tp} assumption *)
+let mk_implicit_assum id tp =
+  LocalRawAssum ([(Loc.dummy_loc, Name id)], Default Implicit, tp)
+
+(* Make an explicit (id:tp) assumption *)
+let mk_explicit_assum id tp =
+  LocalRawAssum ([(Loc.dummy_loc, Name id)], Default Explicit, tp)
+
+(* Make an explicit variable assumption *)
+let mk_explicit_var_assum id =
+  mk_explicit_assum id (CHole (dummy_loc,
+                               Some (Evar_kinds.BinderType (Name id)),
+                               IntroAnonymous, None))
 
 (* Add a definition to the current Coq image *)
 let add_definition id params type_opt body =

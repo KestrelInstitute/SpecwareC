@@ -222,6 +222,65 @@ Definition spec_example_group :=
                                     (forall (x:T), g_plus x (g_inv x) = g_zero)
     ])))).
 
+(* Example 6: The Natural Numbers as a Monoid *)
+Definition spec_example_natmonoid :=
+Spec_ConsOp "T" Type (@Pred_Eq Type nat)
+  (fun T__param T__proof =>
+   Spec_ConsOp "m_zero" (def T__param T__proof) (Pred_Eq 0)
+     (fun m_zero__param m_zero__proof =>
+      Spec_ConsOp "m_plus"
+        (def T__param T__proof ->
+         def T__param T__proof -> def T__param T__proof) 
+        (Pred_Eq Nat.add)
+        (fun m_plus__param m_plus__proof
+         =>
+         Spec_Axioms
+           (ax_pair "m_zero_left"
+              (forall x : def T__param T__proof,
+               def m_plus__param m_plus__proof
+                 (def m_zero__param m_zero__proof) x = x)
+            :: (ax_pair "m_zero_right"
+                  (forall x : def T__param T__proof,
+                   def m_plus__param m_plus__proof x
+                     (def m_zero__param m_zero__proof) = x)
+                :: ax_pair "m_plus_assoc"
+                     (forall x y z : def T__param T__proof,
+                      def m_plus__param m_plus__proof x
+                        (def m_plus__param m_plus__proof y z) =
+                      def m_plus__param m_plus__proof
+                        (def m_plus__param m_plus__proof x y) z) :: nil)%list)))).
+
+Definition spec_example_ops_natmonoid
+           T__param T__proof m_zero__param m_zero__proof m_plus__param m_plus__proof :
+  spec_ops spec_example_natmonoid :=
+  (@existT) _ _ T__param
+    ((@existT) _ _ T__proof
+       ((@existT) _ _ m_zero__param
+          ((@existT) _ _ m_zero__proof
+             ((@existT) _ _ m_plus__param
+                ((@existT) _ _ m_plus__proof ((@tt))))))).
+
+Definition spec_example_model_natmonoid
+           T__param T__proof m_zero__param m_zero__proof m_plus__param m_plus__proof
+           (m_zero_left__param :
+              forall x : def T__param T__proof,
+               def m_plus__param m_plus__proof
+                 (def m_zero__param m_zero__proof) x = x)
+           (m_zero_right__param :
+              forall x : def T__param T__proof,
+               def m_plus__param m_plus__proof
+                 x (def m_zero__param m_zero__proof) = x)
+           (m_plus_assoc__param :
+              forall x y z : def T__param T__proof,
+                def m_plus__param m_plus__proof x
+                    (def m_plus__param m_plus__proof y z) =
+                def m_plus__param m_plus__proof
+                    (def m_plus__param m_plus__proof x y) z) :
+  spec_model spec_example_natmonoid
+             (spec_example_ops_natmonoid T__param T__proof m_zero__param
+                                         m_zero__proof m_plus__param m_plus__proof) :=
+  conj m_zero_left__param (conj m_zero_right__param m_plus_assoc__param).
+
 
 (*** Interpretations ***)
 
