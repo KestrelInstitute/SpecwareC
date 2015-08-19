@@ -131,7 +131,7 @@ Spec NatMonoid.
 
 Spec Definition T : Type := nat.
 Spec Definition m_zero : T := O.
-Spec Definition m_plus : (T -> T -> T) := Nat.add.
+Spec Definition m_plus : (T -> T -> T) := plus.
 (* Spec Variable m_plus : (T -> T -> T). *)
 
 Spec Axiom m_zero_left : (forall x, m_plus m_zero x = x).
@@ -146,8 +146,6 @@ Print NatMonoid.NatMonoid__Spec.
 
 Spec NatMonoid_Import.
 Spec ImportTerm (id_refinement_import NatMonoid.NatMonoid__Spec).
-FIXME HERE NOW: imports still don't work right for m_zero!
-
 Spec End NatMonoid_Import.
 
 Print NatMonoid_Import.NatMonoid_Import__Spec.

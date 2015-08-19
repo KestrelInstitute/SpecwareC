@@ -50,14 +50,11 @@ let field_proof_id f = add_suffix f "proof"
 (* Test if an id has the form f__proof, returning f if so *)
 let match_proof_id id =
   let id_str = Id.to_string id in
-  let _ = debug_printf 1 "match_proof_id: %s\n" id_str in
   let str_len = String.length id_str in
   if str_len > 7 &&
        String.compare (String.sub id_str (str_len - 7) 7) "__proof" = 0 then
-    let _ = debug_printf 1 "match_proof_id: true\n" in
     Some (Id.of_string (String.sub id_str 0 (str_len - 7)))
   else
-    let _ = debug_printf 1 "match_proof_id: false\n" in
     None
 
 (* The name of the instance associated with a field *)
@@ -539,12 +536,16 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
     reduce_constr
       [Unfold (concat_map
                  (fun op ->
+                  let mk_unfold id =
+                    (Locus.AllOccurrences, AN (Ident (loc, id))) in
                   let (op_id,_,oppred) = op in
-                  (Locus.AllOccurrences, AN (Ident (loc, op_accessor_id op)))::
-                    (if oppred_is_nontrivial oppred then
-                       [Locus.AllOccurrences,
-                        AN (Ident (loc, field_proof_id op_id))]
-                     else []))
+                  if oppred_is_eq oppred then
+                    [mk_unfold op_id; mk_unfold (field_var_id op_id);
+                     mk_unfold (field_proof_id op_id)]
+                  else if oppred_is_nontrivial oppred then
+                    [mk_unfold op_id; mk_unfold (field_proof_id op_id)]
+                  else
+                    [mk_unfold op_id])
                  spec.spec_ops)]
       constr
   in
@@ -866,11 +867,11 @@ let add_spec_field axiom_p lid tp oppred =
                f := def f__var f__proof *)
             (match oppred with
              | Pred_Eq _ ->
-                add_local_definition lid [] None
-                                     (mkAppC
-                                        (mk_specware_ref "def",
-                                         [mk_var (loc, acc_id);
-                                          mk_var (loc, field_proof_id f)]))
+                add_definition lid [] None
+                               (mkAppC
+                                  (mk_specware_ref "def",
+                                   [mk_var (loc, acc_id);
+                                    mk_var (loc, field_proof_id f)]))
              | _ -> ())
        in
        (* Then, finally, add the op to the current spec *)
@@ -1027,27 +1028,28 @@ let import_refinement_constr_expr loc constr_expr =
   (* Helper function to fold "def f__param f__proof" into f (Coq's built-in fold
   does not seem to work...) *)
   let rec fold_defs eq_ids constr =
-    Term.map_constr
-      (fun c ->
-       match Term.kind_of_term c with
-       | Term.App (head, args) ->
-          let args_len = Array.length args in
-          if (constr_is_constant
-                (mk_constant specware_mod "def") head)
-             && args_len >= 4 then
-            (match Term.kind_of_term args.(3) with
-             | Term.Var f__proof ->
-                (match match_proof_id f__proof with
-                 | Some f ->
-                    if Id.Set.mem f eq_ids then
-                      Term.mkApp (Term.mkVar f,
-                                  Array.sub args 4 (args_len - 4))
-                    else fold_defs eq_ids c
-                 | None -> fold_defs eq_ids c)
-             | _ -> fold_defs eq_ids c)
-          else fold_defs eq_ids c
-       | _ -> fold_defs eq_ids c)
-      constr in
+    let recurse () = Term.map_constr (fold_defs eq_ids) constr in
+    match Term.kind_of_term constr with
+    | Term.App (head, args) ->
+       let args_len = Array.length args in
+       if (constr_is_constant
+             (mk_constant specware_mod "def") head)
+          && args_len >= 4 then
+         (match Term.kind_of_term args.(3) with
+          | Term.Var f__proof ->
+             (match match_proof_id f__proof with
+              | Some f ->
+                 if Id.Set.mem f eq_ids then
+                   Term.mkApp (Term.mkVar f,
+                               Array.map
+                                 (fold_defs eq_ids)
+                                 (Array.sub args 4 (args_len - 4)))
+                 else recurse ()
+              | None -> recurse ())
+          | _ -> recurse ())
+       else recurse ()
+    | _ -> recurse ()
+  in
   let extern_with_folds eq_ids constr =
     Constrextern.extern_constr true env evd (fold_defs eq_ids constr)
   in
