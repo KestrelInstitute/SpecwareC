@@ -2,3 +2,4 @@
 * tactics for substituting for fields in refinements
 * finalizeRecordType
 * finalizeInductiveType
+* improve parsing for Spec Variable foo : T  so we don't need parens around T
