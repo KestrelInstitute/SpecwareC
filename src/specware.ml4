@@ -1575,6 +1575,12 @@ VERNAC COMMAND EXTEND Spec
     -> [ reporting_exceptions
            (fun () -> begin_new_spec lspec_name) ]
 
+  (* End an interactive spec definition *)
+  | [ "Spec" "End" var(lspec_name) ]
+    => [ (Vernacexpr.VtSideff [located_elem lspec_name], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () -> end_new_spec lspec_name) ]
+
   (* Start a non-interactive spec definition *)
   | [ "Spec" var(lspec_name) ":=" spec_term(st) ]
     => [ (Vernacexpr.VtSideff [located_elem lspec_name], Vernacexpr.VtLater) ]
@@ -1584,11 +1590,46 @@ VERNAC COMMAND EXTEND Spec
             let _ = import_spec_term dummy_loc st in
             end_new_spec lspec_name) ]
 
-  (* End an interactive spec definition *)
-  | [ "Spec" "End" var(lspec_name) ]
-    => [ (Vernacexpr.VtSideff [located_elem lspec_name], Vernacexpr.VtLater) ]
+  (* Start a definition of a spec via refinement *)
+  | [ "Spec" var(lspec_name) ":=" "transform" spec_term(st) ]
+    => [ (Vernacexpr.VtStartProof ("Classic",Doesn'tGuaranteeOpacity,
+                                   [located_elem lspec_name]),
+          Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () -> end_new_spec lspec_name) ]
+           (fun () ->
+            let st_expr = refinement_expr_of_spec_term st in
+            let spec_id = located_elem lspec_name in
+            let refinement_id = add_suffix spec_id "refinement" in
+            let loc = located_loc lspec_name in
+            let env = Global.env () in
+            let evd = Evd.from_env env in
+            let pf_expr = mkAppC (mk_specware_ref "RefinementOf",
+                                  [mkAppC (mk_specware_ref "ref_spec",
+                                           [mk_hole loc; st_expr])]) in
+            let (pf_constr,uctx) = Constrintern.interp_constr env evd pf_expr in
+            Proof_global.start_proof
+              evd refinement_id
+              (Global, false, DefinitionBody Definition) [env, pf_constr]
+              (fun ending ->
+               (* First check that the ending was "Defined" *)
+               let _ =
+                 match ending with
+                 | Proof_global.Proved (false, _, _) -> ()
+                 | _ -> user_err_loc
+                          (loc, "_",
+                           str "Refinements must end with \"Defined\"")
+               in
+               (* Call the standard proof terminator to save the proof *)
+               let _ = Lemmas.standard_proof_terminator
+                         [] (Lemmas.mk_hook (fun _ _ -> ())) ending in
+               (* FIXME: Why do we need to discard the current proof here? *)
+               let _ = Proof_global.discard_current () in
+               (* Now create the new spec and import the generated refinement *)
+               let _ = begin_new_spec lspec_name in
+               let _ = import_refinement_constr_expr
+                         loc (mkAppC (mk_specware_ref "refinement_compose",
+                                      [st_expr; mk_var (loc, refinement_id)])) in
+               end_new_spec lspec_name)) ]
 
   (* Add a declared op *)
   | [ "Spec" "Variable" var(lid) ":" constr(tp) ]

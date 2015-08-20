@@ -145,6 +145,13 @@ Spec End NatMonoid_Import.
 Print NatMonoid_Import.NatMonoid_Import__Spec.
 Print NatMonoid.NatMonoid__Spec.
 
+Spec NatMonoid_Import2 := transform NatMonoid.
+apply id_refinement.
+Defined.
+
+Print NatMonoid_Import2.NatMonoid_Import2.
+
+
 
 Spec Group2.
 

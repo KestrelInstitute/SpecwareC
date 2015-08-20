@@ -994,6 +994,17 @@ Definition refinement_interp {spec spec'}
      ref_imports := map (fun imp => refinement_import_interp imp i)
                          (ref_imports _ R) |}.
 
+(* Compose two refinements together *)
+Definition refinement_compose {spec}
+           (R1: RefinementOf spec)
+           (R2: RefinementOf (ref_spec spec R1)) : RefinementOf spec :=
+  {| ref_spec := ref_spec _ R2;
+     ref_interp := interp_compose (ref_interp _ R2) (ref_interp _ R1);
+     ref_imports :=
+       (map (fun imp => refinement_import_interp imp (ref_interp _ R2))
+            (ref_imports _ R1))
+         ++ (ref_imports _ R2) |}.
+
 (* Apply a spec substitution to a refinement *)
 Definition refinement_subst {spec spec1 spec2}
            (R: RefinementOf spec) (sub: SubSpec spec1 (ref_spec _ R))
