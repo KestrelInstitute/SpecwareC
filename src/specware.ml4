@@ -1618,7 +1618,8 @@ VERNAC COMMAND EXTEND Spec
     -> [ reporting_exceptions
            (fun () -> add_spec_field true lid tp Pred_Trivial) ]
 
-  | [ "Spec" "ImportTerm" constr(tm) ]
+  (* Import a spec using a "raw" expression of type RefinementOf *)
+  | [ "Spec" "RawImport" constr(tm) ]
     => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
            (fun () ->
