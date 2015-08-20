@@ -1573,15 +1573,22 @@ VERNAC COMMAND EXTEND Spec
   | [ "Spec" var(lspec_name) ]
     => [ (Vernacexpr.VtSideff [located_elem lspec_name], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
+           (fun () -> begin_new_spec lspec_name) ]
+
+  (* Start a non-interactive spec definition *)
+  | [ "Spec" var(lspec_name) ":=" spec_term(st) ]
+    => [ (Vernacexpr.VtSideff [located_elem lspec_name], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
            (fun () ->
-            begin_new_spec lspec_name) ]
+            let _ = begin_new_spec lspec_name in
+            let _ = import_spec_term dummy_loc st in
+            end_new_spec lspec_name) ]
 
   (* End an interactive spec definition *)
   | [ "Spec" "End" var(lspec_name) ]
     => [ (Vernacexpr.VtSideff [located_elem lspec_name], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () ->
-            ignore (end_new_spec lspec_name)) ]
+           (fun () -> end_new_spec lspec_name) ]
 
   (* Add a declared op *)
   | [ "Spec" "Variable" var(lid) ":" constr(tp) ]
