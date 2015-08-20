@@ -1,1 +1,4 @@
-* Interpretations
+* at tactics for refinement
+* tactics for substituting for fields in refinements
+* finalizeRecordType
+* finalizeInductiveType

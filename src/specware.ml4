@@ -1378,7 +1378,16 @@ let spec_translation_elem_descr : (spec_translation_elem,
 
 (* Inductive description of SpecTranslation objects *)
 let spec_translation_descr : (spec_translation, spec_translation) constr_descr =
-  list_descr spec_translation_elem_descr
+  Descr_Iso
+    ("SpecTranslation",
+     (function
+       | Left (elems, ()) -> elems
+       | Right emp -> emp.elim_empty),
+     (fun elems -> Left (elems, ())),
+     unary_ctor
+       specware_mod "mkSpecTranslation" (list_descr spec_translation_elem_descr)
+       Descr_Fail)
+
 
 (* A spec term is shorthand for refinements involving named specs, translations,
 and spec substitutions *)
@@ -1560,7 +1569,7 @@ END
 (* Syntactic class to parse spec terms *)
 VERNAC ARGUMENT EXTEND spec_term
   | [ global(r) ] -> [ SpecRef r ]
-  | [ spec_term(st) "{" name_translation(xlate) "}" ] -> [ SpecXlate (st, xlate) ]
+  | [ spec_term(st) "{{" name_translation(xlate) "}}" ] -> [ SpecXlate (st, xlate) ]
   | [ spec_term(st) "[" global(morph_ref) "]" ] -> [ SpecSubst (st, morph_ref) ]
 END
 

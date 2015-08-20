@@ -63,7 +63,7 @@ End Monoid_Thms.
 
 Spec Group.
 
-Spec Import Monoid {m_% +-> g_%}.
+Spec Import Monoid {{m_% +-> g_%}}.
 
 Spec Variable g_inv : (T -> T).
 Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
@@ -170,6 +170,8 @@ Spec End Group2.
 
 
 Spec Interpretation mon2group2 : Monoid -> Group2.
+unfold Monoid.Monoid__Spec, Group2.Group2__Spec.
+interp_translate {{ "m_"% +-> "g_"% }}.
 
 
 (*

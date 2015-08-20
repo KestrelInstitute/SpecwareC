@@ -859,12 +859,35 @@ Ltac prove_spec_models_iso :=
 
 (*** Spec Translations ***)
 
+(* A spec translation element, which denotes either a single mapping from field
+f_from to field f_to, or a set of mappings from fields with prefix f_from_prefix
+to the result of replacing that prefix with f_to_prefix. *)
 Inductive SpecTranslationElem : Set :=
 | XlateSingle (f_from f_to : Field)
 | XlateWild (f_from_prefix f_to_prefix : string)
 .
 
-Definition SpecTranslation : Set := list SpecTranslationElem.
+Arguments XlateSingle (f_from%string) (f_to%string).
+Arguments XlateWild (f_from_prefix%string) (f_to_prefix%string).
+
+(* A spec translation is just a list of spec translation elements *)
+Inductive SpecTranslation : Set :=
+| mkSpecTranslation (elems: list SpecTranslationElem).
+
+Notation "f_from '+->' f_to" :=
+  (XlateSingle f_from f_to)
+  (at level 80, no associativity) : spec_translation_elem_scope.
+Notation "f_from '%' '+->' f_to '%'" :=
+  (XlateWild f_from f_to)
+  (at level 80, no associativity) : spec_translation_elem_scope.
+
+Bind Scope spec_translation_elem_scope with SpecTranslationElem.
+Delimit Scope spec_translation_elem_scope with spec_translation_elem.
+
+(* We use double curly brackets to write spec translations *)
+Notation "'{{' elem1 , .. , elemn '}}'" :=
+  (mkSpecTranslation (cons elem1%spec_translation_elem .. (cons elemn%spec_translation_elem nil) ..))
+  (at level 0).
 
 Definition translate_field1 elem (f: Field) : option Field :=
   match elem with
@@ -877,14 +900,14 @@ Definition translate_field1 elem (f: Field) : option Field :=
       else None
   end.
 
-Fixpoint translate_field xlate f : Field :=
+Definition translate_field xlate f : Field :=
   match xlate with
-    | [] => f
-    | elem::xlate' =>
-      match translate_field1 elem f with
-        | Some f' => f'
-        | None => translate_field xlate' f
-      end
+    | mkSpecTranslation elems =>
+      fold_right (fun elem rec =>
+                    match translate_field1 elem f with
+                      | Some f' => f'
+                      | None => rec
+                    end) f elems
   end.
 
 Definition translate_spec_axioms xlate axioms : list (Field * Prop) :=
@@ -934,6 +957,11 @@ revert ops H; induction spec; intros.
 apply (translate_spec_axioms_impl xlate); assumption.
 apply H. assumption.
 Defined.
+
+(* Tactic to prove an interpretation by translating the domain spec *)
+Ltac interp_translate xlate :=
+  refine (interp_compose _ (translate_spec_interp xlate _));
+  simpl (translate_spec _ _).
 
 
 (*** Refinement ***)
