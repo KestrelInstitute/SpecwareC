@@ -166,7 +166,7 @@ let spec_typeclass_builder_qualid locref =
 let spec_repr_qualid locref =
   qualid_cons locref (spec_repr_id (spec_locref_basename locref))
 
-let spec_repr_ref loc locref =
+let spec_repr_ref (loc, locref) =
   Qualid (loc, spec_repr_qualid locref)
 
 let spec_iso_qualid locref =
@@ -223,7 +223,7 @@ let global_field_in_global_spec globref fname =
 
 (* Return a reference to the Spec object for a spec *)
 let global_spec_repr_ref loc globref =
-  spec_repr_ref loc (spec_globref_to_locref globref)
+  spec_repr_ref (loc, spec_globref_to_locref globref)
 
 let global_spec_iso_ref loc globref =
   spec_iso_ref loc (spec_globref_to_locref globref)
@@ -1397,9 +1397,8 @@ let refinement_expr_of_spec_term st =
   let rec helper st =
     match st with
     | SpecRef r ->
-       let (loc, spec_locref) = qualid_of_reference r in
        mkAppC (mk_specware_ref "id_refinement_import",
-               [CRef (Qualid (loc, spec_repr_qualid spec_locref), None)])
+               [mkRefC (spec_repr_ref (qualid_of_reference r))])
     | SpecXlate (st', xlate) ->
        let ref_expr' = helper st' in
        mkAppC (mk_specware_ref "refinement_translate",
@@ -1407,7 +1406,7 @@ let refinement_expr_of_spec_term st =
     | SpecSubst (st', r) ->
        let ref_expr' = helper st' in
        mkAppC (mk_specware_ref "refinement_subst_import",
-               [ref_expr'; CRef (r, None);
+               [ref_expr'; mkRefC r;
                 mk_named_tactic_hole (loc_of_reference r)
                                      (mk_qualid specware_mod "prove_sub_spec")])
   in
@@ -1673,17 +1672,24 @@ VERNAC COMMAND EXTEND Spec
     -> [ reporting_exceptions
            (fun () -> import_spec_term dummy_loc st) ]
 
+  (* Define an interpretation *)
+  | [ "Spec" "Interpretation" var(lmorph_name) ":" global(dom) "->" global(codom) ]
+    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity,
+                                   [located_elem lmorph_name]),
+          Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () ->
+            start_definition
+              lmorph_name []
+              (mkAppC (mk_specware_ref "Interpretation",
+                       [mkRefC (spec_repr_ref (qualid_of_reference dom));
+                        mkRefC (spec_repr_ref (qualid_of_reference codom))]))) ]
+
 END
 
 (* Top-level syntax for morphisms *)
 (*
 VERNAC COMMAND EXTEND Morphism
-  (* Define a named morphism with the given name translation *)
-  | [ "Spec" "Morphism" ident(morph_name) ":" global(s1) "->" global(s2)
-             "{" spec_translation(xlate) "}" ]
-    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity, [morph_name]),
-          Vernacexpr.VtLater) ]
-    -> [ start_morphism (dummy_loc, morph_name) s1 s2 xlate ]
 
   (* Define a named morphism with no name translation *)
   | [ "Spec" "Morphism" ident(morph_name) ":" global(s1) "->" global(s2) ]

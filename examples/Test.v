@@ -152,7 +152,6 @@ Defined.
 Print NatMonoid_Import2.NatMonoid_Import2.
 
 
-
 Spec Group2.
 
 Spec Variable T : Type.
@@ -168,6 +167,10 @@ Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
 Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 
 Spec End Group2.
+
+
+Spec Interpretation mon2group2 : Monoid -> Group2.
+
 
 (*
 Section Group2_Thms.

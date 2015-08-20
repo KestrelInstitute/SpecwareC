@@ -334,6 +334,14 @@ let add_local_definition id params type_opt body =
   let _ = debug_printf 1 "@[add_local_definition command:@ %a@]\n" pp_vernac cmd in
   interp (located_loc id, cmd)
 
+(* Add an interactive definition, filled out by user tactics *)
+let start_definition id params tp =
+  let cmd = VernacDefinition
+              ((None, Definition), id, ProveBody (params, tp))
+  in
+  let _ = debug_printf 1 "@[start_definition command:@ %a@]\n" pp_vernac cmd in
+  interp (located_loc id, cmd)
+
 (* Add a definition using constrs, not constr_exprs *)
 let add_definition_constr id type_opt (body, uctx) =
   let _ = debug_printf 1 "@[add_definition_constr: %s :=@ %a @]\n"
