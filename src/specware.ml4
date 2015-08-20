@@ -106,9 +106,6 @@ let spec_import_instance_id i j =
     (add_suffix (Id.of_string "spec") ("import" ^ string_of_int i))
     ("instance" ^ string_of_int j)
 
-(* The variable name for the implicit spec argument of a morphism instance *)
-let morph_spec_arg_id = Id.of_string "Spec"
-
 
 (***
  *** Specware-Specific Symbols
@@ -174,6 +171,9 @@ let spec_iso_qualid locref =
 
 let spec_iso_ref loc locref =
   Qualid (loc, spec_iso_qualid locref)
+
+let spec_ops_ref loc locref =
+  Qualid (loc, qualid_cons locref (spec_ops_id (spec_locref_basename locref)))
 
 (* A global reference to a spec is a global reference to the spec's
    module *)
@@ -523,7 +523,9 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
              specware_mod "Spec_Axioms" (hnf_descr axiom_list_descr)
              Descr_Fail)))
 
-(* Build a term of type Spec that represents a spec *)
+(* Build a constr of type Spec that represents a spec; we don't use constr_expr
+since we have to do some unfolding and we don't want to extern the resulting
+constr to constr_expr just to intern it back to constr again *)
 let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
   (* Get the current Coq context *)
   let (evd,env) = Lemmas.get_current_context () in
@@ -887,6 +889,86 @@ let add_spec_field axiom_p lid tp oppred =
 
 
 (***
+ *** Interpretations
+ ***)
+
+(* FIXME HERE NOW *)
+let add_instance_for_interp loc id params dom_globref interp codom_ops codom_model =
+  (* Build a Coq environment with the params *)
+  let env = Global.env () in
+  let evd = Evd.from_env env in
+  let evdref = ref evd in
+  let (_, ((env_with_params, _), _)) =
+    Constrintern.interp_context_evars env evdref params in
+
+  (* Look up the spec structure for the domain spec *)
+  let dom_spec = lookup_global_spec dom_globref in
+
+  (* Normalize the term (map_ops interp codom_ops) to get the ops of the domain
+     spec in terms of the ops of the co-domain spec *)
+  let (map_ops_constr, uctx) =
+    Constrintern.interp_constr
+      env_with_params !evdref
+      (mkAppC (mk_specware_ref "map_ops", [interp; codom_ops])) in
+  let op_constr_list =
+    destruct_constr spec_ops_descr (compute_constr map_ops_constr)
+  in
+
+  (* Build a list that maps each op in the domain spec to the constrs that build
+     it and (optionally) its proof in the co-domain spec *)
+  let op_constrs =
+    List.map2
+      (fun (op_id, _, oppred) (op_constr, op_proof_constr) ->
+       (op_id, op_constr,
+        map_oppred (fun _ -> op_proof_constr) oppred))
+      (List.rev dom_spec.spec_ops) op_constr_list
+  in
+
+  (* Build a list of the arguments of the domain spec's typeclass *)
+  (* FIXME: figure out a way to not use extern_constr here (which would need a
+  way to add type-class instances from constrs instead of constr_exprs...) *)
+  let typeclass_args =
+    concat_map (fun (op_id, op_constr, op_pf_oppred) ->
+                (field_param_id op_id, Constrextern.extern_constr
+                                         true env_with_params !evdref op_constr)
+                ::(match op_pf_oppred with
+                   | Pred_Trivial -> []
+                   | Pred_Eq op_pf_constr ->
+                      [field_proof_param_id op_id,
+                       Constrextern.extern_constr
+                         true env_with_params !evdref op_pf_constr]
+                   | Pred_Fun op_pf_constr ->
+                      [field_proof_param_id op_id,
+                       Constrextern.extern_constr
+                         true env_with_params !evdref op_pf_constr]))
+               op_constrs in
+
+  (* Now add the actual instance *)
+  let _ =
+    add_term_instance
+      (loc, Name id)
+      params
+      (mk_ref_app_named_args loc
+                             (global_spec_typeclass_ref loc dom_globref)
+                             typeclass_args)
+      (mkAppC
+         (mk_reference ["Coq"; "Init"; "Logic"] "proj2",
+          [mk_ref_app_named_args
+             loc
+             (Qualid (loc, mk_qualid specware_mod "spec_models_iso"))
+             [Id.of_string "IsoToSpecModels",
+              mk_ref_app_named_args
+                loc
+                (global_spec_iso_ref loc dom_globref)
+                typeclass_args];
+           mkAppC
+             (mk_specware_ref "map_model", [interp; codom_ops; codom_model])]))
+  in
+
+  op_constrs
+
+
+(***
  *** Spec Imports
  ***)
 
@@ -1152,14 +1234,18 @@ let import_refinement_constr_expr loc constr_expr =
   (*** Now we build the instances ***)
 
   (* Get the Coq context again, to have the ops and axioms in the context *)
+  (*
   let env = Global.env () in
   let evd = Evd.from_env env in
+   *)
 
   (* Interpret the value of spec_ops__import<i> to a constr *)
+  (*
   let ops_constr =
     hnf_constr
       (fst (Constrintern.interp_constr env evd spec_ops_expr))
   in
+   *)
   (* Interpret the value of spec_model__import<i> to a constr *)
   (*
      let model_constr =
@@ -1169,40 +1255,63 @@ let import_refinement_constr_expr loc constr_expr =
      in
    *)
 
-  (* Build the spec_import list, which includes the constrs for the ops of each
-  source spec (needed to build the instances below) *)
+  (* Add the typeclass instances, while building the spec_imports list *)
   let spec_imports =
-    List.map
-      (fun refimp ->
-       (* Look up the spec structure for the imported spec *)
-       let imp_spec = lookup_global_spec refimp.ref_import_fromspec in
+    List.mapi
+      (fun j refimp ->
 
-       (* Normalize the term (map_ops interp spec_ops__import<i>) to get the
-          ops of imp_spec in terms of the ops of the current spec *)
-       let imp_op_constr_list =
-         destruct_constr
-           spec_ops_descr
-           (compute_constr
-              (Term.mkApp
-                 (Term.mkConst (mk_constant specware_mod "map_ops"),
-                  [| Term.mkConst (global_spec_repr_constant
-                                     loc refimp.ref_import_fromspec);
-                     Term.mkApp
-                       (Term.mkConst (mk_constant specware_mod "ref_spec"),
-                        [| Term.mkConst (global_spec_repr_constant
-                                           loc src_spec_globref);
-                           Term.mkVar (spec_import_id imp_num) |]);
-                     refimp.ref_import_interp;
-                     ops_constr |])))
+       (* Add spec__import<i>__interp<j> :
+            Interpretation <import spec j> (ref_spec _ spec__import<i>) *)
+       let _ =
+         ignore
+           (add_definition_constr
+              (spec_import_interp_id imp_num j)
+              (Some
+                 (Term.mkApp
+                    (Term.mkConst
+                       (mk_constant specware_mod "Interpretation"),
+                     [| Term.mkConst (global_spec_repr_constant
+                                        loc refimp.ref_import_fromspec);
+                        Term.mkApp
+                          (Term.mkConst
+                             (mk_constant specware_mod "ref_spec"),
+                           [| Term.mkConst (global_spec_repr_constant
+                                              loc src_spec_globref);
+                              Term.mkConst
+                                (mk_constant []
+                                             (Id.to_string
+                                                (spec_import_id imp_num)))
+                             |])|])))
+              (refimp.ref_import_interp, Evd.empty_evar_universe_context))
        in
-       (* Build a list that maps each op in the imported spec to the constrs
-          that build it and (optionally) its proof in the current spec *)
+
+       (* Add instance spec__import<i>__instance<j> *)
        let imp_op_constrs =
-         List.map2
-           (fun (op_id, _, oppred) (op_constr, op_proof_constr) ->
-            (op_id, op_constr,
-             map_oppred (fun _ -> op_proof_constr) oppred))
-           (List.rev imp_spec.spec_ops) imp_op_constr_list
+         add_instance_for_interp
+           loc (spec_import_instance_id imp_num j)
+           (* Parameters: the axiom typeclasses *)
+           (List.map
+              (fun (ax_id, _) ->
+               (mk_implicit_assum
+                  (field_param_id ax_id)
+                  (mk_var (loc, field_class_id ax_id))))
+              axioms)
+           (* Domain spec *)
+           refimp.ref_import_fromspec
+           (* Co-domain spec: the ref_spec of spec__import<i> *)
+           (*
+           (Term.mkApp
+              (Term.mkConst (mk_constant specware_mod "ref_spec"),
+               [| Term.mkConst (global_spec_repr_constant
+                                  loc src_spec_globref);
+                  Term.mkVar (spec_import_id imp_num) |]))
+            *)
+           (* Interpretation: spec__import<i>__interp<j> *)
+           (mk_var (loc, spec_import_interp_id imp_num j))
+           (* The ops of the co-domain spec *)
+           spec_ops_expr
+           (* The model of the co-domain spec *)
+           spec_model_expr
        in
 
        (* Build (map_model interp spec_ops__import<i> spec_model__import<i>)
@@ -1261,81 +1370,6 @@ let import_refinement_constr_expr loc constr_expr =
   (*
   let _ = add_import_group_hints loc impgrp in
    *)
-
-  (* Add instances for all the imported specs *)
-  let _ =
-    List.iteri
-      (fun j imp ->
-       (* Add spec__importi__interpj : Interpretation s (ref_spec _ constr) *)
-       let _ =
-         ignore
-           (add_definition_constr
-              (spec_import_interp_id imp_num j)
-              (Some
-                 (Term.mkApp
-                    (Term.mkConst
-                       (mk_constant specware_mod "Interpretation"),
-                     [| Term.mkConst (global_spec_repr_constant
-                                        loc imp.spec_import_globref);
-                        Term.mkApp
-                          (Term.mkConst
-                             (mk_constant specware_mod "ref_spec"),
-                           [| Term.mkConst (global_spec_repr_constant
-                                              loc src_spec_globref);
-                              Term.mkConst
-                                (mk_constant []
-                                             (Id.to_string
-                                                (spec_import_id imp_num)))
-                             |])|])))
-              (imp.spec_import_interp, Evd.empty_evar_universe_context))
-       in
-
-       (* Add spec__importi__instancej *)
-       let typeclass_args =
-         concat_map (fun (op_id, op_constr, op_pf_oppred) ->
-                     (field_param_id op_id,
-                      Constrextern.extern_constr true env evd op_constr)::
-                       (match op_pf_oppred with
-                        | Pred_Trivial -> []
-                        | Pred_Eq op_pf_constr ->
-                           [field_proof_param_id op_id,
-                            Constrextern.extern_constr true env evd
-                                                       op_pf_constr]
-                        | Pred_Fun op_pf_constr ->
-                           [field_proof_param_id op_id,
-                            Constrextern.extern_constr true env evd
-                                                       op_pf_constr]))
-                    imp.spec_import_op_constrs in
-       let _ =
-         add_term_instance
-           (loc, Name (spec_import_instance_id imp_num j))
-           (List.map
-              (fun (ax_id, _) ->
-               (mk_implicit_assum
-                  (field_param_id ax_id)
-                  (mk_var (loc, field_class_id ax_id))))
-              axioms)
-           (mk_ref_app_named_args loc
-                                  (global_spec_typeclass_ref
-                                     loc imp.spec_import_globref)
-                                  typeclass_args)
-           (mkAppC
-              (mk_reference ["Coq"; "Init"; "Logic"] "proj2",
-               [mk_ref_app_named_args
-                  loc
-                  (Qualid (loc, mk_qualid specware_mod "spec_models_iso"))
-                  [Id.of_string "IsoToSpecModels",
-                   mk_ref_app_named_args
-                     loc
-                     (global_spec_iso_ref loc imp.spec_import_globref)
-                     typeclass_args];
-                mkAppC
-                  (mk_specware_ref "map_model",
-                   [mk_var (loc, spec_import_interp_id imp_num j);
-                    spec_ops_expr; spec_model_expr])]))
-       in
-       ()
-      ) spec_imports in
 
   (*** Now add the imports to the current spec, and we are done ***)
   update_current_spec
@@ -1691,6 +1725,43 @@ VERNAC COMMAND EXTEND Spec
     -> [ reporting_exceptions
            (fun () ->
             start_definition
+              ~hook:(fun _ _ ->
+                     let loc = located_loc lmorph_name in
+                     let morph_name = located_elem lmorph_name in
+                     let codom_locref = spec_locref_of_ref codom in
+                     let codom_spec = lookup_spec codom_locref in
+                     let op_param_ids =
+                       concat_map op_param_ids (List.rev codom_spec.spec_ops) in
+                     let codom_args = List.map
+                                        (fun id -> (id, mk_var (loc, id)))
+                                        op_param_ids in
+                     ignore
+                       (add_instance_for_interp
+                          (* The loc *)
+                          loc
+                          (* Instance name: morph_name__instance *)
+                          (add_suffix morph_name "instance")
+                          (* Params: the args of codom plus a codom instance *)
+                          (List.map mk_implicit_var_assum op_param_ids
+                           @ [mk_implicit_assum
+                                (Id.of_string "Spec")
+                                (mk_ref_app_named_args
+                                   loc
+                                   (spec_typeclass_ref loc codom_locref)
+                                   codom_args)])
+                          (* Domain globref *)
+                          (lookup_spec_globref (spec_locref_of_ref dom))
+                          (* Interpretation: the one we just added *)
+                          (mk_var (loc, morph_name))
+                          (* Co-domain spec ops: codom.codom__ops *)
+                          (mk_ref_app_named_args
+                                   loc
+                                   (spec_ops_ref loc codom_locref)
+                                   codom_args)
+                          (* Co-domain spec model: proj1 spec_models_iso Spec *)
+                          (mkAppC (mk_reference ["Coq"; "Init"; "Logic"] "proj1",
+                                   [mk_specware_ref "spec_models_iso";
+                                    mk_var (loc, Id.of_string "Spec")]))))
               lmorph_name []
               (mkAppC (mk_specware_ref "Interpretation",
                        [mkRefC (spec_repr_ref (qualid_of_reference dom));

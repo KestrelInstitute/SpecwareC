@@ -177,68 +177,6 @@ prove_sub_spec.
 Defined.
 
 
-Definition test1 :=
-  Specware.Spec.refinement_subst
-    (Specware.Spec.id_refinement Monoid.Monoid__Spec) mon2group2 $(prove_sub_spec)$.
-
-Eval hnf in test1.
-Eval hnf in (ref_spec _ test1).
-Eval hnf in (ref_imports _ test1).
-
-Eval compute in (List.map (fun imp =>
-                             match imp with
-                               | Build_RefinementImport
-                                   _ fromspec (exist _ x1 x2) =>
-                                 existT (fun s => sig (fun _ => True))
-                                       fromspec (exist _ x1 I)
-                             end)
-                          (match (ref_imports _ test1) with
-                             | cons x1 _ => cons x1 nil
-                             | _ => nil
-                           end)).
-
-
-Eval compute in (List.map (fun imp =>
-                             match imp with
-                               | Build_RefinementImport
-                                   _ fromspec (exist _ x1 x2) =>
-                                 existT (fun s => sig (fun _ => True))
-                                       fromspec (exist _ x1 I)
-                             end)
-                          (match (ref_imports _ test1) with
-                             | cons x1 (cons x2 _) => cons x2 nil
-                             | _ => nil
-                           end)).
-
-Eval compute in (ref_spec _ test1).
-Eval compute in (match ref_interp _ test1 with | exist _ x1 x2 => exist _ x1 I end).
-Eval compute in (List.map (fun imp => ref_import_fromspec _ imp) (ref_imports _ test1)).
-Eval compute in (List.map (fun imp =>
-                             match imp with
-                               | Build_RefinementImport
-                                   _ fromspec (exist _ x1 x2) =>
-                                 existT (fun s => sig (fun _ => True))
-                                       fromspec (exist _ x1 I)
-                             end) (ref_imports _ test1)).
-
-
-
-Eval unfold test1, Monoid.Monoid__Spec, refinement_subst, id_refinement, spec_subst,
-  List.map, refinement_import_interp, Group2.Group2__Spec, spec_append
-   in test1.
-
-
-,
-  refinement_add_import, refinement_subst, refinement_interp, ref_imports, ref_interp, ref_spec
-   in spec__import0.
-
-Eval cbv in (Specware.Spec.refinement_subst
-    (Specware.Spec.id_refinement Monoid.Monoid__Spec) mon2group2 $(prove_sub_spec)$).
-
-
-Spec Monoid3 := Monoid[mon2group2].
-
-(*
 Section Group2_Thms.
 Import Group2.
 Context `{Group2}.
@@ -246,7 +184,14 @@ Context `{Group2}.
 Lemma g2_left_id_uniq (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
   apply left_id_uniq.
 Qed.
-*)
+
+End Group2_Thms.
+
+
+
+Spec Monoid3 := Monoid[mon2group2].
+
+
 
 Spec Morphism Group2_Monoid : Monoid -> Group2 {m_% +-> g_%}.
 constructor.

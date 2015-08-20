@@ -306,6 +306,12 @@ let record_field_name fld =
 let mk_implicit_assum id tp =
   LocalRawAssum ([(Loc.dummy_loc, Name id)], Default Implicit, tp)
 
+(* Make an implicit {id} assumption *)
+let mk_implicit_var_assum id =
+  mk_implicit_assum id (CHole (dummy_loc,
+                               Some (Evar_kinds.BinderType (Name id)),
+                               IntroAnonymous, None))
+
 (* Make an explicit (id:tp) assumption *)
 let mk_explicit_assum id tp =
   LocalRawAssum ([(Loc.dummy_loc, Name id)], Default Explicit, tp)
@@ -317,13 +323,16 @@ let mk_explicit_var_assum id =
                                IntroAnonymous, None))
 
 (* Add a definition to the current Coq image *)
-let add_definition id params type_opt body =
+let add_definition ?(hook = (fun _ _ -> ())) lid params type_opt body =
   let cmd = VernacDefinition
-              ((None, Definition), id,
+              ((None, Definition), lid,
                DefineBody (params, None, body, type_opt))
   in
   let _ = debug_printf 1 "@[add_definition command:@ %a@]\n" pp_vernac cmd in
-  interp (located_loc id, cmd)
+  (* interp (located_loc id, cmd) *)
+  Command.do_definition
+    (located_elem lid) (Global, false, Definition) params None body type_opt
+    (Lemmas.mk_hook hook)
 
 (* Add a local definition, i.e., do a Let vernacular command *)
 let add_local_definition id params type_opt body =
@@ -335,12 +344,15 @@ let add_local_definition id params type_opt body =
   interp (located_loc id, cmd)
 
 (* Add an interactive definition, filled out by user tactics *)
-let start_definition id params tp =
+let start_definition ?(hook = (fun _ _ -> ())) lid params tp =
   let cmd = VernacDefinition
-              ((None, Definition), id, ProveBody (params, tp))
+              ((None, Definition), lid, ProveBody (params, tp))
   in
   let _ = debug_printf 1 "@[start_definition command:@ %a@]\n" pp_vernac cmd in
-  interp (located_loc id, cmd)
+  (* interp (located_loc id, cmd) *)
+  Lemmas.start_proof_com
+    (Global, false, DefinitionBody Definition) [Some lid, (params, tp, None)]
+    (Lemmas.mk_hook hook)
 
 (* Add a definition using constrs, not constr_exprs *)
 let add_definition_constr id type_opt (body, uctx) =
