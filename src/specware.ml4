@@ -537,7 +537,7 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
   let (constr,uctx) = Constrintern.interp_constr env evd spec_expr in
   let _ = debug_printf 1 "@[build_spec_repr (2):@ %a@]"
                        pp_constr constr in
-  (* Unfold all the f accessors to f__param variables *)
+  (* Unfold all the f, f__var, f__proof, and f__class variables *)
   let constr_unfolded =
     reduce_constr
       [Unfold (concat_map
@@ -547,11 +547,13 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
                   let (op_id,_,oppred) = op in
                   if oppred_is_eq oppred then
                     [mk_unfold op_id; mk_unfold (field_var_id op_id);
+                     mk_unfold (field_class_id op_id);
                      mk_unfold (field_proof_id op_id)]
                   else if oppred_is_nontrivial oppred then
-                    [mk_unfold op_id; mk_unfold (field_proof_id op_id)]
+                    [mk_unfold op_id; mk_unfold (field_class_id op_id);
+                     mk_unfold (field_proof_id op_id)]
                   else
-                    [mk_unfold op_id])
+                    [mk_unfold op_id; mk_unfold (field_class_id op_id)])
                  spec.spec_ops)]
       constr
   in
@@ -1406,7 +1408,7 @@ let refinement_expr_of_spec_term st =
   let rec helper st =
     match st with
     | SpecRef r ->
-       mkAppC (mk_specware_ref "id_refinement_import",
+       mkAppC (mk_specware_ref "id_refinement",
                [mkRefC (spec_repr_ref (qualid_of_reference r))])
     | SpecXlate (st', xlate) ->
        let ref_expr' = helper st' in
@@ -1414,7 +1416,7 @@ let refinement_expr_of_spec_term st =
                [ref_expr'; build_constr_expr spec_translation_descr xlate])
     | SpecSubst (st', r) ->
        let ref_expr' = helper st' in
-       mkAppC (mk_specware_ref "refinement_subst_import",
+       mkAppC (mk_specware_ref "refinement_subst",
                [ref_expr'; mkRefC r;
                 mk_named_tactic_hole (loc_of_reference r)
                                      (mk_qualid specware_mod "prove_sub_spec")])

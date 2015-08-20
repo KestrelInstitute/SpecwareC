@@ -322,20 +322,70 @@ Definition interp_cons f T (oppred: OpPred T)
            (i: forall t pfs, Interpretation (spec1 t pfs) (spec2 t pfs)) :
   Interpretation (Spec_ConsOp f T oppred spec1)
                  (Spec_ConsOp f T oppred spec2) :=
+  mkInterp (fun ops2:spec_ops (Spec_ConsOp f T oppred spec2) =>
+              let (T_o,o) := ops2 in
+              let (oppred_o, rest_o) := o in
+              ops_cons T_o oppred_o (map_ops (i _ _) rest_o))
+           (fun ops2 =>
+              match ops2
+                    return spec_model (Spec_ConsOp f T oppred spec2) ops2 ->
+                           spec_model
+                             (Spec_ConsOp f T oppred spec1)
+                             (let (T_o,o) := ops2 in
+                              let (oppred_o,rest_o) := o in
+                              ops_cons T_o oppred_o (map_ops (i _ _) rest_o)) with
+                | existT _ T_o (existT _ oppred_o rest_o) =>
+                  fun model2 =>
+                    map_model (i T_o oppred_o) rest_o model2
+              end).
+
+(* The simpler version, that does not destruct ops2. We choose the above version
+to make it more efficient to compute with this interpretation. *)
+(*
+Definition interp_cons f T (oppred: OpPred T)
+           {spec1 spec2 : forall t, oppred t -> Spec}
+           (i: forall t pfs, Interpretation (spec1 t pfs) (spec2 t pfs)) :
+  Interpretation (Spec_ConsOp f T oppred spec1)
+                 (Spec_ConsOp f T oppred spec2) :=
   mkInterp (fun ops2 =>
               ops_cons (ops_head ops2) (ops_proof ops2)
                        (map_ops (i _ _) (ops_rest ops2)))
            (fun ops2 model2 =>
               map_model (i _ _) _ model2).
+*)
 
 (* Take an interpretation from spec1 to spec2 and cons an op onto spec2 *)
 Definition interp_cons_r f T (oppred: OpPred T)
            {spec1} {spec2: forall t, oppred t -> Spec}
            (i: forall t pfs, Interpretation spec1 (spec2 t pfs)) :
   Interpretation spec1 (Spec_ConsOp f T oppred spec2) :=
+  mkInterp (fun ops2:spec_ops (Spec_ConsOp f T oppred spec2) =>
+              let (T_o,o) := ops2 in
+              let (oppred_o,rest_o) := o in
+              map_ops (i T_o oppred_o) rest_o)
+           (fun ops2 =>
+              match ops2
+                    return spec_model (Spec_ConsOp f T oppred spec2) ops2 ->
+                           spec_model spec1
+                                      (let (T_o,o) := ops2 in
+                                       let (oppred_o,rest_o) := o in
+                                       map_ops (i _ _) rest_o) with
+                | existT _ T_o (existT _ oppred_o rest_o) =>
+                  fun model2 =>
+                    map_model (i T_o oppred_o) rest_o model2
+              end).
+
+
+(* The simpler version, that does not destruct ops2. We choose the above version
+to make it more efficient to compute with this interpretation. *)
+(*
+Definition interp_cons_r f T (oppred: OpPred T)
+           {spec1} {spec2: forall t, oppred t -> Spec}
+           (i: forall t pfs, Interpretation spec1 (spec2 t pfs)) :
+  Interpretation spec1 (Spec_ConsOp f T oppred spec2) :=
   mkInterp (fun ops2 => map_ops (i (ops_head ops2) (ops_proof ops2)) (ops_rest ops2))
            (fun ops2 model2 => map_model (i (ops_head ops2) (ops_proof ops2)) _ model2).
-
+*)
 
 (*** Example Interpretations ***)
 
@@ -983,17 +1033,18 @@ Record RefinementOf spec : Type :=
    ref_imports: list (RefinementImport ref_spec)}.
 
 (* The identity refinement of a spec to itself, with no other specs *)
-Definition id_refinement spec : RefinementOf spec :=
+Definition id_refinement_noimport spec : RefinementOf spec :=
   {| ref_spec := spec;
      ref_interp := interp_id spec;
      ref_imports := [] |}.
 
 (* Add a refinement import to a refinement *)
-Definition refinement_add_import {spec} (R: RefinementOf spec)
-           (imp: RefinementImport (ref_spec _ R)) : RefinementOf spec :=
-  {| ref_spec := ref_spec _ R;
-     ref_interp := ref_interp _ R;
-     ref_imports := imp :: ref_imports _ R |}.
+Definition refinement_add_import {spec} (R: RefinementOf spec) :
+  RefinementImport (ref_spec _ R) -> RefinementOf spec :=
+  match R as R return RefinementImport (ref_spec _ R) -> RefinementOf spec with
+    | Build_RefinementOf _ s i imps =>
+      fun (imp:RefinementImport s) => Build_RefinementOf _ s i (imp::imps)
+  end.
 
 (* Get the nth import of a RefinementOf, returning the identity if n is too big *)
 Definition nth_refinement_import {spec} (R: RefinementOf spec) n :
@@ -1001,52 +1052,72 @@ Definition nth_refinement_import {spec} (R: RefinementOf spec) n :
   nth_nodef n (ref_imports _ R).
 
 (* The identity refinement with an import *)
-Definition id_refinement_import spec : RefinementOf spec :=
-  refinement_add_import (id_refinement spec)
-                        {| ref_import_fromspec := spec;
-                           ref_import_interp := interp_id spec |}.
+Definition id_refinement spec : RefinementOf spec :=
+  {| ref_spec := spec;
+     ref_interp := interp_id spec;
+     ref_imports := [ {| ref_import_fromspec := spec;
+                           ref_import_interp := interp_id spec |} ] |}.
 
 (* Compose an interpretation with a refinement import *)
 Definition refinement_import_interp {spec spec'}
            (imp: RefinementImport spec)
            (i: Interpretation spec spec') : RefinementImport spec' :=
-  {| ref_import_fromspec := ref_import_fromspec _ imp;
-     ref_import_interp := interp_compose i (ref_import_interp _ imp) |}.
+  match imp with
+    | Build_RefinementImport _ fromspec interp =>
+      Build_RefinementImport _ fromspec (interp_compose i interp)
+  end.
 
 (* Compose an interpretation with a refinement *)
 Definition refinement_interp {spec spec'}
-           (R: RefinementOf spec)
-           (i: Interpretation (ref_spec _ R) spec') : RefinementOf spec :=
-  {| ref_spec := spec';
-     ref_interp := interp_compose i (ref_interp _ R);
-     ref_imports := map (fun imp => refinement_import_interp imp i)
-                         (ref_imports _ R) |}.
+           (R: RefinementOf spec) :
+  Interpretation (ref_spec _ R) spec' -> RefinementOf spec :=
+  match R as R return Interpretation (ref_spec _ R) spec' ->
+                      RefinementOf spec with
+    | Build_RefinementOf _ s interp imps =>
+      fun (i:Interpretation s spec') =>
+        Build_RefinementOf _ spec' (interp_compose i interp)
+                           (map (fun imp => refinement_import_interp imp i) imps)
+  end.
 
 (* Compose two refinements together *)
 Definition refinement_compose {spec}
-           (R1: RefinementOf spec)
-           (R2: RefinementOf (ref_spec spec R1)) : RefinementOf spec :=
-  {| ref_spec := ref_spec _ R2;
-     ref_interp := interp_compose (ref_interp _ R2) (ref_interp _ R1);
-     ref_imports :=
-       (map (fun imp => refinement_import_interp imp (ref_interp _ R2))
-            (ref_imports _ R1))
-         ++ (ref_imports _ R2) |}.
+           (R1: RefinementOf spec) :
+  RefinementOf (ref_spec spec R1) -> RefinementOf spec :=
+  match R1 as R1 return RefinementOf (ref_spec spec R1) ->
+                        RefinementOf spec with
+    | Build_RefinementOf _ spec1 interp1 imps1 =>
+      fun (R2: RefinementOf spec1) =>
+        match R2 with
+          | Build_RefinementOf _ spec2 interp2 imps2 =>
+            {| ref_spec := spec2;
+               ref_interp := interp_compose interp2 interp1;
+               ref_imports :=
+                 (map (fun imp => refinement_import_interp imp interp2) imps1)
+                   ++ imps2 |}
+        end
+  end.
 
 (* Apply a spec substitution to a refinement *)
-Definition refinement_subst {spec spec1 spec2}
+Definition refinement_subst_noimport {spec spec1 spec2}
            (R: RefinementOf spec) (sub: SubSpec spec1 (ref_spec _ R))
            (i: Interpretation spec1 spec2) : RefinementOf spec :=
   refinement_interp R (spec_subst_interp1 sub i).
 
 (* Apply a spec substitution to a refinement, importing the co-domain spec *)
-Definition refinement_subst_import {spec spec1 spec2}
-           (R: RefinementOf spec) (i: Interpretation spec1 spec2)
-           (sub: SubSpec spec1 (ref_spec _ R)) : RefinementOf spec :=
-  refinement_add_import
-    (refinement_subst R sub i)
-    {| ref_import_fromspec := spec2;
-       ref_import_interp := spec_subst_interp2 sub i |}.
+Definition refinement_subst {spec spec1 spec2}
+           (R: RefinementOf spec) (i: Interpretation spec1 spec2) :
+  SubSpec spec1 (ref_spec _ R) -> RefinementOf spec :=
+  match R as R return SubSpec spec1 (ref_spec _ R) -> RefinementOf spec with
+    | Build_RefinementOf _ spec' interp imps =>
+      fun (sub: SubSpec spec1 spec') =>
+        {| ref_spec := spec_subst sub i;
+           ref_interp := interp_compose (spec_subst_interp1 sub i) interp;
+           ref_imports :=
+             {| ref_import_fromspec := spec2;
+                ref_import_interp := spec_subst_interp2 sub i |}
+               ::(map (fun imp => refinement_import_interp
+                                    imp (spec_subst_interp1 sub i)) imps) |}
+  end.
 
 (* Translate a refinement *)
 Definition refinement_translate {spec}
