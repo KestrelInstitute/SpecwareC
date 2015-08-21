@@ -3,4 +3,6 @@
 -R theories Specware
 src/util_specware.ml
 src/specware.ml4
+src/specware_c_plugin.mlpack
 theories/Spec.v
+theories/SpecwareC.v

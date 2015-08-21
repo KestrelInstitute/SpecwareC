@@ -1,5 +1,10 @@
+all: coq theories/specware_c_plugin.cmxs
+
 coq: Makefile.coq
 	$(MAKE) -f Makefile.coq
+
+theories/specware_c_plugin.cmxs: coq
+	ln -sf ../src/specware_c_plugin.cmxs theories/specware_c_plugin.cmxs
 
 install: coq
 	$(MAKE) -f Makefile.coq install

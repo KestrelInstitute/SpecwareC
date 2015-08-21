@@ -1,9 +1,6 @@
 
 Add LoadPath "../theories" as Specware.
-Require Import Specware.Spec.
-Add ML Path "../src".
-Declare ML Module "util_specware".
-Declare ML Module "specware".
+Require Import Specware.SpecwareC.
 
 
 (***
@@ -169,7 +166,7 @@ Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 Spec End Group2.
 
 
-Spec Interpretation mon2group2 : Monoid -> Group2.
+Spec Interpretation Monoid_Group2 : Monoid -> Group2.
 unfold Monoid.Monoid__Spec, Group2.Group2__Spec.
 interp_translate {{ "m_"% +-> "g_"% }}.
 apply sub_spec_interp.
@@ -188,7 +185,7 @@ Qed.
 End Group2_Thms.
 
 
-Spec Group3 := Monoid[mon2group2].
+Spec Group3 := Monoid[Monoid_Group2].
 
 
 Section Group3_Thms.
@@ -201,50 +198,10 @@ End Group3_Thms.
 
 
 
-Spec MorphTest.
-Spec Import Monoid[Group2_Monoid].
-Spec End MorphTest.
+(* FIXME: do the Monoid -> NatMonoid interpretation *)
 
 
-Spec NatMonoid.
-
-Spec Definition T : Type := nat.
-Spec Definition m_zero : T := 0.
-Spec Definition m_plus : (T -> T -> T) := Nat.add.
-(* Spec Variable m_plus : (T -> T -> T). *)
-
-Spec Axiom m_zero_left : (forall x, m_plus m_zero x = x).
-Spec Axiom m_zero_right : (forall x, m_plus x m_zero = x).
-Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z).
-
-Spec End NatMonoid.
-
-Print NatMonoid.
-
-Require Import Coq.Arith.Plus.
-
-Spec Morphism NatMonoid_Monoid : Monoid -> NatMonoid.
-constructor.
-unfold Monoid.m_zero_left__class.
-reflexivity.
-unfold Monoid.m_zero_right__class.
-intros. compute. fold Nat.add. symmetry. apply plus_n_O.
-unfold Monoid.m_plus_assoc__class.
-intros. compute. fold Nat.add. apply plus_assoc.
-Qed.
-
-Set Printing All.
-Check NatMonoid_Monoid.
-
-(*
-Spec MonoidImport0.
-
-Spec Variable T : nat.
-
-Spec Import Monoid.
-
-Spec End MonoidImport0.
-*)
+(* FIXME: allow imports to shadow existing ops and axioms *)
 
 Spec MonoidImport1.
 
@@ -257,6 +214,8 @@ Spec Import Monoid {m_% +-> m1_%}.
 Spec End MonoidImport1.
 
 
+(* FIXME: allow imports to share an op (should be the same as shadowing...) *)
+
 Spec DoubleMonoid.
 
 Spec Import Monoid {m_% +-> m1_%}.
@@ -265,8 +224,3 @@ Spec Import Monoid {m_% +-> m2_%}.
 Spec End DoubleMonoid.
 
 Print DoubleMonoid.
-
-(* FIXME: make a more interesting morphism... *)
-(* Spec Morphism MG : Monoid -> Group { m_% +-> g_% }. *)
-
-Print Group.g_zero_left__class.
