@@ -1117,8 +1117,8 @@ let import_refinement_constr_expr loc constr_expr =
   in
   let src_spec_globref = destruct_spec_globref_constr src_spec_constr in
 
-  (* Helper function to fold "f__param" into just "f" and to fold "def f__param
-  f__proof" into f (Coq's built-in fold does not seem to work...) *)
+  (* Helper function to fold occurrences of "f__param" into just "f" and to fold
+  "def f__param f__proof" into f (Coq's built-in fold does not seem to work) *)
   (* FIXME: remove ids from op_ids and eq_ids when going inside binders *)
   let rec fold_defs op_ids eq_ids constr =
     let recurse () = Term.map_constr (fold_defs op_ids eq_ids) constr in
@@ -1606,7 +1606,7 @@ END
 VERNAC ARGUMENT EXTEND spec_term
   | [ global(r) ] -> [ SpecRef r ]
   | [ spec_term(st) "{{" name_translation(xlate) "}}" ] -> [ SpecXlate (st, xlate) ]
-  | [ spec_term(st) "[" global(morph_ref) "]" ] -> [ SpecSubst (st, morph_ref) ]
+  | [ spec_term(st) "[" global(interp_ref) "]" ] -> [ SpecSubst (st, interp_ref) ]
 END
 
 

@@ -324,19 +324,19 @@ Definition interp_cons f T (oppred: OpPred T)
                  (Spec_ConsOp f T oppred spec2) :=
   mkInterp (fun ops2:spec_ops (Spec_ConsOp f T oppred spec2) =>
               let (T_o,o) := ops2 in
-              let (oppred_o, rest_o) := o in
-              ops_cons T_o oppred_o (map_ops (i _ _) rest_o))
+              let (pf_o, rest_o) := o in
+              ops_cons T_o pf_o (map_ops (i _ _) rest_o))
            (fun ops2 =>
               match ops2
                     return spec_model (Spec_ConsOp f T oppred spec2) ops2 ->
                            spec_model
                              (Spec_ConsOp f T oppred spec1)
                              (let (T_o,o) := ops2 in
-                              let (oppred_o,rest_o) := o in
-                              ops_cons T_o oppred_o (map_ops (i _ _) rest_o)) with
-                | existT _ T_o (existT _ oppred_o rest_o) =>
+                              let (pf_o,rest_o) := o in
+                              ops_cons T_o pf_o (map_ops (i _ _) rest_o)) with
+                | existT _ T_o (existT _ pf_o rest_o) =>
                   fun model2 =>
-                    map_model (i T_o oppred_o) rest_o model2
+                    map_model (i T_o pf_o) rest_o model2
               end).
 
 (* The simpler version, that does not destruct ops2. We choose the above version
@@ -361,18 +361,18 @@ Definition interp_cons_r f T (oppred: OpPred T)
   Interpretation spec1 (Spec_ConsOp f T oppred spec2) :=
   mkInterp (fun ops2:spec_ops (Spec_ConsOp f T oppred spec2) =>
               let (T_o,o) := ops2 in
-              let (oppred_o,rest_o) := o in
-              map_ops (i T_o oppred_o) rest_o)
+              let (pf_o,rest_o) := o in
+              map_ops (i T_o pf_o) rest_o)
            (fun ops2 =>
               match ops2
                     return spec_model (Spec_ConsOp f T oppred spec2) ops2 ->
                            spec_model spec1
                                       (let (T_o,o) := ops2 in
-                                       let (oppred_o,rest_o) := o in
+                                       let (pf_o,rest_o) := o in
                                        map_ops (i _ _) rest_o) with
-                | existT _ T_o (existT _ oppred_o rest_o) =>
+                | existT _ T_o (existT _ pf_o rest_o) =>
                   fun model2 =>
-                    map_model (i T_o oppred_o) rest_o model2
+                    map_model (i T_o pf_o) rest_o model2
               end).
 
 
@@ -575,7 +575,10 @@ Fixpoint spec_subtract spec1 spec2 (sub: SubSpec spec1 spec2) :
     | SubSpec_base axioms spec2 axioms_pf => fun _ => spec2
     | SubSpec_eq f T oppred rest1 rest2 sub' =>
       fun ops1 =>
-        spec_subtract _ _ (sub' (ops_head ops1) (ops_proof ops1)) (ops_rest ops1)
+        match ops1 with
+          | existT _ T_o (existT _ pf_o rest_o) =>
+            spec_subtract _ _ (sub' T_o pf_o) rest_o
+        end
     | SubSpec_neq spec1 f2 T2 oppred2 rest2 sub' =>
       fun ops1 =>
         Spec_ConsOp f2 T2 oppred2
@@ -593,12 +596,15 @@ Fixpoint spec_subtract_interp spec1 spec2 sub :
     | SubSpec_base _ _ _ => fun _ => interp_id _
     | SubSpec_eq f T oppred rest1 rest2 sub' =>
       fun ops1 =>
-        mkInterp (fun ops_sub =>
-                    ops_cons (ops_head ops1) (ops_proof ops1)
-                             (map_ops (spec_subtract_interp
-                                         _ _ (sub' _ _) (ops_rest ops1))
-                                      ops_sub))
-                 (map_model (spec_subtract_interp _ _ _ (ops_rest ops1)))
+        match ops1 with
+          | existT _ T_o (existT _ pf_o rest_o) =>
+            mkInterp (fun ops_sub =>
+                        ops_cons T_o pf_o
+                                 (map_ops (spec_subtract_interp
+                                             _ _ (sub' _ _) rest_o)
+                                          ops_sub))
+                     (map_model (spec_subtract_interp _ _ _ rest_o))
+        end
     | SubSpec_neq spec1 f2 T2 oppred2 rest2 sub' =>
       fun ops1 =>
         interp_cons f2 T2 oppred2
@@ -984,8 +990,10 @@ Fixpoint translate_spec_ops xlate spec :
     | Spec_Axioms _ => fun ops => ops
     | Spec_ConsOp f T oppred rest =>
       fun ops =>
-        ops_cons (ops_head ops) (ops_proof ops)
-                 (translate_spec_ops xlate _ (ops_rest ops))
+        match ops with
+          | existT _ T_o (existT _ pf_o ops') =>
+            ops_cons T_o pf_o (translate_spec_ops xlate _ ops')
+        end
   end.
 
 Lemma translate_spec_axioms_impl xlate axioms :
@@ -1005,6 +1013,7 @@ Program Definition translate_spec_interp xlate spec :
 Next Obligation.
 revert ops H; induction spec; intros.
 apply (translate_spec_axioms_impl xlate); assumption.
+destruct ops as [T_o ops]; destruct ops as [pf_o ops].
 apply H. assumption.
 Defined.
 

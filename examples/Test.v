@@ -188,31 +188,18 @@ Qed.
 End Group2_Thms.
 
 
-
-Spec Monoid3 := Monoid[mon2group2].
-
+Spec Group3 := Monoid[mon2group2].
 
 
-Spec Morphism Group2_Monoid : Monoid -> Group2 {m_% +-> g_%}.
-constructor.
-unfold Monoid.m_zero_left__class.
-apply Group2.g_zero_left.
-unfold Monoid.m_zero_right__class.
-apply Group2.g_zero_right.
-unfold Monoid.m_plus_assoc__class.
-apply Group2.g_plus_assoc.
-Qed.
-
-Print Group2_Monoid.
-
-Section Group2_Thms.
-Import Group2.
-Context `{Group2}.
-
-Lemma g2_left_id_uniq (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
+Section Group3_Thms.
+Import Group3.
+Context `{Group3}.
+Lemma g3_left_id_uniq (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
   apply left_id_uniq.
 Qed.
-End Group2_Thms.
+End Group3_Thms.
+
+
 
 Spec MorphTest.
 Spec Import Monoid[Group2_Monoid].
