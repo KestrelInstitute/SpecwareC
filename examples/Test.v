@@ -167,10 +167,7 @@ Spec End Group2.
 
 
 Spec Interpretation Monoid_Group2 : Monoid -> Group2.
-unfold Monoid.Monoid__Spec, Group2.Group2__Spec.
-interp_translate {{ "m_"% +-> "g_"% }}.
-apply sub_spec_interp.
-prove_sub_spec.
+prove_simple_interp {{ "m_"% +-> "g_"% }}.
 Defined.
 
 
