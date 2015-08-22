@@ -1008,7 +1008,8 @@ Lemma translate_spec_axioms_impl xlate axioms :
   apply IHaxioms; assumption.
 Defined.
 
-Program Definition translate_spec_interp xlate spec :
+(* Build an interpretation from spec to (translate_spec xlate spec) *)
+Program Definition interp_translate_spec xlate spec :
   Interpretation spec (translate_spec xlate spec) :=
   mkInterp (translate_spec_ops xlate spec) _.
 Next Obligation.
@@ -1017,6 +1018,48 @@ apply (translate_spec_axioms_impl xlate); assumption.
 destruct ops as [t_o ops]; destruct ops as [pf_o ops].
 apply H. assumption.
 Defined.
+
+(* Reverse the translation of spec ops *)
+Fixpoint untranslate_spec_ops xlate spec :
+  spec_ops spec -> spec_ops (translate_spec xlate spec) :=
+  match spec return spec_ops spec -> spec_ops (translate_spec xlate spec) with
+    | Spec_Axioms _ => fun ops => ops
+    | Spec_ConsOp f T oppred rest =>
+      fun ops =>
+        match ops with
+          | existT _ t_o (existT _ pf_o ops') =>
+            ops_cons t_o pf_o (untranslate_spec_ops xlate _ ops')
+        end
+  end.
+
+Lemma untranslate_spec_axioms_impl xlate axioms :
+  conjoin_axioms axioms -> conjoin_axioms (translate_spec_axioms xlate axioms).
+  induction axioms.
+  intro; assumption.
+  destruct axioms; destruct a.
+  intro; assumption.
+  intro H; destruct H; split.
+  assumption.
+  apply IHaxioms; assumption.
+Defined.
+
+(* Build an interpretation from (translate_spec xlate spec) back to spec *)
+Program Definition interp_untranslate_spec xlate spec :
+  Interpretation (translate_spec xlate spec) spec :=
+  mkInterp (untranslate_spec_ops xlate spec) _.
+Next Obligation.
+revert ops H; induction spec; intros.
+apply (untranslate_spec_axioms_impl xlate); assumption.
+destruct ops as [t_o ops]; destruct ops as [pf_o ops].
+apply H. assumption.
+Defined.
+
+(* Translate an interpretation *)
+Definition translate_interp {spec1 spec2} xlate
+           (i: Interpretation spec1 spec2) :
+  Interpretation (translate_spec xlate spec1) (translate_spec xlate spec2) :=
+  interp_compose (interp_translate_spec xlate spec2)
+                 (interp_compose i (interp_untranslate_spec xlate spec1)).
 
 
 (***
@@ -1064,13 +1107,6 @@ Ltac prove_simple_interp xlate :=
           first [ destruct model as [ax_name model] | rename model into ax_name ]);
   unfold spec_model, conjoin_axioms, ax_pair, snd; repeat split;
   try assumption.
-
-
-(* FIXME HERE NOW *)
-
-Ltac interp_translate xlate :=
-  refine (interp_compose _ (translate_spec_interp xlate _));
-  simpl (translate_spec _ _).
 
 
 (*** Refinement ***)
@@ -1178,7 +1214,35 @@ Definition refinement_subst {spec spec1 spec2}
                                     imp (spec_subst_interp1 sub i)) imps) |}
   end.
 
+(* FIXME: document this *)
+Definition spec_subst_interp2_xlate {spec1sub spec1 spec2}
+           xlate (sub: SubSpec (translate_spec xlate spec1sub) spec1)
+           (i: Interpretation spec1sub spec2) :
+  Interpretation spec2 (spec_subst sub (translate_interp xlate i)) :=
+ interp_compose (interp_append1 _ _) (interp_translate_spec _ _).
+
+(* Apply a spec substitution to a refinement, using the translation of an
+interpretation, importing the un-translated co-domain of the interpretation *)
+Definition refinement_subst_xlate {spec spec1 spec2}
+           (R: RefinementOf spec) (i: Interpretation spec1 spec2) xlate :
+  SubSpec (translate_spec xlate spec1) (ref_spec _ R) -> RefinementOf spec :=
+  match R as R return SubSpec (translate_spec xlate spec1) (ref_spec _ R) ->
+                      RefinementOf spec with
+    | Build_RefinementOf _ spec' interp imps =>
+      fun (sub: SubSpec (translate_spec xlate spec1) spec') =>
+        {| ref_spec := spec_subst sub (translate_interp xlate i);
+           ref_interp :=
+             interp_compose (spec_subst_interp1
+                               sub (translate_interp xlate i)) interp;
+           ref_imports :=
+             {| ref_import_fromspec := spec2;
+                ref_import_interp := spec_subst_interp2_xlate xlate sub i |}
+               ::(map (fun imp => refinement_import_interp
+                                    imp (spec_subst_interp1
+                                           sub (translate_interp xlate i))) imps) |}
+  end.
+
 (* Translate a refinement *)
 Definition refinement_translate {spec}
            (R: RefinementOf spec) xlate : RefinementOf spec :=
-  refinement_interp R (translate_spec_interp xlate _).
+  refinement_interp R (interp_translate_spec xlate _).

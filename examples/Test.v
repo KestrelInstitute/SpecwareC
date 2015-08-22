@@ -182,8 +182,7 @@ Qed.
 End Group2_Thms.
 
 
-Spec Group3 := Monoid[Monoid_Group2].
-
+Spec Group3 := Monoid[[Monoid_Group2 {{ T +-> T }} ]].
 
 Section Group3_Thms.
 Import Group3.

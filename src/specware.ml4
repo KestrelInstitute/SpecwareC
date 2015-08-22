@@ -580,8 +580,6 @@ type refinement_import_constr = {
 }
 
 
-exception NonGlobalSpec of Constr.t
-
 (* Reduce constr until it is a global_reference to a variable XXX.XXX__Spec,
 where XXX is some spec module registerd in spec_table. *)
 (* README: As another way to do this, we could repeatedly reduce with CBN, only
@@ -601,7 +599,10 @@ let destruct_spec_globref_constr constr =
   | Term.Const (c, _) -> Constant.modpath c
   | Term.Ind (ind, _) -> ind_modpath ind
   | Term.Construct (c, _) -> constr_modpath c
-  | _ -> raise dummy_loc (NonGlobalSpec constr)
+  | _ ->
+     user_err_loc (dummy_loc, "_",
+                   str "Not a global spec: "
+                   ++ Printer.pr_constr constr)
 
 (* A description of the RefinementImport type *)
 let refinement_import_descr :
@@ -1433,7 +1434,9 @@ type spec_term =
   (* A translation of the names of a spec *)
   | SpecXlate of spec_term * spec_translation
   (* A spec substitution, where the morphism must be named *)
-  | SpecSubst of spec_term * reference
+  | SpecSubst of spec_term * constr_expr
+  (* A spec substitution with a translation applied to the interpretation *)
+  | SpecSubstXlate of spec_term * constr_expr * spec_translation
   (* Adding definitions to ops in a spec *)
   (* | SpecAddDefs of spec_term * Loc.t * (lident * Constrexpr.constr_expr) list *)
 
@@ -1448,11 +1451,18 @@ let refinement_expr_of_spec_term st =
        let ref_expr' = helper st' in
        mkAppC (mk_specware_ref "refinement_translate",
                [ref_expr'; build_constr_expr spec_translation_descr xlate])
-    | SpecSubst (st', r) ->
+    | SpecSubst (st', interp_expr) ->
        let ref_expr' = helper st' in
        mkAppC (mk_specware_ref "refinement_subst",
-               [ref_expr'; mkRefC r;
-                mk_named_tactic_hole (loc_of_reference r)
+               [ref_expr'; interp_expr;
+                mk_named_tactic_hole (constr_loc interp_expr)
+                                     (mk_qualid specware_mod "prove_sub_spec")])
+    | SpecSubstXlate (st', interp_expr, xlate) ->
+       let ref_expr' = helper st' in
+       mkAppC (mk_specware_ref "refinement_subst_xlate",
+               [ref_expr'; interp_expr;
+                build_constr_expr spec_translation_descr xlate;
+                mk_named_tactic_hole (constr_loc interp_expr)
                                      (mk_qualid specware_mod "prove_sub_spec")])
   in
   (* FIXME: need to remove existing ops and axioms from an imported spec *)
@@ -1606,7 +1616,10 @@ END
 VERNAC ARGUMENT EXTEND spec_term
   | [ global(r) ] -> [ SpecRef r ]
   | [ spec_term(st) "{{" name_translation(xlate) "}}" ] -> [ SpecXlate (st, xlate) ]
-  | [ spec_term(st) "[" global(interp_ref) "]" ] -> [ SpecSubst (st, interp_ref) ]
+  | [ spec_term(st) "[[" global(interp_ref) "]]" ] ->
+     [ SpecSubst (st, mkRefC interp_ref) ]
+  | [ spec_term(st) "[[" global(interp_ref) "{{" name_translation(xlate) "}}" "]]" ] ->
+     [ SpecSubstXlate (st, mkRefC interp_ref, xlate) ]
 END
 
 
