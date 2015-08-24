@@ -1,0 +1,66 @@
+To build and install Specware-C, you must first have:
+
+* OCaml, version 4.00 or later (tested on 4.02.1), which can be
+  obtained from http://caml.inria.fr/
+
+* Camlp5, version 6.06 or later (tested on 6.12), which can be obtained from
+  http://camlp5.gforge.inria.fr/
+
+* Coq, version 8.5beta1, which can be obtained from http://coq.inria.fr/ (NOTE:
+  this is not the latest Coq release; Specware-C may work with 8.5beta2, the
+  latest release, though it has not been tested, and it will probably not work
+  with any older version of Coq at this time.)
+
+
+TIPS FOR INSTALLING DEPENDENCIES
+
+To install OCaml from source (recommended, at least on OS X), download and
+un-zip / un-tar the distribution, cd to the distribution directory, and type the
+following sequence of commands (the second will take maybe 10-20 minutes):
+
+./configure
+make world.opt
+sudo make install
+
+To install Camlp5 from source (recommended), download and un-tar the
+distribution, cd to the distribution directory, and type the following sequence
+of commands:
+
+./configure
+make world.opt
+sudo make install
+
+To install Coq from source, download version 8.5beta1. (Again, this is not the
+latest release; 8.5beta2, the leatest release, might work, but has not been
+tested.) Un-tar the distribution, cd to the distribution directory, and type the
+following sequence of commands:
+
+./configure -opt
+make world
+sudo make install
+
+
+BUILDING AND INSTALLING SPECWARE-C
+
+To build Specware-C, cd to the distribution directory and type "make".
+
+To use Specware-C, you must first add the theories directory to your Coq load
+path as logical directory Specware. This can be done in one of three ways. The
+most stable approach is to add the following line to the file
+~/.config/coq/coqrc.8.5beta1, where "path/to/specwarecoq/theories" is replaced
+by the path on your system to the theories directory:
+
+Add LoadPath "path/to/specwarecoq/theories" as Specware.
+
+The second way to add Specware-C to your Coq load path is to add the above line
+to the top of a Coq .v file; all of the examples in the examples directory use
+this approach.
+
+Finally, Specware-C can also be added to your Coq load path on the Coq command
+line, as, e.g.,
+
+coqc ... -R path/to/specwarecoq/theories -as Specware ...
+
+Once Specware-C has been added to your Coq load path, Specware-C can then be
+used by adding "Require"ing the module Specware.SpecwareC; again, see any of the
+files in the examples directory.
