@@ -945,6 +945,9 @@ Delimit Scope spec_translation_elem_scope with spec_translation_elem.
 Notation "'{{' elem1 , .. , elemn '}}'" :=
   (mkSpecTranslation (cons elem1%spec_translation_elem .. (cons elemn%spec_translation_elem nil) ..))
   (at level 0).
+Notation "'{{' '}}'" :=
+  (mkSpecTranslation nil)
+  (at level 0).
 
 Definition translate_field1 elem (f: Field) : option Field :=
   match elem with
@@ -1094,9 +1097,88 @@ Definition interp_cons_strengthen_xlate xlate f1 T (oppred1 oppred2: OpPred T)
                     map_model (i t_o pf_o) rest_o model2
               end).
 
+(* Similar to the above, but allow the field types to be provably, not just
+definitionally, equal *)
+Definition interp_cons_strengthen_xlate_eq xlate f1 T1 T2 (oppred1: OpPred T1)
+           (oppred2: OpPred T2)
+           {spec1: forall t, oppred1 t -> Spec} {spec2}
+           (eT: T2 = T1) (impl: forall t, oppred2 t -> oppred1 (rew eT in t))
+           (i: forall t pf2,
+                 Interpretation (spec1 (rew eT in t) (impl t pf2)) (spec2 t pf2)) :
+  Interpretation (Spec_ConsOp f1 T1 oppred1 spec1)
+                 (Spec_ConsOp (translate_field xlate f1) T2 oppred2 spec2) :=
+  mkInterp (fun ops2:spec_ops (Spec_ConsOp (translate_field xlate f1)
+                                           T2 oppred2 spec2) =>
+              let (t_o,o) := ops2 in
+              let (pf_o, rest_o) := o in
+              ops_cons (rew eT in t_o) (impl _ pf_o) (map_ops (i t_o pf_o) rest_o))
+           (fun ops2 =>
+              match ops2
+                    return spec_model (Spec_ConsOp (translate_field xlate f1)
+                                                   T2 oppred2 spec2) ops2 ->
+                           spec_model
+                             (Spec_ConsOp f1 T1 oppred1 spec1)
+                             (let (t_o,o) := ops2 in
+                              let (pf_o,rest_o) := o in
+                              ops_cons (rew eT in t_o) (impl t_o pf_o) (map_ops (i _ _) rest_o)) with
+                | existT _ t_o (existT _ pf_o rest_o) =>
+                  fun model2 =>
+                    map_model (i t_o pf_o) rest_o model2
+              end).
+
 (* Tactic to prove a "simple" interpretation, which is one where none of the ops
 have to be re-ordered, but where the fields can be translated between the domain
 spec and the co-domain spec. *)
+Ltac try_prove_simple_interp_pred :=
+  try assumption; try apply I.
+Ltac prove_simple_interp xlate :=
+  let next :=
+      lazymatch goal with
+      | |- Interpretation (Spec_ConsOp ?f1 ?T1 ?oppred1 ?rest1)
+                          (Spec_ConsOp ?f2 ?T2 ?oppred2 ?rest2) =>
+        lazymatch (eval cbn in (Field_dec f2 (translate_field xlate f1))) with
+          | left _ =>
+            idtac "equal fields";
+              first
+                [ apply (interp_cons_strengthen_xlate xlate); intros;
+                  [ try_prove_simple_interp_pred | prove_simple_interp xlate ]
+                | (let eT := fresh "eT" in
+                   let eT := evar (eT:@eq Type T2 T1) in
+                   apply (interp_cons_strengthen_xlate_eq
+                            xlate f1 T1 T2 oppred1 oppred2 eT);
+                   intros; [ try_prove_simple_interp_pred
+                           | prove_simple_interp xlate ]) ]
+          | right _ =>
+            idtac "unequal fields"; apply interp_cons_r; intros;
+            prove_simple_interp xlate
+        end
+      | |- Interpretation (Spec_Axioms _)
+                          (Spec_ConsOp ?f1 ?T1 ?oppred1 ?rest1) =>
+        idtac "axioms on the left";
+        apply interp_cons_r; intros;
+        prove_simple_interp xlate
+      | |- Interpretation (Spec_Axioms _) (Spec_Axioms _) =>
+        idtac "axioms";
+        apply (mkInterp (fun _ => tt : spec_ops (Spec_Axioms _))); intros ops model;
+        unfold spec_model, conjoin_axioms, ax_pair, snd in model;
+        repeat (let ax_name := fresh "axiom" in
+                first [ destruct model as [ax_name model] | rename model into ax_name ]);
+        unfold spec_model, conjoin_axioms, ax_pair, snd; repeat split;
+        try assumption
+      | |- Interpretation ?S1 ?S2 =>
+        let S1' := (eval hnf in S1) in
+        let S2' := (eval hnf in S2) in
+        (progress (change S1 with S1'; change S2 with S2');
+         idtac "evaluating interp spec terms";
+         prove_simple_interp xlate)
+          || (* fail *) idtac "Cannot prove this interpretation!"
+      end
+    in
+      next
+.
+
+(* Old version *)
+(*
 Ltac prove_simple_interp xlate :=
   repeat (first [apply (interp_cons_strengthen_xlate xlate);
                   intros; [ try assumption | ]
@@ -1107,6 +1189,7 @@ Ltac prove_simple_interp xlate :=
           first [ destruct model as [ax_name model] | rename model into ax_name ]);
   unfold spec_model, conjoin_axioms, ax_pair, snd; repeat split;
   try assumption.
+*)
 
 
 (*** Refinement ***)
