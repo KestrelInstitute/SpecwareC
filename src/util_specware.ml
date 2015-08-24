@@ -364,6 +364,17 @@ let start_definition ?(hook = (fun _ _ -> ())) lid params tp =
     (Global, false, DefinitionBody Definition) [Some lid, (params, tp, None)]
     (Lemmas.mk_hook hook)
 
+(* Start an interactively-proved theorem *)
+let start_theorem ?(hook = (fun _ _ -> ())) thm_kind lid params tp =
+  let cmd = VernacStartTheoremProof
+              (thm_kind, [Some lid, (params, tp, None)], false)
+  in
+  let _ = debug_printf 1 "@[start_definition command:@ %a@]\n" pp_vernac cmd in
+  (* interp (located_loc id, cmd) *)
+  Lemmas.start_proof_com
+    (Global, false, Proof thm_kind) [Some lid, (params, tp, None)]
+    (Lemmas.mk_hook hook)
+
 (* Add a definition using constrs, not constr_exprs *)
 let add_definition_constr id type_opt (body, uctx) =
   let _ = debug_printf 1 "@[add_definition_constr: %s :=@ %a @]\n"

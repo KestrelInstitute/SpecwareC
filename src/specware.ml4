@@ -333,7 +333,7 @@ let op_pred_expr loc (op : constr_expr op) : constr_expr =
   | Pred_Eq eq_expr ->
      mk_equality (mk_var (loc, field_var_id id)) eq_expr
   | Pred_Fun pred_expr ->
-     mkAppC (pred_expr, [mk_var (loc, id)])
+     pred_expr
 
 (* Create an empty spec with the given name *)
 let make_empty_spec spec_id =
@@ -423,18 +423,23 @@ let id_descr : (Id.t, Id.t) constr_descr =
 
 (* A description of an OpPred. Note that the builder needs the type associated
 with the op, which is given as the first element of the pair. *)
-let oppred_descr : (Constr.t oppred, constr_expr * constr_expr oppred) constr_descr =
+let oppred_descr f : (Constr.t oppred, constr_expr * constr_expr oppred) constr_descr =
   Descr_Iso
     ("OpPred",
      (function
        | Left (_, ()) -> Pred_Trivial
        | Right (Left (_, (x, ()))) -> Pred_Eq x
-       | Right (Right (Left (_, (x, ())))) -> Pred_Fun x
+       | Right (Right (Left (_, (pred, ())))) ->
+          Pred_Fun (Term.mkApp (pred, [| Term.mkVar f |]))
        | Right (Right (Right emp)) -> emp.elim_empty),
      (function
        | (tp, Pred_Trivial) -> Left (tp, ())
        | (tp, Pred_Eq x) -> Right (Left (tp, (x, ())))
-       | (tp, Pred_Fun x) -> Right (Right (Left (tp, (x, ()))))),
+       | (tp, Pred_Fun pred) ->
+          Right (Right (Left (tp, (mkCLambdaN
+                                     dummy_loc
+                                     [mk_explicit_var_assum f]
+                                     pred, ()))))),
      unary_ctor
        specware_mod "Pred_Trivial" Descr_Constr
        (binary_ctor
@@ -482,7 +487,9 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
         quaternary_ctor
           specware_mod "Spec_ConsOp"
           (hnf_descr id_descr) (fun _ -> Descr_Constr)
-          (fun _ _ -> oppred_descr)
+          (fun f_sum _ ->
+           let f = match f_sum with Left f -> f | Right f -> f in
+           oppred_descr f)
           (fun f_sum tp_sum oppred_sum ->
            let f = match f_sum with Left f -> f | Right f -> f in
            let (is_eq, is_nontrivial) =
@@ -1703,6 +1710,12 @@ VERNAC COMMAND EXTEND Spec
     -> [ reporting_exceptions
            (fun () -> add_spec_field false lid tp Pred_Trivial) ]
 
+  (* Add a declared op with a subtype predicate *)
+  | [ "Spec" "Variable" var(lid) ":" constr(tp) "|" constr(pred) ]
+    => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () -> add_spec_field false lid tp (Pred_Fun pred)) ]
+
   (* Add a defined op with a type *)
   | [ "Spec" "Definition" var(lid) ":" constr(tp) ":=" constr(body) ]
     => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
@@ -1724,6 +1737,23 @@ VERNAC COMMAND EXTEND Spec
     => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
            (fun () -> add_spec_field true lid tp Pred_Trivial) ]
+
+  (* Add a theorem *)
+  | [ "Spec" "Theorem" var(lid) ":" constr(tp) ]
+    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity,
+                                   [located_elem lid]),
+          Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () ->
+            let loc = located_loc lid in
+            let cur_spec = get_current_spec loc in
+            let ax_params = List.map
+                              (fun (ax_id, _) ->
+                               (mk_implicit_assum
+                                  (field_param_id ax_id)
+                                  (mk_var (loc, field_class_id ax_id))))
+                               cur_spec.spec_axioms in
+            start_theorem Theorem lid ax_params tp) ]
 
   (* Import a spec using a "raw" expression of type RefinementOf *)
   | [ "Spec" "RawImport" constr(tm) ]
