@@ -6,3 +6,4 @@
 * Add form: Spec Interpretation foo : spec1 -> spec2 := bar, to allow
   interpretations to be defined from instances (and not just vice-versa)
 * Figure out how to keep the op names in prove_simple_interp
+* Add support for notations
