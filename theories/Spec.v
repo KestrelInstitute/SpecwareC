@@ -80,10 +80,23 @@ Definition sats_op_pred {T} (p: OpPred T) : T -> Prop :=
 (* Allows writing "oppred t" instead of "sats_op_pred oppred t" *)
 Coercion sats_op_pred : OpPred >-> Funclass.
 
+(* The type of the representation of an axiom in a spec *)
+Inductive SpecAxiom : Type :=
+| specAxiom (f:Field) (P:Prop)
+.
+
+Arguments specAxiom f%string P%type.
+
+(* Projections of SpecAxiom *)
+Definition axiom_name (ax:SpecAxiom) :=
+  let (f,_) := ax in f.
+Definition axiom_prop (ax:SpecAxiom) :=
+  let (_,P) := ax in P.
+
 (* The inductive representation of specs, indexed by the op fields *)
 Inductive Spec : Type :=
 (* The base case contains the names and types of the axioms *)
-| Spec_Axioms (axioms : list (Field * Prop)) : Spec
+| Spec_Axioms (axioms : list SpecAxiom) : Spec
 (* The inductive case adds an op named f with zero or more definitions to the
 rest of the spec, that can depend on any f equal to all the definitions *)
 | Spec_ConsOp (f:Field) (T : Type) (oppred: OpPred T)
@@ -93,12 +106,6 @@ rest of the spec, that can depend on any f equal to all the definitions *)
 (* Make the field argument be parsed by Coq as a string *)
 Arguments Spec_ConsOp f%string T oppred rest.
 
-(* Helper for building axiom pairs *)
-Definition ax_pair (f:Field) (P:Prop) : (Field * Prop) :=
-  pair f P.
-
-Arguments ax_pair f%string P.
-
 (* Unfold a definition *)
 Definition def {T x} (t:T) (t__pf: t = x) : T := x.
 
@@ -106,12 +113,24 @@ Definition def {T x} (t:T) (t__pf: t = x) : T := x.
 (*** Models ***)
 
 (* Helper for conjoining all the axioms in an axiom list *)
-Fixpoint conjoin_axioms (axioms : list (Field * Prop)) : Prop :=
+Fixpoint conjoin_axioms (axioms : list SpecAxiom) : Prop :=
   match axioms with
     | [] => True
-    | [p] => snd p
-    | p :: axioms' => snd p /\ conjoin_axioms axioms'
+    | [specAxiom _ P] => P
+    | (specAxiom _ P) :: axioms' => P /\ conjoin_axioms axioms'
   end.
+
+(* Helper for proving conjoin_axioms applied to a cons *)
+Lemma conjoin_axioms_cons f (P:Prop) axioms :
+  P -> conjoin_axioms axioms -> conjoin_axioms (specAxiom f P :: axioms).
+  intros; destruct axioms; try split; assumption.
+Qed.
+
+(* Helper for destructing conjoin_axioms applied to a cons *)
+Lemma conjoin_axioms_destruct f (P:Prop) axioms :
+  conjoin_axioms (specAxiom f P :: axioms) -> P /\ conjoin_axioms axioms.
+  intro H; destruct axioms; try (destruct H); split; try assumption; try constructor.
+Qed.
 
 (* Build the type of the op of a spec *)
 Fixpoint spec_ops spec : Type :=
@@ -173,7 +192,7 @@ Notation "'Axioms f1 t1 ; .. ; fn tn'" :=
 (* Example 1:  op n:nat;  axiom gt1: n > 1 *)
 Definition spec_example_1 :=
   Spec_ConsOp "n" nat Pred_Trivial
-              (fun n _ => Spec_Axioms [ax_pair "gt1" (n > 1)]).
+              (fun n _ => Spec_Axioms [specAxiom "gt1" (n > 1)]).
 
 (* Example 2:  op n:nat := 2;  (no axioms) *)
 Definition spec_example_2 :=
@@ -186,7 +205,7 @@ Definition spec_example_3 :=
     "T" Set (Pred_Eq nat)
     (fun T T__pf =>
        Spec_ConsOp "n" (def T T__pf) Pred_Trivial
-                   (fun n _ => Spec_Axioms [ax_pair "gt1" (n > 1)])).
+                   (fun n _ => Spec_Axioms [specAxiom "gt1" (n > 1)])).
 
 (* Example 4: Monoids *)
 Definition spec_example_monoid :=
@@ -200,9 +219,9 @@ Definition spec_example_monoid :=
               "m_plus" (T -> T -> T) Pred_Trivial
               (fun m_plus _ =>
                  Spec_Axioms
-                   [ax_pair "m_zero_left" (forall x, m_plus m_zero x = x);
-                     ax_pair "m_zero_right" (forall x, m_plus x m_zero = x);
-                     ax_pair "m_plus_assoc"
+                   [specAxiom "m_zero_left" (forall x, m_plus m_zero x = x);
+                     specAxiom "m_zero_right" (forall x, m_plus x m_zero = x);
+                     specAxiom "m_plus_assoc"
                              (forall x y z,
                                 m_plus x (m_plus y z) = m_plus (m_plus x y) z)]))).
 
@@ -221,14 +240,14 @@ Definition spec_example_group :=
                    "g_inv" (T -> T) Pred_Trivial
                    (fun g_inv _ =>
                         Spec_Axioms
-                          [ax_pair "g_zero_left" (forall x, g_plus g_zero x = x);
-                            ax_pair "g_zero_right" (forall x, g_plus x g_zero = x);
-                            ax_pair "g_plus_assoc"
+                          [specAxiom "g_zero_left" (forall x, g_plus g_zero x = x);
+                            specAxiom "g_zero_right" (forall x, g_plus x g_zero = x);
+                            specAxiom "g_plus_assoc"
                                     (forall x y z,
                                        g_plus x (g_plus y z) = g_plus (g_plus x y) z);
-                            ax_pair "g_inv_left"
+                            specAxiom "g_inv_left"
                                     (forall (x:T), g_plus (g_inv x) x = g_zero);
-                            ax_pair "g_inv_right"
+                            specAxiom "g_inv_right"
                                     (forall (x:T), g_plus x (g_inv x) = g_zero)
     ])))).
 
@@ -245,15 +264,15 @@ Spec_ConsOp "T" Type (@Pred_Eq Type nat)
         (fun m_plus__param m_plus__proof
          =>
          Spec_Axioms
-           (ax_pair "m_zero_left"
+           (specAxiom "m_zero_left"
               (forall x : def T__param T__proof,
                def m_plus__param m_plus__proof
                  (def m_zero__param m_zero__proof) x = x)
-            :: (ax_pair "m_zero_right"
+            :: (specAxiom "m_zero_right"
                   (forall x : def T__param T__proof,
                    def m_plus__param m_plus__proof x
                      (def m_zero__param m_zero__proof) = x)
-                :: ax_pair "m_plus_assoc"
+                :: specAxiom "m_plus_assoc"
                      (forall x y z : def T__param T__proof,
                       def m_plus__param m_plus__proof x
                         (def m_plus__param m_plus__proof y z) =
@@ -406,18 +425,6 @@ Program Definition interp_example_3_2 : Interpretation spec_example_3 spec_examp
     (ops_cons (oppred:= Pred_Eq nat) nat eq_refl
               (ops_cons (oppred:=Pred_Trivial) (ops_head ops2) I (tt : spec_ops (Spec_Axioms _)))) : spec_ops spec_example_3.
 
-(* Interpret monoids in groups *)
-(* FIXME: this sucks! *)
-(*
-Program Definition interp_example_monoid_group :
-  Interpretation spec_example_monoid spec_example_group :=
-  fun ops_g =>
-    (ops_cons
-       (oppred:=None) (ops_head ops_g) (ops_proof ops_g)
-       (ops_cons
-          (oppred:=None) ))
-*)
-
 
 (*** Appending Specs ***)
 
@@ -433,13 +440,8 @@ Lemma conjoin_axioms_append1 axioms1 axioms2 :
   conjoin_axioms (axioms1 ++ axioms2) -> conjoin_axioms axioms1.
   induction axioms1.
   intros; constructor.
-  destruct axioms1.
-  destruct axioms2.
-  intros; assumption.
-  intro H; destruct H; assumption.
-  intro H; destruct H; split.
-  assumption.
-  apply IHaxioms1; assumption.
+  intros; destruct a; destruct (conjoin_axioms_destruct _ _ _ H).
+  apply conjoin_axioms_cons; [ assumption | apply IHaxioms1; assumption ].
 Qed.
 
 Lemma conjoin_axioms_append2 axioms1 axioms2 :
@@ -447,9 +449,7 @@ Lemma conjoin_axioms_append2 axioms1 axioms2 :
   induction axioms1; intros.
   assumption.
   apply IHaxioms1.
-  destruct axioms1.
-  destruct axioms2; [ constructor | destruct H; assumption ].
-  destruct H; assumption.
+  destruct a; destruct (conjoin_axioms_destruct _ _ _ H); assumption.
 Qed.
 
 (* The interpretation from any spec to the result of appending axioms to it *)
@@ -492,6 +492,21 @@ Fixpoint spec_append spec1 : (spec_ops spec1 -> Spec) -> Spec :=
                                    (fun ops1 => spec2 (ops_cons t pf ops1)))
   end.
 
+(* Helper for the next definition *)
+Definition append_axioms_interp spec spec1 axioms2
+           (ops_f : spec_ops spec1 -> spec_ops spec)
+           (model_f :
+              forall ops1,
+                conjoin_axioms axioms2 -> spec_model spec1 ops1 ->
+                spec_model spec (ops_f ops1)) :
+  Interpretation spec (spec_append_axioms spec1 axioms2) :=
+  mkInterp (fun ops1 =>
+              ops_f (map_ops (append_axioms_interp1 spec1 axioms2) ops1))
+           (fun ops1 model1 =>
+              model_f (map_ops (append_axioms_interp1 spec1 axioms2) ops1)
+                      (map_model (append_axioms_interp2 spec1 axioms2) ops1 model1)
+                      (map_model (append_axioms_interp1 spec1 axioms2) ops1 model1)).
+
 (* The interpretation from a spec to the result of appending another spec to it *)
 Fixpoint interp_append1 spec1 :
   forall spec2, Interpretation spec1 (spec_append spec1 spec2) :=
@@ -507,156 +522,327 @@ Fixpoint interp_append1 spec1 :
                                       (fun ops1 => spec2 (ops_cons t pf ops1)))
   end.
 
-(* The interpretation from a spec to the result of appending another spec to it *)
-Definition interp_prepend_r spec spec1 :
-  forall spec2, (forall ops1, Interpretation spec (spec2 ops1)) ->
-                Interpretation spec (spec_append spec1 spec2).
-  induction spec1; intros.
-  apply (interp_compose (s2:=spec2 tt)).
-  apply append_axioms_interp1.
-  apply X.
-  apply interp_cons_r; intros; fold spec_append. apply X. intros. apply X0.
-Defined.
-
-
-(*** Sub-Specs ***)
-
-(* This states that spec2 has all the ops of spec1 in the same order, with
-possibly some extras in between. We put it in Type so we can recurse on it *)
-Inductive SubSpec : Spec -> Spec -> Type :=
-| SubSpec_base axioms spec2 :
-    (forall ops, spec_model spec2 ops -> conjoin_axioms axioms) ->
-    SubSpec (Spec_Axioms axioms) spec2
-| SubSpec_eq f T (oppred: OpPred T) rest1 rest2 :
-    (forall t pf, SubSpec (rest1 t pf) (rest2 t pf)) ->
-    SubSpec (Spec_ConsOp f T oppred rest1)
-            (Spec_ConsOp f T oppred rest2)
-| SubSpec_neq spec1 f2 T2 (oppred2: OpPred T2) rest2 :
-    (forall t2 pf2, SubSpec spec1 (rest2 t2 pf2)) ->
-    SubSpec spec1 (Spec_ConsOp f2 T2 oppred2 rest2)
-.
-
-(* There is always an interpretation from a sub-spec to a super-spec *)
-Fixpoint sub_spec_interp {spec1 spec2} (sub: SubSpec spec1 spec2) :
-  Interpretation spec1 spec2 :=
-  match sub in SubSpec spec1 spec2 return Interpretation spec1 spec2 with
-    | SubSpec_base axioms spec2 model_f =>
-      mkInterp (fun _ => tt : spec_ops (Spec_Axioms axioms)) model_f
-    | SubSpec_eq f T oppred rest1 rest2 sub' =>
-      interp_cons f T oppred (fun t pf => sub_spec_interp (sub' t pf))
-    | SubSpec_neq spec1 f2 T2 oppred2 rest2 sub' =>
-      interp_cons_r f2 T2 oppred2 (fun t pf => sub_spec_interp (sub' t pf))
+(* Extract the ops for spec2 from ops for (spec_append spec1 spec2). This
+function, along with interp_append2_model, below, is essentially a dependent
+interpretation, i.e., an Interpretation spec2 (spec_append spec1 spec2) where
+spec2 depends on the ops being passed in for (spec_append spec1 spec2). *)
+Fixpoint interp_append2_ops spec1 :
+  forall spec2 (ops12: spec_ops (spec_append spec1 spec2)),
+    spec_ops (spec2 (map_ops (interp_append1 spec1 spec2) ops12)) :=
+  match spec1 with
+    | Spec_Axioms axioms1 =>
+      fun spec2 ops12 =>
+        match (map_ops (interp_append1 (Spec_Axioms axioms1) spec2) ops12) as ops1
+              return spec_ops (spec2 ops1) with
+          | tt => map_ops (append_axioms_interp1 _ _) ops12
+        end
+    | Spec_ConsOp f T oppred rest =>
+      fun spec2 ops12 =>
+        match ops12 return
+              spec_ops (spec2 (map_ops (interp_append1 _ spec2) ops12)) with
+          | existT _ t (existT _ pf ops12') =>
+            interp_append2_ops (rest t pf) (fun ops1 => spec2 (ops_cons t pf ops1))
+                               ops12'
+        end
   end.
 
-(* Helper for automatically building SubSpec proofs *)
-Lemma sub_spec_axioms_eq f P axs1 axs2 :
-  (conjoin_axioms axs1 -> conjoin_axioms axs2) ->
-  conjoin_axioms (ax_pair f P::axs1) -> conjoin_axioms (ax_pair f P::axs2).
-  destruct axs1; destruct axs2; intros impl pf1.
+(* Extract a model of spec2 from a model of (spec_append spec1 spec2). This is
+like a dependent interpretation; see the comments for interp2_append2_ops. *)
+Lemma interp_append2_model spec1 spec2
+      (ops12: spec_ops (spec_append spec1 spec2))
+      (model12: spec_model (spec_append spec1 spec2) ops12) :
+  spec_model (spec2 (map_ops (interp_append1 spec1 spec2) ops12))
+             (interp_append2_ops spec1 spec2 ops12).
+  revert spec2 ops12 model12; induction spec1; intros.
+  unfold interp_append2_ops.
+  destruct (map_ops (interp_append1 (Spec_Axioms axioms) spec2) ops12).
+  apply map_model; apply model12.
+  destruct ops12 as [ t x ]; destruct x as [ pf ops12' ].
+  apply (H t pf (fun ops1 : spec_ops (rest t pf) => spec2 (ops_cons t pf ops1))).
   assumption.
-  split; [ assumption | apply impl; apply I ].
-  destruct pf1; assumption.
-  destruct pf1; split; [ assumption | apply impl; assumption ].
 Qed.
 
-(* Helper for automatically building SubSpec proofs *)
-Lemma sub_spec_axioms_neq f P axs1 axs2 :
-  (conjoin_axioms axs1 -> conjoin_axioms axs2) ->
-  conjoin_axioms (ax_pair f P::axs1) -> conjoin_axioms axs2.
-  destruct axs1; intros impl pf1; apply impl.
-  apply I.
-  destruct pf1; assumption.
+(* Build an interpretation into the append of two specs from a funky binary sort
+of interpretation into the two specs that are being appended. *)
+Definition interp_append spec spec1 spec2
+           (ops_f: forall ops1, spec_ops (spec2 ops1) -> spec_ops spec)
+           (model_f:
+              forall ops1 ops2,
+                spec_model spec1 ops1 -> spec_model (spec2 ops1) ops2 ->
+                spec_model spec (ops_f ops1 ops2)) :
+  Interpretation spec (spec_append spec1 spec2) :=
+  mkInterp
+    (fun ops12 =>
+       ops_f (map_ops (interp_append1 spec1 spec2) ops12)
+             (interp_append2_ops spec1 spec2 ops12))
+    (fun ops12 model12 =>
+       model_f (map_ops (interp_append1 spec1 spec2) ops12)
+               (interp_append2_ops spec1 spec2 ops12)
+               (map_model (interp_append1 spec1 spec2) ops12 model12)
+               (interp_append2_model spec1 spec2 ops12 model12)).
+
+
+(*** Spec Overlap ***)
+
+(* NotInSpec f spec is a proof that f is not used as an op name in spec *)
+Inductive NotInSpec (f:Field) : Spec -> Prop :=
+| NotInSpec_base axioms : NotInSpec f (Spec_Axioms axioms)
+| NotInSpec_cons f' T oppred rest :
+    f <> f' ->
+    (forall t pf, NotInSpec f (rest t pf)) ->
+    NotInSpec f (Spec_ConsOp f' T oppred rest)
+.
+
+(* Tactic to prove NotInSpec goals *)
+Ltac prove_not_in_spec :=
+  match goal with
+    | |- NotInSpec ?f (Spec_ConsOp ?f' _ _ _) =>
+      apply NotInSpec_cons; [ discriminate | intros; prove_not_in_spec ]
+    | |- NotInSpec ?f (Spec_Axioms _) =>
+      apply NotInSpec_base
+  end.
+
+(* Helper lemma to prove not in goals *)
+Lemma not_in_cons {A} (x y:A) l :
+  y <> x -> ~(In x l) -> ~(In x (y::l)).
+  intros neq not_in in_xy.
+  destruct in_xy; contradiction.
 Qed.
 
-(* Tactic to prove SubSpec goals generated by imports *)
-Ltac prove_sub_spec :=
-  repeat (first [apply SubSpec_eq; intros |
-                 apply SubSpec_neq; intros]);
-  apply SubSpec_base; intro;
-  repeat (first [ apply sub_spec_axioms_eq | apply sub_spec_axioms_neq ]);
-  intro; assumption.
+(* Tactic to prove ~(In f l) goals *)
+Ltac prove_not_in_list :=
+  match goal with
+    | |- ~(In ?f (cons ?f' ?l)) =>
+      apply not_in_cons; [ discriminate | prove_not_in_list ]
+    | |- ~(In ?f nil) =>
+      apply in_nil
+  end.
+
+(* Helper type for SpecOverlap *)
+Inductive AxiomOverlap : list SpecAxiom -> list SpecAxiom -> Type :=
+| AxiomOverlap_base : AxiomOverlap [] []
+| AxiomOverlap_eq ax_name ax_tp axioms1 axioms2 :
+    AxiomOverlap axioms1 axioms2 ->
+    AxiomOverlap (specAxiom ax_name ax_tp::axioms1)
+                 (specAxiom ax_name ax_tp::axioms2)
+| AxiomOverlap_neq1 ax_name ax_tp axioms1 axioms2 :
+    ~(In ax_name (map axiom_name axioms2)) ->
+    AxiomOverlap axioms1 axioms2 ->
+    AxiomOverlap (specAxiom ax_name ax_tp::axioms1) axioms2
+| AxiomOverlap_neq2 ax_name ax_tp axioms1 axioms2 :
+    ~(In ax_name (map axiom_name axioms1)) ->
+    AxiomOverlap axioms1 axioms2 ->
+    AxiomOverlap axioms1 (specAxiom ax_name ax_tp::axioms2)
+.
+
+(* SpecOverlap spec1 spec2 is a correlation between spec1 and spec2 that
+identifies some sequence of ops and axioms that occur in both spec1 and spec2 in
+the same order and with the same types and subtype predictes. In fact, an
+element of SpecOverlap spec1 spec2 is the maximal such sequence. *)
+Inductive SpecOverlap : Spec -> Spec -> Type :=
+| SpecOverlap_base axioms1 axioms2 :
+    AxiomOverlap axioms1 axioms2 ->
+    SpecOverlap (Spec_Axioms axioms1) (Spec_Axioms axioms2)
+| SpecOverlap_eq f T oppred rest1 rest2 :
+    (forall t pf, SpecOverlap (rest1 t pf) (rest2 t pf)) ->
+    SpecOverlap (Spec_ConsOp f T oppred rest1) (Spec_ConsOp f T oppred rest2)
+| SpecOverlap_neq1 f1 T1 oppred1 rest1 spec2 :
+    NotInSpec f1 spec2 ->
+    (forall t pf, SpecOverlap (rest1 t pf) spec2) ->
+    SpecOverlap (Spec_ConsOp f1 T1 oppred1 rest1) spec2
+| SpecOverlap_neq2 f2 T2 oppred2 rest2 spec1 :
+    NotInSpec f2 spec1 ->
+    (forall t pf, SpecOverlap spec1 (rest2 t pf)) ->
+    SpecOverlap spec1 (Spec_ConsOp f2 T2 oppred2 rest2)
+.
+
+(* Tactic to prove AxiomOverlap *)
+Ltac prove_axiom_overlap :=
+  match goal with
+    | |- AxiomOverlap (specAxiom ?ax_name1 ?ax_tp1 :: ?axioms1)
+                      (specAxiom ?ax_name2 ?ax_tp2 :: ?axioms2) =>
+      match eval hnf in (Field_dec ax_name1 ax_name2) with
+        | left _ =>
+          (apply AxiomOverlap_eq
+                 || fail "Non-matching types at axiom" ax_name1);
+          intros; prove_axiom_overlap
+        | right ?neq =>
+          ((apply AxiomOverlap_neq1; [ prove_not_in_list | ]) ||
+           (apply AxiomOverlap_neq2; [ prove_not_in_list | ]) ||
+           fail "The axioms " ax_name1 " and " ax_name2 " appear to be in a different order in the two axioms");
+          prove_axiom_overlap
+      end
+    | |- AxiomOverlap (cons _ _) nil =>
+      apply AxiomOverlap_neq1; [ apply in_nil | prove_axiom_overlap ]
+    | |- AxiomOverlap nil (cons _ _) =>
+      apply AxiomOverlap_neq2; [ apply in_nil | prove_axiom_overlap ]
+    | |- AxiomOverlap nil nil =>
+      apply AxiomOverlap_base
+  end.
+
+(* Tactic to prove spec overlap *)
+Ltac prove_spec_overlap :=
+  match goal with
+    | |- SpecOverlap (Spec_ConsOp ?f1 ?T1 ?oppred1 ?rest1)
+                     (Spec_ConsOp ?f2 ?T2 ?oppred2 ?rest2) =>
+      match eval hnf in (Field_dec f1 f2) with
+        | left _ =>
+          (apply SpecOverlap_eq
+                 || fail "Non-matching types or predicates at op" f1);
+          intros; prove_spec_overlap
+        | right ?neq =>
+          ((apply SpecOverlap_neq1; [ prove_not_in_spec | ]) ||
+           (apply SpecOverlap_neq2; [ prove_not_in_spec | ]) ||
+           fail "The fields " f1 " and " f2 " appear to be in a different order in the two specs");
+          prove_spec_overlap
+      end
+    | |- SpecOverlap (Spec_ConsOp _ _ _ _) (Spec_Axioms _) =>
+      apply SpecOverlap_neq1; [ apply NotInSpec_base | prove_spec_overlap ]
+    | |- SpecOverlap (Spec_Axioms _) (Spec_ConsOp _ _ _ _) =>
+      apply SpecOverlap_neq2; [ apply NotInSpec_base | prove_spec_overlap ]
+    | |- SpecOverlap (Spec_Axioms _) (Spec_Axioms _) =>
+      prove_axiom_overlap
+  end.
 
 
 (*** Spec Substitution ***)
 
-(* Subtract sub-spec spec1 from super-spec spec2, given ops for spec1 *)
-Fixpoint spec_subtract spec1 spec2 (sub: SubSpec spec1 spec2) :
-  spec_ops spec1 -> Spec :=
-  match sub in SubSpec spec1 spec2 return spec_ops spec1 -> Spec with
-    | SubSpec_base axioms spec2 axioms_pf => fun _ => spec2
-    | SubSpec_eq f T oppred rest1 rest2 sub' =>
-      fun ops1 =>
-        match ops1 with
-          | existT _ t_o (existT _ pf_o rest_o) =>
-            spec_subtract _ _ (sub' t_o pf_o) rest_o
-        end
-    | SubSpec_neq spec1 f2 T2 oppred2 rest2 sub' =>
-      fun ops1 =>
-        Spec_ConsOp f2 T2 oppred2
-                    (fun t2 pf2 =>
-                       spec_subtract spec1 (rest2 t2 pf2) (sub' t2 pf2) ops1)
-  end
-.
-
-(* There is an interpretation from spec2 to spec2 minus spec1 *)
-Fixpoint spec_subtract_interp spec1 spec2 sub :
-  forall ops1, Interpretation spec2 (spec_subtract spec1 spec2 sub ops1) :=
-  match sub in SubSpec spec1 spec2
-        return forall ops1,
-                 Interpretation spec2 (spec_subtract spec1 spec2 sub ops1) with
-    | SubSpec_base _ _ _ => fun _ => interp_id _
-    | SubSpec_eq f T oppred rest1 rest2 sub' =>
-      fun ops1 =>
-        match ops1 with
-          | existT _ t_o (existT _ pf_o rest_o) =>
-            mkInterp (fun ops_sub =>
-                        ops_cons t_o pf_o
-                                 (map_ops (spec_subtract_interp
-                                             _ _ (sub' _ _) rest_o)
-                                          ops_sub))
-                     (map_model (spec_subtract_interp _ _ _ rest_o))
-        end
-    | SubSpec_neq spec1 f2 T2 oppred2 rest2 sub' =>
-      fun ops1 =>
-        interp_cons f2 T2 oppred2
-                    (fun t2 pf2 =>
-                       spec_subtract_interp _ _ (sub' t2 pf2) ops1)
+(* Helper for spec_subtract: return all axioms in the axioms1 list that do not
+overlap with the axioms in axioms2 *)
+Fixpoint axioms_subtract axioms1 axioms2
+         (overlap: AxiomOverlap axioms1 axioms2) : list SpecAxiom :=
+  match overlap with
+    | AxiomOverlap_base => []
+    | AxiomOverlap_eq ax_name ax_tp axioms1 axioms2 overlap' =>
+      axioms_subtract axioms1 axioms2 overlap'
+    | AxiomOverlap_neq1 ax_name ax_tp axioms1' axioms2' not_in overlap' =>
+      (specAxiom ax_name ax_tp)
+        :: axioms_subtract axioms1' axioms2' overlap'
+    | AxiomOverlap_neq2 ax_name ax_tp axioms1' axioms2' not_in overlap' =>
+      axioms_subtract axioms1' axioms2' overlap'
   end.
 
-(* Tactics-based proof of the above *)
-(*
-Lemma spec_subtract_interp spec1 spec2 sub :
-  forall ops1, Interpretation spec2 (spec_subtract spec1 spec2 sub ops1).
-  induction sub; intros.
-  apply interp_id.
-  destruct (X _ _ (ops_rest ops1)) as [ops_f model_f].
-  exists (fun ops_sub => ops_cons (ops_head ops1) (ops_proof ops1) (ops_f ops_sub)).
-  apply model_f.
-  unfold spec_subtract; fold spec_subtract.
-  apply interp_cons. intros; apply X.
+(* If you subtract axioms2 from axioms1 and then add them back again you can
+prove the original axioms1. *)
+Lemma axioms_subtract_interp axioms1 axioms2 overlap :
+  conjoin_axioms axioms2 ->
+  conjoin_axioms (axioms_subtract axioms1 axioms2 overlap) ->
+  conjoin_axioms axioms1.
+  induction overlap; intros.
+  trivial.
+  destruct (conjoin_axioms_destruct _ _ _ H).
+  apply conjoin_axioms_cons; [ assumption | apply IHoverlap; assumption ].
+  destruct (conjoin_axioms_destruct _ _ _ H0).
+  apply conjoin_axioms_cons; [ assumption | apply IHoverlap; assumption ].
+  destruct (conjoin_axioms_destruct _ _ _ H).
+  apply IHoverlap; assumption.
 Qed.
-*)
+
+(* Subtract the overlapping ops and axioms in spec2 from spec1. Note that this
+operation requires ops for spec2. *)
+Fixpoint spec_subtract spec1 spec2 (overlap: SpecOverlap spec1 spec2) :
+  spec_ops spec2 -> Spec :=
+  match overlap in SpecOverlap spec1 spec2 return spec_ops spec2 -> Spec with
+    | SpecOverlap_base axioms1 axioms2 overlap' =>
+      fun _ => Spec_Axioms (axioms_subtract axioms1 axioms2 overlap')
+    | SpecOverlap_eq f T oppred rest1 rest2 overlap' =>
+      fun ops2 =>
+        let (t,x) := ops2 in
+        let (pf,ops2') := x in
+        spec_subtract (rest1 t pf) (rest2 t pf) (overlap' t pf) ops2'
+    | SpecOverlap_neq1 f1 T1 oppred1 rest1 spec2 not_in overlap' =>
+      fun ops2 =>
+        Spec_ConsOp f1 T1 oppred1
+                    (fun t pf =>
+                       spec_subtract (rest1 t pf) spec2 (overlap' t pf) ops2)
+    | SpecOverlap_neq2 f2 T2 oppred2 rest2 spec1 not_in overlap' =>
+      fun ops2 =>
+        let (t,x) := ops2 in
+        let (pf,ops2') := x in
+        spec_subtract spec1 (rest2 t pf) (overlap' t pf) ops2'
+  end.
+
+(* If you subtract spec2 from spec1 then you can recover all the ops of spec1 if
+you have ops for spec2 and for the subtraction. This definition, along with
+spec_subtract_interp_model, forms a binary sort of interpretation. *)
+Fixpoint spec_subtract_interp_ops spec1 spec2 (overlap : SpecOverlap spec1 spec2) :
+  forall (ops2:spec_ops spec2),
+  spec_ops (spec_subtract spec1 spec2 overlap ops2) ->
+  spec_ops spec1 :=
+  match overlap in SpecOverlap spec1 spec2
+        return forall ops2,
+                 spec_ops (spec_subtract spec1 spec2 overlap ops2) ->
+                 spec_ops spec1 with
+    | SpecOverlap_base axioms1 axioms2 overlap' =>
+      fun ops2 ops21 => tt
+    | SpecOverlap_eq f T oppred rest1 rest2 overlap' =>
+      fun ops2 =>
+        match ops2 return
+              spec_ops (spec_subtract
+                          _ _ (SpecOverlap_eq _ _ _ _ _ overlap') ops2) ->
+              spec_ops (Spec_ConsOp f T oppred rest1) with
+          | existT _ t (existT _ pf ops2') =>
+            fun ops21 =>
+              ops_cons t pf (spec_subtract_interp_ops _ _ (overlap' t pf) ops2' ops21)
+        end
+    | SpecOverlap_neq1 f1 T1 oppred1 rest1 spec2 not_in overlap' =>
+      fun ops2 ops21 =>
+        match ops21 return spec_ops (Spec_ConsOp f1 T1 oppred1 rest1) with
+          | existT _ t (existT _ pf ops21') =>
+            ops_cons t pf (spec_subtract_interp_ops _ _ (overlap' t pf) ops2 ops21')
+        end
+    | SpecOverlap_neq2 f2 T2 oppred2 rest2 spec1 not_in overlap' =>
+      fun ops2 =>
+        match ops2 return
+              spec_ops (spec_subtract
+                          _ _ (SpecOverlap_neq2 _ _ _ _ _ _ overlap') ops2) ->
+              spec_ops spec1 with
+          | existT _ t (existT _ pf ops2') =>
+            fun ops21 =>
+              spec_subtract_interp_ops _ _ (overlap' t pf) ops2' ops21
+        end
+  end.
+
+(* If you subtract spec2 from spec1 then you can recover a model of spec1 if you
+have a model for spec2 and for the subtraction. This definition, along with
+spec_subtract_interp_ops, forms a binary sort of interpretation. *)
+Lemma spec_subtract_interp_model spec1 spec2 (overlap : SpecOverlap spec1 spec2) :
+  forall (ops2:spec_ops spec2) (model2:spec_model spec2 ops2)
+         (ops21:spec_ops (spec_subtract spec1 spec2 overlap ops2))
+         (model21:spec_model (spec_subtract spec1 spec2 overlap ops2) ops21),
+    spec_model spec1 (spec_subtract_interp_ops spec1 spec2 overlap ops2 ops21).
+  induction overlap; intros.
+  apply (axioms_subtract_interp axioms1 axioms2 a); assumption.
+  destruct ops2 as [t x]; destruct x as [pf ops2'].
+  apply H; assumption.
+  destruct ops21 as [t x]; destruct x as [pf ops21'].
+  apply H; assumption.
+  destruct ops2 as [t x]; destruct x as [pf ops2'].
+  apply H; assumption.
+Qed.
 
 (* Build a spec using spec substitution *)
-Definition spec_subst {spec1sub spec1 spec2}
-           (sub: SubSpec spec1sub spec1) (i: Interpretation spec1sub spec2) : Spec :=
+Definition spec_subst {spec spec1 spec2}
+           (overlap: SpecOverlap spec spec1) (i: Interpretation spec1 spec2) : Spec :=
   spec_append spec2
               (fun ops2 =>
-                 spec_subtract spec1sub spec1 sub (map_ops i ops2)).
+                 spec_subtract spec spec1 overlap (map_ops i ops2)).
 
 (* Build the interpretation from spec1 to the result of applying spec
 substitution to spec1 *)
-Definition spec_subst_interp1 {spec1sub spec1 spec2} sub i :
-  Interpretation spec1 (@spec_subst spec1sub spec1 spec2 sub i).
+Definition spec_subst_interp1 {spec spec1 spec2} overlap i :
+  Interpretation spec (@spec_subst spec spec1 spec2 overlap i).
   unfold spec_subst.
-  apply interp_prepend_r; intros.
-  apply spec_subtract_interp.
+  eapply interp_append; intros.
+  apply spec_subtract_interp_model.
+  apply (map_model i _ H).
+  apply H0.
 Defined.
 
 (* Build the interpretation from spec2 to the result of applying any spec
 substitution using an interpretation into spec2 *)
-Definition spec_subst_interp2 {spec1sub spec1 spec2} sub i :
-  Interpretation spec2 (@spec_subst spec1sub spec1 spec2 sub i) :=
+Definition spec_subst_interp2 {spec spec1 spec2} overlap i :
+  Interpretation spec2 (@spec_subst spec spec1 spec2 overlap i) :=
   interp_append1 _ _.
 
 
@@ -789,11 +975,11 @@ Fixpoint ApplyOps spec : forall A, (ForallOps spec A) ->
 
 (*** Types / Typeclasses Represented by Specs ***)
 
+(* FIXME: remove IsoToSpec and IsoInterpretation, and possibly ForallOps *)
+
 (* Whether P is isomorphic to spec *)
 Class IsoToSpec spec (P: OpsPred spec) : Prop :=
   spec_iso: forall ops, ApplyOps spec _ P ops <-> spec_model spec ops.
-
-(* FIXME HERE: figure out how to define IsoInterpretations *)
 
 (* An IsoInterpretation is an interpretation between type classes / type
 functions that are isomorphic to specs *)
@@ -901,7 +1087,7 @@ Next Obligation. apply g_zero_right. Qed.
 Next Obligation. apply g_plus_assoc. Qed.
 
 (*
-FIXME HERE: the below loops forever!
+NOTE: the below loops forever!
 
 Check (@group_as_monoid : IsoInterpretation iso_example_monoid iso_example_group _).
 Check (fromIsoInterp (iso1:=iso_example_monoid)
@@ -980,10 +1166,10 @@ Definition translate_field xlate f : Field :=
                     end) f elems
   end.
 
-Definition translate_spec_axioms xlate axioms : list (Field * Prop) :=
-  map (fun fP =>
-         match fP with
-           | (f, P) => (translate_field xlate f, P)
+Definition translate_spec_axioms xlate axioms : list SpecAxiom :=
+  map (fun ax =>
+         match ax with
+           | specAxiom f P => specAxiom (translate_field xlate f) P
          end) axioms.
 
 Fixpoint translate_spec xlate spec : Spec :=
@@ -1170,10 +1356,10 @@ Ltac prove_simple_interp xlate :=
       | |- Interpretation (Spec_Axioms _) (Spec_Axioms _) =>
         idtac "axioms";
         apply (mkInterp (fun _ => tt : spec_ops (Spec_Axioms _))); intros ops model;
-        unfold spec_model, conjoin_axioms, ax_pair, snd in model;
+        unfold spec_model, conjoin_axioms in model;
         repeat (let ax_name := fresh "axiom" in
                 first [ destruct model as [ax_name model] | rename model into ax_name ]);
-        unfold spec_model, conjoin_axioms, ax_pair, snd; repeat split;
+        unfold spec_model, conjoin_axioms; repeat split;
         try assumption
       | |- Interpretation ?S1 ?S2 =>
         let S1' := (eval hnf in S1) in
@@ -1194,10 +1380,10 @@ Ltac prove_simple_interp xlate :=
                   intros; [ try assumption | ]
                 | apply interp_cons_r; intros ]);
   apply (mkInterp (fun _ => tt : spec_ops (Spec_Axioms _))); intros ops model;
-  unfold spec_model, conjoin_axioms, ax_pair, snd in model;
+  unfold spec_model, conjoin_axioms, specAxiom, snd in model;
   repeat (let ax_name := fresh "axiom" in
           first [ destruct model as [ax_name model] | rename model into ax_name ]);
-  unfold spec_model, conjoin_axioms, ax_pair, snd; repeat split;
+  unfold spec_model, conjoin_axioms, specAxiom, snd; repeat split;
   try assumption.
 *)
 
@@ -1287,52 +1473,52 @@ Definition refinement_compose {spec}
 
 (* Apply a spec substitution to a refinement *)
 Definition refinement_subst_noimport {spec spec1 spec2}
-           (R: RefinementOf spec) (sub: SubSpec spec1 (ref_spec _ R))
+           (R: RefinementOf spec) (overlap: SpecOverlap (ref_spec _ R) spec1)
            (i: Interpretation spec1 spec2) : RefinementOf spec :=
-  refinement_interp R (spec_subst_interp1 sub i).
+  refinement_interp R (spec_subst_interp1 overlap i).
 
 (* Apply a spec substitution to a refinement, importing the co-domain spec *)
 Definition refinement_subst {spec spec1 spec2}
            (R: RefinementOf spec) (i: Interpretation spec1 spec2) :
-  SubSpec spec1 (ref_spec _ R) -> RefinementOf spec :=
-  match R as R return SubSpec spec1 (ref_spec _ R) -> RefinementOf spec with
+  SpecOverlap (ref_spec _ R) spec1 -> RefinementOf spec :=
+  match R as R return SpecOverlap (ref_spec _ R) spec1 -> RefinementOf spec with
     | Build_RefinementOf _ spec' interp imps =>
-      fun (sub: SubSpec spec1 spec') =>
-        {| ref_spec := spec_subst sub i;
-           ref_interp := interp_compose (spec_subst_interp1 sub i) interp;
+      fun (overlap: SpecOverlap spec' spec1) =>
+        {| ref_spec := spec_subst overlap i;
+           ref_interp := interp_compose (spec_subst_interp1 overlap i) interp;
            ref_imports :=
              {| ref_import_fromspec := spec2;
-                ref_import_interp := spec_subst_interp2 sub i |}
+                ref_import_interp := spec_subst_interp2 overlap i |}
                ::(map (fun imp => refinement_import_interp
-                                    imp (spec_subst_interp1 sub i)) imps) |}
+                                    imp (spec_subst_interp1 overlap i)) imps) |}
   end.
 
 (* FIXME: document this *)
 Definition spec_subst_interp2_xlate {spec1sub spec1 spec2}
-           xlate (sub: SubSpec (translate_spec xlate spec1sub) spec1)
+           xlate (overlap: SpecOverlap spec1 (translate_spec xlate spec1sub))
            (i: Interpretation spec1sub spec2) :
-  Interpretation spec2 (spec_subst sub (translate_interp xlate i)) :=
+  Interpretation spec2 (spec_subst overlap (translate_interp xlate i)) :=
  interp_compose (interp_append1 _ _) (interp_translate_spec _ _).
 
 (* Apply a spec substitution to a refinement, using the translation of an
 interpretation, importing the un-translated co-domain of the interpretation *)
 Definition refinement_subst_xlate {spec spec1 spec2}
            (R: RefinementOf spec) (i: Interpretation spec1 spec2) xlate :
-  SubSpec (translate_spec xlate spec1) (ref_spec _ R) -> RefinementOf spec :=
-  match R as R return SubSpec (translate_spec xlate spec1) (ref_spec _ R) ->
+  SpecOverlap (ref_spec _ R) (translate_spec xlate spec1) -> RefinementOf spec :=
+  match R as R return SpecOverlap (ref_spec _ R) (translate_spec xlate spec1) ->
                       RefinementOf spec with
     | Build_RefinementOf _ spec' interp imps =>
-      fun (sub: SubSpec (translate_spec xlate spec1) spec') =>
-        {| ref_spec := spec_subst sub (translate_interp xlate i);
+      fun (overlap: SpecOverlap spec' (translate_spec xlate spec1)) =>
+        {| ref_spec := spec_subst overlap (translate_interp xlate i);
            ref_interp :=
              interp_compose (spec_subst_interp1
-                               sub (translate_interp xlate i)) interp;
+                               overlap (translate_interp xlate i)) interp;
            ref_imports :=
              {| ref_import_fromspec := spec2;
-                ref_import_interp := spec_subst_interp2_xlate xlate sub i |}
+                ref_import_interp := spec_subst_interp2_xlate xlate overlap i |}
                ::(map (fun imp => refinement_import_interp
                                     imp (spec_subst_interp1
-                                           sub (translate_interp xlate i))) imps) |}
+                                           overlap (translate_interp xlate i))) imps) |}
   end.
 
 (* Translate a refinement *)
