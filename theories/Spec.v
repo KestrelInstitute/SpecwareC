@@ -690,33 +690,70 @@ Ltac prove_spec_overlap :=
   lazymatch goal with
     | |- SpecOverlap (Spec_ConsOp ?f1 ?T1 ?oppred1 ?rest1)
                      (Spec_ConsOp ?f2 ?T2 ?oppred2 ?rest2) =>
-      idtac "prove_spec_overlap: cons-cons";
-      match eval hnf in (Field_dec f1 f2) with
+      lazymatch eval hnf in (Field_dec f1 f2) with
         | left _ =>
           (apply SpecOverlap_eq
-                 || fail "Non-matching types or predicates at op" f1);
+                 || fail "Non-matching types or predicates at op" f1
+                         ": types: " T1 ", " T2
+                         "; predicates: " oppred1 ", " oppred2);
           intros; prove_spec_overlap
         | right ?neq =>
-          ((apply SpecOverlap_neq1; [ prove_not_in_spec | ]) ||
-           (apply SpecOverlap_neq2; [ prove_not_in_spec | ]) ||
+          ((apply SpecOverlap_neq1; [ prove_not_in_spec | intros ]) ||
+           (apply SpecOverlap_neq2; [ prove_not_in_spec | intros ]) ||
            fail "The fields " f1 " and " f2 " appear to be in a different order in the two specs");
           prove_spec_overlap
       end
     | |- SpecOverlap (Spec_ConsOp _ _ _ _) (Spec_Axioms _) =>
-      idtac "prove_spec_overlap: cons-axiom";
-      apply SpecOverlap_neq1; [ apply NotInSpec_base | prove_spec_overlap ]
+      apply SpecOverlap_neq1; [ apply NotInSpec_base | intros; prove_spec_overlap ]
     | |- SpecOverlap (Spec_Axioms _) (Spec_ConsOp _ _ _ _) =>
-      idtac "prove_spec_overlap: axiom-cons";
-      apply SpecOverlap_neq2; [ apply NotInSpec_base | prove_spec_overlap ]
+      apply SpecOverlap_neq2; [ apply NotInSpec_base | intros; prove_spec_overlap ]
     | |- SpecOverlap (Spec_Axioms _) (Spec_Axioms _) =>
-      idtac "prove_spec_overlap: axiom-axiom";
       apply SpecOverlap_base; prove_axiom_overlap
     | |- SpecOverlap ?spec1 ?spec2 =>
-      idtac "prove_spec_overlap: hnf";
       let spec1_hnf := (eval hnf in spec1) in
       let spec2_hnf := (eval hnf in spec2) in
       progress (change (SpecOverlap spec1_hnf spec2_hnf)); prove_spec_overlap
     | |- ?goal => fail "prove_spec_overlap: not a SpecOverlap goal: " goal
+  end.
+
+(* Debugging version of the above tactic to prove spec overlap *)
+Ltac prove_spec_overlapN n :=
+  lazymatch n with
+    | 0 => idtac "prove_spec_overlapN: n exhausted"
+    | S ?n' =>
+      lazymatch goal with
+        | |- SpecOverlap (Spec_ConsOp ?f1 ?T1 ?oppred1 ?rest1)
+                         (Spec_ConsOp ?f2 ?T2 ?oppred2 ?rest2) =>
+          idtac "prove_spec_overlapN: cons-cons";
+          lazymatch eval hnf in (Field_dec f1 f2) with
+            | left _ =>
+              (apply SpecOverlap_eq
+                     || fail "Non-matching types or predicates at op" f1
+                             ": types: " T1 ", " T2
+                             "; predicates: " oppred1 ", " oppred2);
+              intros; prove_spec_overlapN n'
+            | right ?neq =>
+              ((apply SpecOverlap_neq1; [ prove_not_in_spec | intros ]) ||
+               (apply SpecOverlap_neq2; [ prove_not_in_spec | intros ]) ||
+               fail "The fields " f1 " and " f2 " appear to be in a different order in the two specs");
+              prove_spec_overlapN n'
+          end
+        | |- SpecOverlap (Spec_ConsOp _ _ _ _) (Spec_Axioms _) =>
+          idtac "prove_spec_overlapN: cons-axiom";
+          apply SpecOverlap_neq1; [ apply NotInSpec_base | intros; prove_spec_overlapN n' ]
+        | |- SpecOverlap (Spec_Axioms _) (Spec_ConsOp _ _ _ _) =>
+          idtac "prove_spec_overlapN: axiom-cons";
+          apply SpecOverlap_neq2; [ apply NotInSpec_base | intros; prove_spec_overlapN n' ]
+        | |- SpecOverlap (Spec_Axioms _) (Spec_Axioms _) =>
+          idtac "prove_spec_overlapN: axiom-axiom";
+          apply SpecOverlap_base; prove_axiom_overlap
+        | |- SpecOverlap ?spec1 ?spec2 =>
+          idtac "prove_spec_overlapN: hnf";
+          let spec1_hnf := (eval hnf in spec1) in
+          let spec2_hnf := (eval hnf in spec2) in
+          progress (change (SpecOverlap spec1_hnf spec2_hnf)); prove_spec_overlapN n'
+        | |- ?goal => fail "prove_spec_overlapN: not a SpecOverlap goal: " goal
+      end
   end.
 
 
