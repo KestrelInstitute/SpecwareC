@@ -281,17 +281,29 @@ let oppred_is_eq oppred =
 (* The type of ops, using underlying term type 'a *)
 type 'a op = (Id.t * 'a * 'a oppred)
 
-let op_params (op: 'a op) : (Id.t * 'a) list =
+let map_op (f : 'a -> 'b) (op: 'a op) : 'b op =
+  let (op_id,op_tp,oppred) = op in
+  (op_id, f op_tp, map_oppred f oppred)
+
+let op_params (op: constr_expr op) : (Id.t * constr_expr) list =
   let (op_id,op_tp,oppred) = op in
   match oppred with
   | Pred_Trivial ->
     [field_param_id op_id, op_tp]
-  | Pred_Eq pred | Pred_Fun pred ->
+  | Pred_Eq t ->
+    [field_param_id op_id, op_tp;
+     field_proof_param_id op_id,
+     mk_equality (mk_var (dummy_loc, field_param_id op_id)) t]
+  | Pred_Fun pred ->
     [field_param_id op_id, op_tp;
      field_proof_param_id op_id, pred]
 
 let op_param_ids (op : 'a op) : Id.t list =
-  List.map fst (op_params op)
+  let (op_id,_,oppred) = op in
+  if oppred_is_nontrivial oppred then
+    [field_param_id op_id; field_proof_param_id op_id]
+  else
+    [field_param_id op_id]
 
 (* FIXME: documentation *)
 (* NOTE: the op constrs are all in the context of the ops (and their proofs) of
@@ -430,7 +442,8 @@ let id_descr : (Id.t, Id.t) constr_descr =
 oppred itself as well as the type of the underlying op, which is needed to build
 a constr_expr for the oppred. *)
 
-let oppred_descr f : (Constr.t oppred, constr_expr * constr_expr oppred) constr_descr =
+let oppred_descr f : (Constr.t oppred,
+                      constr_expr * constr_expr oppred) constr_descr =
   Descr_Iso
     ("OpPred",
      (function
@@ -1190,10 +1203,11 @@ let import_refinement_constr_expr loc constr_expr =
   (* Add spec_ops__import<i> : spec_ops (ref_spec _ spec__import<i>) := ... *)
   let op_param_ids = (concat_map op_param_ids ops) in
   let op_params =
-    List.map (fun (id,tp) ->
-              let tp_expr = Constrextern.extern_constr true env evd tp in
-              mk_explicit_assum id tp_expr)
-             (concat_map op_params ops)
+    concat_map (fun op ->
+                let op_expr =
+                  map_op (Constrextern.extern_constr true env evd) op in
+                List.map (fun (id,tp) -> mk_explicit_assum id tp)
+                         (op_params op_expr)) ops
   in
   let op_param_vars = mk_vars loc op_param_ids in
   let op_param_set = Id.Set.of_list op_param_ids in
