@@ -450,21 +450,21 @@ let oppred_descr f : (Constr.t oppred, constr_expr * constr_expr oppred) constr_
              Descr_Constr (fun _ -> Descr_Constr)
              Descr_Fail)))
 
-(* A description of axiom pairs: optimizes pair_descr by using the ax_pair
-operator from Spec.v *)
-let ax_pair_descr : (Id.t * Constr.t, Id.t * constr_expr) constr_descr =
-  Descr_Direct
-    ((fun constr ->
-      destruct_constr (pair_descr id_descr Descr_Constr)
-                      (hnf_constr constr)),
-     (fun (f, tp) ->
-      mkAppC (mk_specware_ref "ax_pair",
-              [mk_string (Id.to_string f); tp])))
+(* A description of the SpecAxiom type *)
+let spec_axiom_descr : (Id.t * Constr.t, Id.t * constr_expr) constr_descr =
+  Descr_Iso
+    ("SpecAxiom",
+     (function
+       | Left (f, (tp, ())) -> (f, tp)
+       | Right emp -> emp.elim_empty),
+     (fun (f,tp) -> Left (f, (tp, ()))),
+     binary_ctor
+       specware_mod "specAxiom" id_descr (fun _ -> Descr_Constr) Descr_Fail)
 
 (* The description of a list of axioms *)
 let axiom_list_descr : ((Id.t * Constr.t) list,
                         (Id.t * constr_expr) list) constr_descr =
-  list_descr ax_pair_descr
+  list_descr spec_axiom_descr
 
 type spec_fields = (constr_expr op) list * (Id.t * constr_expr) list
 type spec_fields_constr = (Constr.t op) list * (Id.t * Constr.t) list
@@ -1472,14 +1472,14 @@ let refinement_expr_of_spec_term st =
        mkAppC (mk_specware_ref "refinement_subst",
                [ref_expr'; interp_expr;
                 mk_named_tactic_hole (constr_loc interp_expr)
-                                     (mk_qualid specware_mod "prove_sub_spec")])
+                                     (mk_qualid specware_mod "prove_spec_overlap")])
     | SpecSubstXlate (st', interp_expr, xlate) ->
        let ref_expr' = helper st' in
        mkAppC (mk_specware_ref "refinement_subst_xlate",
                [ref_expr'; interp_expr;
                 build_constr_expr spec_translation_descr xlate;
                 mk_named_tactic_hole (constr_loc interp_expr)
-                                     (mk_qualid specware_mod "prove_sub_spec")])
+                                     (mk_qualid specware_mod "prove_spec_overlap")])
   in
   (* FIXME: need to remove existing ops and axioms from an imported spec *)
   helper st

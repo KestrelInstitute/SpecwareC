@@ -658,7 +658,7 @@ Inductive SpecOverlap : Spec -> Spec -> Type :=
 
 (* Tactic to prove AxiomOverlap *)
 Ltac prove_axiom_overlap :=
-  match goal with
+  lazymatch goal with
     | |- AxiomOverlap (specAxiom ?ax_name1 ?ax_tp1 :: ?axioms1)
                       (specAxiom ?ax_name2 ?ax_tp2 :: ?axioms2) =>
       match eval hnf in (Field_dec ax_name1 ax_name2) with
@@ -678,13 +678,19 @@ Ltac prove_axiom_overlap :=
       apply AxiomOverlap_neq2; [ apply in_nil | prove_axiom_overlap ]
     | |- AxiomOverlap nil nil =>
       apply AxiomOverlap_base
+    | |- AxiomOverlap ?axioms1 ?axioms2 =>
+      let axioms1_hnf := (eval hnf in axioms1) in
+      let axioms2_hnf := (eval hnf in axioms2) in
+      progress (change (AxiomOverlap axioms1_hnf axioms2_hnf)); prove_axiom_overlap
+    | |- ?goal => fail "prove_axiom_overlap: not an AxiomOverlap goal: " goal
   end.
 
 (* Tactic to prove spec overlap *)
 Ltac prove_spec_overlap :=
-  match goal with
+  lazymatch goal with
     | |- SpecOverlap (Spec_ConsOp ?f1 ?T1 ?oppred1 ?rest1)
                      (Spec_ConsOp ?f2 ?T2 ?oppred2 ?rest2) =>
+      idtac "prove_spec_overlap: cons-cons";
       match eval hnf in (Field_dec f1 f2) with
         | left _ =>
           (apply SpecOverlap_eq
@@ -697,11 +703,20 @@ Ltac prove_spec_overlap :=
           prove_spec_overlap
       end
     | |- SpecOverlap (Spec_ConsOp _ _ _ _) (Spec_Axioms _) =>
+      idtac "prove_spec_overlap: cons-axiom";
       apply SpecOverlap_neq1; [ apply NotInSpec_base | prove_spec_overlap ]
     | |- SpecOverlap (Spec_Axioms _) (Spec_ConsOp _ _ _ _) =>
+      idtac "prove_spec_overlap: axiom-cons";
       apply SpecOverlap_neq2; [ apply NotInSpec_base | prove_spec_overlap ]
     | |- SpecOverlap (Spec_Axioms _) (Spec_Axioms _) =>
-      prove_axiom_overlap
+      idtac "prove_spec_overlap: axiom-axiom";
+      apply SpecOverlap_base; prove_axiom_overlap
+    | |- SpecOverlap ?spec1 ?spec2 =>
+      idtac "prove_spec_overlap: hnf";
+      let spec1_hnf := (eval hnf in spec1) in
+      let spec2_hnf := (eval hnf in spec2) in
+      progress (change (SpecOverlap spec1_hnf spec2_hnf)); prove_spec_overlap
+    | |- ?goal => fail "prove_spec_overlap: not a SpecOverlap goal: " goal
   end.
 
 
