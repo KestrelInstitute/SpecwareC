@@ -281,12 +281,17 @@ let oppred_is_eq oppred =
 (* The type of ops, using underlying term type 'a *)
 type 'a op = (Id.t * 'a * 'a oppred)
 
+let op_params (op: 'a op) : (Id.t * 'a) list =
+  let (op_id,op_tp,oppred) = op in
+  match oppred with
+  | Pred_Trivial ->
+    [field_param_id op_id, op_tp]
+  | Pred_Eq pred | Pred_Fun pred ->
+    [field_param_id op_id, op_tp;
+     field_proof_param_id op_id, pred]
+
 let op_param_ids (op : 'a op) : Id.t list =
-  let (op_id,_,oppred) = op in
-  if oppred_is_nontrivial oppred then
-    [field_param_id op_id; field_proof_param_id op_id]
-  else
-    [field_param_id op_id]
+  List.map fst (op_params op)
 
 (* FIXME: documentation *)
 (* NOTE: the op constrs are all in the context of the ops (and their proofs) of
@@ -421,8 +426,10 @@ let registered_spec_map f =
 let id_descr : (Id.t, Id.t) constr_descr =
   hnf_descr (Descr_Iso ("id", Id.of_string, Id.to_string, string_fast_descr))
 
-(* A description of an OpPred. Note that the builder needs the type associated
-with the op, which is given as the first element of the pair. *)
+(* A description of an OpPred. Note that the constr_expr side is a pair, of the
+oppred itself as well as the type of the underlying op, which is needed to build
+a constr_expr for the oppred. *)
+
 let oppred_descr f : (Constr.t oppred, constr_expr * constr_expr oppred) constr_descr =
   Descr_Iso
     ("OpPred",
@@ -430,7 +437,7 @@ let oppred_descr f : (Constr.t oppred, constr_expr * constr_expr oppred) constr_
        | Left (_, ()) -> Pred_Trivial
        | Right (Left (_, (x, ()))) -> Pred_Eq x
        | Right (Right (Left (_, (pred, ())))) ->
-          Pred_Fun (Term.mkApp (pred, [| Term.mkVar f |]))
+          Pred_Fun (Term.mkApp (pred, [| Term.mkVar (field_param_id f) |]))
        | Right (Right (Right emp)) -> emp.elim_empty),
      (function
        | (tp, Pred_Trivial) -> Left (tp, ())
@@ -438,7 +445,7 @@ let oppred_descr f : (Constr.t oppred, constr_expr * constr_expr oppred) constr_
        | (tp, Pred_Fun pred) ->
           Right (Right (Left (tp, (mkCLambdaN
                                      dummy_loc
-                                     [mk_explicit_var_assum f]
+                                     [mk_explicit_var_assum (field_param_id f)]
                                      pred, ()))))),
      unary_ctor
        specware_mod "Pred_Trivial" Descr_Constr
@@ -1182,7 +1189,12 @@ let import_refinement_constr_expr loc constr_expr =
   let _ = add_definition (loc, spec_import_id imp_num) [] None constr_expr in
   (* Add spec_ops__import<i> : spec_ops (ref_spec _ spec__import<i>) := ... *)
   let op_param_ids = (concat_map op_param_ids ops) in
-  let op_params = List.map mk_explicit_var_assum op_param_ids in
+  let op_params =
+    List.map (fun (id,tp) ->
+              let tp_expr = Constrextern.extern_constr true env evd tp in
+              mk_explicit_assum id tp_expr)
+             (concat_map op_params ops)
+  in
   let op_param_vars = mk_vars loc op_param_ids in
   let op_param_set = Id.Set.of_list op_param_ids in
   let _ = add_definition
