@@ -5,6 +5,7 @@ Load DivideAndConquer.
 Require Import List.
 Import ListNotations.
 Require Import Coq.Arith.Peano_dec.
+Require Import Coq.Arith.Compare_dec.
 Require Import Coq.Arith.Le.
 Require Import Coq.Arith.Div2.
 
@@ -47,7 +48,7 @@ Spec Definition smaller : (D -> D -> Prop) :=
 
 (* The helper operations *)
 Spec Definition primitive : (D -> bool) :=
-  (fun l => if Coq.Arith.Compare_dec.lt_dec (length l) 2 then true else false).
+  (fun l => if lt_dec (length l) 2 then true else false).
 
 (* Split l into (l1,l2) where l1 has length n *)
 Program Fixpoint list_split n (l : {l:list nat | n <= length l}) : list nat * list nat :=
@@ -116,8 +117,31 @@ Definition list_pair_smaller (l_pair1: list nat * list nat)
   length (fst l_pair2) + length (snd l_pair2).
 
 Theorem list_pair_smaller_wf : well_founded list_pair_smaller.
+admit.
+Defined.
 
-Function merge_lists (l_pair: ) : 
+Program Definition merge_lists (l1: list nat) (l2:list nat) : list nat :=
+  well_founded_induction_type_2
+    _ list_pair_smaller_wf
+    ()
+    l1 l2
+
+  refine ().
+
+Function merge_lists (l_pair: list nat * list nat) {wf list_pair_smaller_wf l_pair} : list nat :=
+  let (l1,l2) := l_pair in
+  match l1 with
+    | [] => l2
+    | x1::l1' =>
+      match l2 with
+        | [] => l1
+        | x2::l2' =>
+          if lt_dec x1 x2 then
+            x1::merge_lists (l1',l2)
+          else
+            x2::merge_lists (l1,l2')
+      end
+  end.
 
 Spec Definition compose : (R -> R -> R) :=
   
