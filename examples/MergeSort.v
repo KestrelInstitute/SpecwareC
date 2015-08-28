@@ -7,6 +7,7 @@ Import ListNotations.
 Require Import Coq.Arith.Peano_dec.
 Require Import Coq.Arith.Compare_dec.
 Require Import Coq.Arith.Le.
+Require Import Coq.Arith.Plus.
 Require Import Coq.Arith.Div2.
 
 Fixpoint sorted (l: list nat) : Prop :=
@@ -120,15 +121,7 @@ Theorem list_pair_smaller_wf : well_founded list_pair_smaller.
 admit.
 Defined.
 
-Program Definition merge_lists (l1: list nat) (l2:list nat) : list nat :=
-  well_founded_induction_type_2
-    _ list_pair_smaller_wf
-    ()
-    l1 l2
-
-  refine ().
-
-Function merge_lists (l_pair: list nat * list nat) {wf list_pair_smaller_wf l_pair} : list nat :=
+Function merge_lists (l_pair: list nat * list nat) {wf list_pair_smaller l_pair} : list nat :=
   let (l1,l2) := l_pair in
   match l1 with
     | [] => l2
@@ -142,11 +135,14 @@ Function merge_lists (l_pair: list nat * list nat) {wf list_pair_smaller_wf l_pa
             x2::merge_lists (l1,l2')
       end
   end.
+intros; apply plus_lt_compat_r; apply le_n.
+intros; apply plus_lt_compat_l; apply le_n.
+apply list_pair_smaller_wf.
+Defined.
 
-Spec Definition compose : (R -> R -> R) :=
-  
+Spec Definition compose : (R -> R -> R) := (fun l1 l2 => merge_lists (l1,l2)).
 
-Spec Variable direct_solve : (D -> R).
+Spec Definition direct_solve : (D -> R) := (fun l => l).
 
 (* Soundness axioms *)
 Spec Axiom direct_solve_correct :
