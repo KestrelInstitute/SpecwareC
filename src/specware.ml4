@@ -569,33 +569,135 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
   let spec_expr =
     build_constr_expr spec_descr (List.rev spec.spec_ops,
                                   List.rev spec.spec_axioms) in
-  let _ = debug_printf 1 "@[build_spec_repr (1):@ %a@]"
+  let _ = debug_printf 1 "@[build_spec_repr (1):@ %a@]\n"
                        pp_constr_expr spec_expr in
   (* Internalize spec_expr into a construction *)
   let (constr,uctx) = Constrintern.interp_constr env evd spec_expr in
-  let _ = debug_printf 1 "@[build_spec_repr (2):@ %a@]"
+  let _ = debug_printf 1 "@[build_spec_repr (2):@ %a@]\n"
                        pp_constr constr in
-  (* Unfold all the f, f__var, f__proof, and f__class variables *)
-  let constr_unfolded =
-    reduce_constr
-      [Unfold (concat_map
-                 (fun op ->
-                  let mk_unfold id =
-                    (Locus.AllOccurrences, AN (Ident (loc, id))) in
-                  let (op_id,_,oppred) = op in
-                  if oppred_is_eq oppred then
-                    [mk_unfold op_id; mk_unfold (field_var_id op_id);
-                     mk_unfold (field_class_id op_id);
-                     mk_unfold (field_proof_id op_id)]
-                  else if oppred_is_nontrivial oppred then
-                    [mk_unfold op_id; mk_unfold (field_class_id op_id);
-                     mk_unfold (field_proof_id op_id)]
-                  else
-                    [mk_unfold op_id; mk_unfold (field_class_id op_id)])
-                 spec.spec_ops)]
-      constr
+
+  (* Helper definitions *)
+  let consop_constructor = mk_constructor loc specware_mod "Spec_ConsOp" in
+  let axioms_constructor = mk_constructor loc specware_mod "Spec_Axioms" in
+  (* Helper: unfold constants in constr using const_map, which either maps to a
+  variable id in scope or to None, meaning the constant should be unfolded *)
+  let rec unfold_helper const_map constr =
+    let unfold_const_app const args =
+      try
+        let const_unfolded =
+          match Cmap.find (fst const) const_map with
+          | Some var_id -> Term.mkVar var_id
+          | None ->
+             (* NOTE: the value of const could still require unfolding *)
+             unfold_helper const_map (Environ.constant_value_in env const)
+        in
+        Reduction.beta_appvect const_unfolded args
+      with Not_found ->
+        Constr.map (unfold_helper const_map) constr
+    in
+    match Term.kind_of_term constr with
+    | Term.Const const ->
+       unfold_const_app const [| |]
+    | Term.App (head, args)
+         when Term.isConst head ->
+       (match Term.kind_of_term head with
+        | Term.Const const ->
+           unfold_const_app const (Array.map (unfold_helper const_map) args)
+        | _ -> raise loc (Failure "unfold_helper"))
+    | _ -> Constr.map (unfold_helper const_map) constr
   in
-  let _ = debug_printf 1 "@[build_spec_repr (3):@ %a@]"
+  (* Helpers to add ids to a const_map *)
+  let const_map_add ?(var_opt=None) id const_map =
+    let const = Nametab.locate_constant (qualid_of_ident id) in
+    Cmap.add const var_opt const_map
+  in
+  let const_map_add_multi ids const_map =
+    List.fold_right const_map_add ids const_map in
+  (* Helper: unfold a rest function, the 4th argument of Spec_ConsOp, depending
+  on the form of the oppred *)
+  let rec unfold_rest_fun const_map rem_ops' op_id oppred rest_f =
+    let (f__proof__param,f__proof__param_tp,f__param,f__param_tp,body) =
+      match Term.decompose_lam_n 2 rest_f with
+      | ((nm1,tp1)::(nm2,tp2)::[], body) -> (nm1,tp1,nm2,tp2,body)
+      | _ -> raise loc (Failure "unfold_rest_fun")
+    in
+    (* Recursively unfold the body depending on the oppred *)
+    let (const_map', body') =
+      if oppred_is_eq oppred then
+        (* For equality predicates, unfold f__var, f__class, f__proof, and
+        f__pred, and replace f itself with the local let-bound variable *)
+        let (f__def_nm, rhs, rhs_tp, inner_body) = Term.destLetIn body in
+        let f__def = match f__def_nm with
+          | Name x -> x
+          | _ -> raise loc (Failure "unfold_rest_fun (2)")
+        in
+        let const_map' =
+          const_map_add_multi [field_var_id op_id; field_class_id op_id;
+                               field_proof_id op_id; field_pred_id op_id]
+                              const_map
+        in
+        (* NOTE: we don't want to export the unfolding of f to a local let-bound
+        variable outside the scope of the let, so we separate const_map'
+        (without the local let-bound variable) from const_map'' (with it) *)
+        (* let const_map'' = const_map_add ~var_opt:(Some f__def) op_id const_map' in *)
+        (* FIXME HERE: cannot just replace the constructor f with the local
+        variable f__def, because we need to remove all of f's implicit
+        arguments! *)
+        let const_map'' = const_map_add op_id const_map' in
+        (const_map_add op_id const_map',
+         Term.mkLetIn (Name f__def, unfold_helper const_map rhs,
+                       unfold_helper const_map rhs_tp,
+                       unfold_spec_repr const_map'' rem_ops' inner_body))
+      else if oppred_is_nontrivial oppred then
+        (* For functional oppreds, unfold f, f__class, f__proof, and f__pred *)
+        let const_map' =
+          const_map_add_multi [op_id; field_class_id op_id;
+                               field_proof_id op_id; field_pred_id op_id]
+                              const_map in
+        (const_map', unfold_spec_repr const_map' rem_ops' body)
+      else
+        (* For trivial oppred, just unfold f and f__class *)
+        let const_map' =
+          const_map_add_multi [op_id; field_class_id op_id] const_map in
+        (const_map', unfold_spec_repr const_map' rem_ops' body)
+    in
+    (* Now re-form the appropriate lambda *)
+    Term.mkLambda
+      (f__param, unfold_helper const_map' f__param_tp,
+       Term.mkLambda
+         (f__proof__param, unfold_helper const_map' f__proof__param_tp,
+          body'))
+
+  (* Helper: unfold all the constant definitions in a Spec *)
+  and unfold_spec_repr const_map rem_ops constr =
+    match Term.kind_of_term constr with
+    | Term.App (head, args)
+         when constr_is_constructor axioms_constructor head ->
+       Term.mkApp (head, Array.map (unfold_helper const_map) args)
+    | Term.App (head, [| f_c; tp_c; oppred_c; rest_c |])
+         when constr_is_constructor consop_constructor head ->
+       let ((op_id,_,oppred),rem_ops') =
+         match rem_ops with
+         | op::rem_ops' -> (op,rem_ops')
+         | [] -> raise loc (Failure "unfold_spec_repr")
+       in
+       let _ =
+         if not (Id.equal op_id (destruct_constr id_descr f_c)) then
+           raise loc (Failure "unfold_spec_repr")
+       in
+       Term.mkApp (head,
+                   [| unfold_helper const_map f_c;
+                      unfold_helper const_map tp_c;
+                      (* NOTE: functional oppreds can refer to their op as f
+                      instead of f__param... *)
+                      unfold_helper (const_map_add op_id const_map) oppred_c;
+                      unfold_rest_fun const_map rem_ops' op_id oppred rest_c |])
+    | _ -> raise loc (Failure "unfold_spec_repr")
+  in
+
+  (* Now, unfold all the f, f__var, f__proof, f_pred, and f__class constants *)
+  let constr_unfolded = unfold_spec_repr Cmap.empty (List.rev spec.spec_ops) constr in
+  let _ = debug_printf 1 "@[build_spec_repr (3):@ %a@]\n"
                        pp_constr constr_unfolded in
   (constr_unfolded, uctx)
 
@@ -929,7 +1031,6 @@ let add_spec_field axiom_p lid tp oppred =
  *** Interpretations
  ***)
 
-(* FIXME HERE NOW *)
 let add_instance_for_interp loc id params dom_globref interp codom_ops codom_model =
   (* Build a Coq environment with the params *)
   let env = Global.env () in
