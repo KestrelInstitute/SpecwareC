@@ -76,6 +76,17 @@ let match_proof_id id =
   else
     None
 
+(* Test if an id has the form f__proof__param, returning f if so *)
+let match_proof_param_id id =
+  let id_str = Id.to_string id in
+  let str_len = String.length id_str in
+  if str_len > 14 &&
+       String.compare (String.sub id_str (str_len - 14) 14) "__proof__param" = 0
+  then
+    Some (Id.of_string (String.sub id_str 0 (str_len - 14)))
+  else
+    None
+
 (* The name of the instance associated with a field *)
 let field_inst_id f = add_suffix f "inst"
 
@@ -391,6 +402,25 @@ let filter_nonexistent_fields_and_imports spec =
                    spec_field_exists (spec_import_id impgrp.spec_impgrp_num))
                   spec.spec_imports }
 
+(* Find all the __param and __proof_param implicit arguments on which a
+locally-defined identifier id depends *)
+let field_param_deps id =
+  let gr = Nametab.locate (qualid_of_ident id) in
+  (* FIXME: this just checks if an implicit argument name is f__param or
+  f__proof__param for some existing field f; maybe this should be more
+  subtle...? *)
+  List.filter
+    (fun id ->
+     match match_param_id id, match_proof_param_id id with
+     | Some f, None
+     | _, Some f ->
+        (try Nametab.exists_cci
+               (Nametab.full_name_cci (qualid_of_ident f))
+         with Not_found -> false)
+     | _,_ -> false)
+    (implicit_arg_ids gr)
+
+
 (***
  *** Global registration of specs
  ***)
@@ -521,31 +551,46 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
            Descr_ConstrMap
              ((fun rest_constr ->
                let rest_body_constr =
-                 reduce_constr
-                   [Cbv (Redops.make_red_flag [FBeta])]
-                   (Term.mkApp
-                      (rest_constr,
-                       [| Term.mkVar (field_param_id f);
-                          Term.mkVar (field_proof_param_id f) |]))
-               in
+                 Reduction.beta_appvect
+                   rest_constr [| Term.mkVar (field_param_id f);
+                                  Term.mkVar (field_proof_param_id f) |] in
+               (* NOTE: we peel off the let-binding for a definition, so that
+               any use of that variable instead becomes a reference to the
+               global definition of that field *)
                let rest_body_nolet =
-                 match is_eq, Term.kind_of_term rest_body_constr with
-                 | true, Term.LetIn (Name let_f, _, _, let_body) ->
+                 match Term.kind_of_term rest_body_constr with
+                 | Term.LetIn (Name let_f, _, _, let_body) when is_eq ->
                     if Id.equal f let_f then let_body else
                       rest_body_constr
-                 | _, _ -> rest_body_constr
+                 | _ -> rest_body_constr
                in
                hnf_constr rest_body_nolet),
               (fun rest_expr ->
+               (* Make a lambda expression for the rest argument of Spec_ConsOp.
+               The expressions class_expr and pred_expr are applications of
+               f__class and f__pred, respectively, to all of their implicit
+               arguments corresponding to fields in the current spec. *)
+               let class_expr =
+                 mk_id_app_named_args dummy_loc (field_class_id f)
+                                      (List.map
+                                         (fun id -> (id, mk_var (dummy_loc, id)))
+                                         (field_param_deps (field_class_id f)))
+               in
+               let pred_expr =
+                 if is_nontrivial then
+                   mk_id_app_named_args
+                     dummy_loc (field_pred_id f)
+                     (List.map (fun id -> (id, mk_var (dummy_loc, id)))
+                               (field_param_deps (field_pred_id f)))
+                 else
+                   CHole (dummy_loc, None, IntroAnonymous, None)
+               in
                (mkCLambdaN
                   dummy_loc
                   [LocalRawAssum ([dummy_loc, Name (field_param_id f)], Default Explicit,
-                                  mk_var (dummy_loc, field_class_id f));
-                   LocalRawAssum ([dummy_loc, Name (field_proof_param_id f)], Default Explicit,
-                                  if is_nontrivial then
-                                    mk_var (dummy_loc, field_pred_id f)
-                                  else
-                                    CHole (dummy_loc, None, IntroAnonymous, None))]
+                                  class_expr);
+                   LocalRawAssum ([dummy_loc, Name (field_proof_param_id f)],
+                                  Default Explicit, pred_expr)]
                   (if is_eq then
                      CLetIn (dummy_loc, (dummy_loc, Name f),
                              mkAppC (mk_specware_ref "def",

@@ -233,6 +233,18 @@ let mk_ref_app_named_args loc r args =
 let mk_id_app_named_args loc id args =
   mk_ref_app_named_args loc (Ident (loc, id)) args
 
+(* Get the names of the implicit arguments of a global_reference gr *)
+let implicit_arg_ids gr =
+  concat_map
+    (fun (_,impstatus_list) ->
+     filter_map
+       (fun impstatus ->
+        match impstatus with
+        | Some (id, _, _) -> Some id
+        | None -> None)
+       impstatus_list)
+    (Impargs.implicits_of_global gr)
+
 (* Build a qualified id (NOTE: dir is *not* reversed here) *)
 let mk_qualid dir str =
   make_qualid (DirPath.make (List.rev_map Id.of_string dir)) (Id.of_string str)
