@@ -1,9 +1,11 @@
 * at tactics for refinement
+* Keep the op names, and possibly the type-classes, in prove_simple_interp
+* Tactic to apply an interpretation during a transformation
+* Tie the spec_table in with Coq's Undo/Reset mechanism (see RefMan-tus.tex)
 * tactics for substituting for fields in refinements
 * finalizeRecordType
 * finalizeInductiveType
 * improve parsing for Spec Variable foo : T  so we don't need parens around T
 * Add form: Spec Interpretation foo : spec1 -> spec2 := bar, to allow
   interpretations to be defined from instances (and not just vice-versa)
-* Keep the op names, and possibly the type-classes, in prove_simple_interp
 * Add support for notations
