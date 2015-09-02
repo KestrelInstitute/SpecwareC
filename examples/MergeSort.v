@@ -4,16 +4,10 @@ Load DivideAndConquer.
 
 Require Import List.
 Import ListNotations.
-Require Import Coq.Arith.Peano_dec.
-Require Import Coq.Arith.Compare_dec.
-Require Import Coq.Arith.Le.
-Require Import Coq.Arith.Lt.
-Require Import Coq.Arith.Plus.
-Require Import Coq.Arith.Minus.
+Require Import Coq.Arith.Arith_base.
 Require Import Coq.Arith.Div2.
 Require Import Coq.Wellfounded.Wellfounded.
 Require Import Coq.Relations.Relation_Operators.
-Require Import Coq.Arith.Wf_nat.
 
 
 (***
@@ -182,7 +176,7 @@ Spec Definition smaller : (D -> D -> Prop) :=
 (* Proof that smaller is well-founded. Note that we make this a Definition
 instead of a Theorem because DivideAndConquer_base requires well-foundedness to
 be a subtype predicate and not an axiom. *)
-Spec Definition smaller_wf : (well_founded smaller) :=
+Definition smaller_wf : (well_founded smaller) :=
   (well_founded_ltof _ _).
 
 
@@ -283,7 +277,7 @@ Definition decompose_smallerH l :
   apply lt_0_Sn.
 Qed.
 
-Spec Definition decompose_smaller :
+Definition decompose_smaller :
   (forall l,
      primitive l = false ->
      smaller (fst (decompose l)) l /\ smaller (snd (decompose l)) l) :=
@@ -427,5 +421,34 @@ Spec Theorem solve_soundness :
   apply merge_lists_permOf.
 Qed.
 
-Spec End MergeSort0
-.
+Spec End MergeSort0.
+
+
+(***
+ *** Now we make an interpretation from DivideAndConquer_base to MergeSort0
+ ***)
+
+Spec Interpretation DC_MergeSort0 : DivideAndConquer_base -> MergeSort0.
+prove_simple_interp {{ }}.
+apply (MergeSort0.smaller_wf (D__proof__param:=pf) (smaller__proof__param:=eq_refl)).
+intros d H.
+Check MergeSort0.decompose_smaller.
+apply (MergeSort0.decompose_smaller
+         (smaller__proof__param:=pf2) (primitive__proof__param:=pf3)
+         (decompose__proof__param:=eq_refl)
+         d H).
+apply (MergeSort0.direct_solve_correct
+         (D__param:=t) (D__proof__param:=pf) (R__param:=t0) (R__proof__param:=pf0)
+         (IO__param:=t1) (IO__proof__param:=pf1)
+         (primitive__param:=t3) (primitive__proof__param:=pf3)
+         (direct_solve__proof__param:=pf4)
+         d H).
+apply (MergeSort0.solve_soundness
+         (IO__proof__param:=pf1) (smaller__proof__param:=pf2)
+         (decompose__proof__param:=pf5) (compose__proof__param:=pf6)
+         _ _ _ H H0).
+apply (MergeSort0.solve_soundness
+         (IO__proof__param:=pf1) (smaller__proof__param:=pf2)
+         (decompose__proof__param:=pf5) (compose__proof__param:=pf6)
+         _ _ _ H H0).
+Defined.

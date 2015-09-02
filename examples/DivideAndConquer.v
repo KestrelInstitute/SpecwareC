@@ -26,12 +26,12 @@ Spec Variable smaller : (D -> D -> Prop) | (well_founded smaller).
 
 (* The helper operations *)
 Spec Variable primitive : (D -> bool).
+Spec Variable direct_solve : (D -> R).
 Spec Variable decompose : (D -> D * D) | (forall d,
                                             primitive d = false ->
                                             smaller (fst (decompose d)) d /\
                                             smaller (snd (decompose d)) d).
 Spec Variable compose : (R -> R -> R).
-Spec Variable direct_solve : (D -> R).
 
 (* Soundness axioms *)
 Spec Axiom direct_solve_correct :
@@ -92,10 +92,12 @@ Qed.
 
 Spec End DivideAndConquer_impl.
 
-
+(* FIXME: this does not work when Load-ing this file...? *)
+(*
 Spec Interpretation dc_impl : DivideAndConquer_spec -> DivideAndConquer_impl.
 prove_simple_interp {{ }}.
-rewrite pf8. intros.
+intros.
 apply (DivideAndConquer_impl.solve_correct
-         (solve__param:=t7) (solve__proof__param:=pf8) (solve_soundness__param:=axiom0) (direct_solve_correct__param:=axiom)).
+         (solve__param:=t7) (solve__proof__param:=pf7) (solve_soundness__param:=axiom0) (direct_solve_correct__param:=axiom)).
 Defined.
+*)
