@@ -352,16 +352,50 @@ let op_accessor_id (op : 'a op) : Id.t =
     field_var_id id
   else id
 
-(* Build a constr_expr for the predicate corresponding to an op *)
-let op_pred_expr loc (op : constr_expr op) : constr_expr =
+(* Build a constr_expr for the predicate corresponding to an op. The in_spec
+flag says whether we should assume the associated f__class and f__pred
+type-classes have already been defined. *)
+let op_pred_expr ?(in_spec=false) loc (op : constr_expr op) : constr_expr =
   let (id, _, oppred) = op in
   match oppred with
   | Pred_Trivial ->
      mk_reference ["Coq"; "Init"; "Logic"] "True"
   | Pred_Eq eq_expr ->
-     mk_equality (mk_var (loc, field_var_id id)) eq_expr
+     mk_equality (mk_var (loc, if in_spec then field_var_id id
+                               else field_param_id id)) eq_expr
   | Pred_Fun pred_expr ->
      pred_expr
+
+(* Build the expression binder (f1__param:T) (f1__proof__param:P), body where
+"binder" is "forall" when as_type is true and "lambda" when as_type is false.
+When op is a defined op, also add a let-expression f1 := f1_def around body.
+NOTE: T and P here do not use the op type-classes, i.e., we are assuming we are
+not "in the spec". *)
+let abstract_op loc as_type (op: constr_expr op) body : constr_expr =
+  let (op_id,op_tp,oppred) = op in
+  let full_body =
+    match oppred with
+    | Pred_Eq eq_expr ->
+       mkLetInC ((loc, Name op_id), eq_expr, body)
+    | _ -> body
+  in
+  (if as_type then mkCProdN else mkCLambdaN)
+    loc
+    (LocalRawAssum ([loc, Name (field_param_id op_id)],
+                    Default Explicit, op_tp)
+     ::(if oppred_is_nontrivial oppred then
+          [LocalRawAssum ([loc, Name (field_proof_param_id op_id)],
+                          Default Explicit, op_pred_expr ~in_spec:false loc op)]
+        else []))
+    full_body
+
+(* The plural of abstract_op, above, with as_type=true *)
+let forall_ops loc (ops : constr_expr op list) body : constr_expr =
+  List.fold_right (abstract_op loc true) ops body
+
+(* The plural of abstract_op, above, with as_type=false *)
+let lambda_ops loc (ops : constr_expr op list) body : constr_expr =
+  List.fold_right (abstract_op loc false) ops body
 
 (* Create an empty spec with the given name *)
 let make_empty_spec spec_id =
@@ -554,17 +588,16 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
                  Reduction.beta_appvect
                    rest_constr [| Term.mkVar (field_param_id f);
                                   Term.mkVar (field_proof_param_id f) |] in
-               (* NOTE: we peel off the let-binding for a definition, so that
-               any use of that variable instead becomes a reference to the
-               global definition of that field *)
-               let rest_body_nolet =
+               let rest_body_constr' =
                  match Term.kind_of_term rest_body_constr with
-                 | Term.LetIn (Name let_f, _, _, let_body) when is_eq ->
-                    if Id.equal f let_f then let_body else
-                      rest_body_constr
-                 | _ -> rest_body_constr
-               in
-               hnf_constr rest_body_nolet),
+                 | Term.LetIn (nm, _, rhs_tp, let_body) when is_eq ->
+                    (* NOTE: if the current oppred is an equality, then we expect
+                    a let-expression here binding the definition of the op; we
+                    then replace the let-bound variable here with free var f *)
+                    Reduction.beta_appvect
+                      (Term.mkLambda (nm, rhs_tp, let_body)) [| Term.mkVar f |]
+                 | _ -> rest_body_constr in
+               hnf_constr rest_body_constr'),
               (fun rest_expr ->
                (* Make a lambda expression for the rest argument of Spec_ConsOp.
                The expressions class_expr and pred_expr are applications of
@@ -748,20 +781,6 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
 
 exception MalformedSpec of Constr.t * string * Constr.t
 
-(* Destruct a constr of type Spec into a list of ops and axioms; NOTE: this
-returns the ops in non-reversed order, unlike in the type spec *)
-let destruct_spec_repr constr =
-  try
-    destruct_constr spec_descr (hnf_constr constr)
-  with DescrFailed (tag,sub_constr) ->
-    raise dummy_loc (MalformedSpec (constr,tag,sub_constr))
-
-type refinement_import = constr_expr * constr_expr
-type refinement_import_constr = {
-  ref_import_fromspec: spec_globref;
-  ref_import_interp: Constr.t
-}
-
 
 (* Reduce constr until it is a global_reference to a variable XXX.XXX__Spec,
 where XXX is some spec module registerd in spec_table. *)
@@ -786,6 +805,12 @@ let destruct_spec_globref_constr constr =
      user_err_loc (dummy_loc, "_",
                    str "Not a global spec: "
                    ++ Printer.pr_constr constr)
+
+type refinement_import = constr_expr * constr_expr
+type refinement_import_constr = {
+  ref_import_fromspec: spec_globref;
+  ref_import_interp: Constr.t
+}
 
 (* A description of the RefinementImport type *)
 let refinement_import_descr :
@@ -840,8 +865,9 @@ let destruct_refinementof constr =
  ***)
 
 (* A description of the spec_ops S type for any given spec S. *)
-let spec_ops_descr : ((Constr.t * Constr.t) list,
-                      (constr_expr * constr_expr) list) constr_descr =
+let spec_ops_descr ?(env_opt=None) ?(evdref_opt=None) ()
+    : ((Constr.t * Constr.t) list,
+       (constr_expr * constr_expr) list) constr_descr =
   Descr_Rec
     (fun spec_ops_descr ->
      Descr_Iso
@@ -866,7 +892,7 @@ let spec_ops_descr : ((Constr.t * Constr.t) list,
              (hole_descr Descr_Constr)
              (fun _ -> hole_descr Descr_Constr)
              (fun _ _ -> Descr_Constr)
-             (fun _ _ _ -> hnf_descr spec_ops_descr)
+             (fun _ _ _ -> hnf_descr ~env_opt ~evdref_opt spec_ops_descr)
              Descr_Fail)
           (nullary_ctor
              ["Coq"; "Init"; "Datatypes"] "tt"
@@ -875,7 +901,7 @@ let spec_ops_descr : ((Constr.t * Constr.t) list,
 (* Take a list of ops for a spec S and build a constr_expr of type spec_ops S.
 NOTE: expects ops to be in non-reversed order. *)
 let make_ops_constr_expr loc ops =
-  build_constr_expr spec_ops_descr
+  build_constr_expr (spec_ops_descr ())
                     (List.map (fun (op_id,_,oppred) ->
                                (mk_var (loc, field_param_id op_id),
                                 match oppred with
@@ -1093,17 +1119,32 @@ let add_instance_for_interp loc id params dom_globref interp codom_ops codom_mod
     Constrintern.interp_constr
       env_with_params !evdref
       (mkAppC (mk_specware_ref "map_ops", [interp; codom_ops])) in
+  let map_ops_constr_red =
+    compute_constr
+      ~env_opt:(Some env_with_params) ~evdref_opt:(Some evdref)
+      map_ops_constr in
   let op_constr_list =
-    destruct_constr spec_ops_descr (compute_constr map_ops_constr)
-  in
+    destruct_constr (spec_ops_descr ~env_opt:(Some env_with_params)
+                                    ~evdref_opt:(Some evdref) ())
+                    map_ops_constr_red in
+  (* Helper to substitute the param variable names for the "rel" variables that
+  were introduced in env_with_params *)
+  let subst_vars constr =
+    Vars.substl
+      (List.rev_map (function
+                      | (_, Name id) -> Term.mkVar id
+                      | (_, Anonymous) ->
+                         raise loc (Failure "add_instance_for_interp"))
+                    (names_of_local_assums params))
+      constr in
 
   (* Build a list that maps each op in the domain spec to the constrs that build
      it and (optionally) its proof in the co-domain spec *)
   let op_constrs =
     List.map2
       (fun (op_id, _, oppred) (op_constr, op_proof_constr) ->
-       (op_id, op_constr,
-        map_oppred (fun _ -> op_proof_constr) oppred))
+       (op_id, subst_vars op_constr,
+        map_oppred (fun _ -> subst_vars op_proof_constr) oppred))
       (List.rev dom_spec.spec_ops) op_constr_list
   in
 
@@ -1113,17 +1154,17 @@ let add_instance_for_interp loc id params dom_globref interp codom_ops codom_mod
   let typeclass_args =
     concat_map (fun (op_id, op_constr, op_pf_oppred) ->
                 (field_param_id op_id, Constrextern.extern_constr
-                                         true env_with_params !evdref op_constr)
+                                         true env !evdref op_constr)
                 ::(match op_pf_oppred with
                    | Pred_Trivial -> []
                    | Pred_Eq op_pf_constr ->
                       [field_proof_param_id op_id,
                        Constrextern.extern_constr
-                         true env_with_params !evdref op_pf_constr]
+                         true env !evdref op_pf_constr]
                    | Pred_Fun op_pf_constr ->
                       [field_proof_param_id op_id,
                        Constrextern.extern_constr
-                         true env_with_params !evdref op_pf_constr]))
+                         true env !evdref op_pf_constr]))
                op_constrs in
 
   (* Now add the actual instance *)
@@ -1348,24 +1389,22 @@ let import_refinement_constr_expr loc constr_expr =
   let _ = add_definition (loc, spec_import_id imp_num) [] None constr_expr in
   (* Add spec_ops__import<i> : spec_ops (ref_spec _ spec__import<i>) := ... *)
   let op_param_ids = (concat_map op_param_ids ops) in
-  let op_params =
-    concat_map (fun op ->
-                let op_expr =
-                  map_op (Constrextern.extern_constr true env evd) op in
-                List.map (fun (id,tp) -> mk_explicit_assum id tp)
-                         (op_params op_expr)) ops
-  in
+  let ops_expr =
+    List.map (map_op (Constrextern.extern_constr true env evd)) ops in
   let op_param_vars = mk_vars loc op_param_ids in
   let op_param_set = Id.Set.of_list op_param_ids in
   let _ = add_definition
             (loc, spec_import_ops_id imp_num)
-            op_params
+            []
             (Some
-               (mkAppC (mk_specware_ref "spec_ops",
-                        [mkAppC (mk_specware_ref "ref_spec",
-                                 [mk_hole loc;
-                                  mk_var (loc, spec_import_id imp_num)])])))
-            (make_ops_constr_expr loc ops) in
+               (forall_ops
+                  loc
+                  ops_expr
+                  (mkAppC (mk_specware_ref "spec_ops",
+                           [mkAppC (mk_specware_ref "ref_spec",
+                                    [mk_hole loc;
+                                     mk_var (loc, spec_import_id imp_num)])]))))
+            (lambda_ops loc ops_expr (make_ops_constr_expr loc ops)) in
   (* Build the expr (spec_ops__import<i> op1__param op1__proof__param ...) *)
   let spec_ops_expr =
     mkAppC (mk_var (loc, spec_import_ops_id imp_num),
@@ -1380,14 +1419,21 @@ let import_refinement_constr_expr loc constr_expr =
              axioms in
   let _ = add_definition
             (loc, spec_import_model_id imp_num)
-            (op_params @ axiom_params)
-            (Some (mkAppC
-                     (mk_specware_ref "spec_model",
-                      [mkAppC (mk_specware_ref "ref_spec",
-                               [mk_hole loc;
-                                mk_var (loc, spec_import_id imp_num)]);
-                       spec_ops_expr])))
-            (make_model_constr_expr loc axioms) in
+            []
+            (Some
+               (forall_ops
+                  loc ops_expr
+                  (mkCProdN
+                     loc axiom_params
+                     (mkAppC
+                        (mk_specware_ref "spec_model",
+                         [mkAppC (mk_specware_ref "ref_spec",
+                                  [mk_hole loc;
+                                   mk_var (loc, spec_import_id imp_num)]);
+                          spec_ops_expr])))))
+            (lambda_ops loc ops_expr
+                        (mkCLambdaN loc axiom_params
+                                    (make_model_constr_expr loc axioms))) in
   (* Build the expr (spec_model__import<i> <op params> <axiom params>) *)
   let spec_model_expr =
     mkAppC (mk_var (loc, spec_import_model_id imp_num),
@@ -1786,6 +1832,11 @@ let reporting_exceptions f =
                    ++ str (": could not parse " ^ tag ^ " in subterm ")
                    ++ brk (0,0)
                    ++ Printer.pr_constr sub_constr)
+  | DescrFailed (tag, constr) ->
+     user_err_loc (dummy_loc, "_",
+                   str ("Could not parse " ^ tag ^ " in ")
+                   ++ brk (0,0)
+                   ++ Printer.pr_constr constr)
 
 (* Syntactic class to parse name translation elements *)
 VERNAC ARGUMENT EXTEND name_translation_elem
@@ -1949,43 +2000,46 @@ VERNAC COMMAND EXTEND Spec
     -> [ reporting_exceptions
            (fun () ->
             start_definition
-              ~hook:(fun _ _ ->
-                     let loc = located_loc lmorph_name in
-                     let morph_name = located_elem lmorph_name in
-                     let codom_locref = spec_locref_of_ref codom in
-                     let codom_spec = lookup_spec codom_locref in
-                     let op_param_ids =
-                       concat_map op_param_ids (List.rev codom_spec.spec_ops) in
-                     let codom_args = List.map
-                                        (fun id -> (id, mk_var (loc, id)))
-                                        op_param_ids in
-                     ignore
-                       (add_instance_for_interp
-                          (* The loc *)
+              ~hook:
+              (fun _ _ ->
+               reporting_exceptions
+                 (fun () ->
+                  let loc = located_loc lmorph_name in
+                  let morph_name = located_elem lmorph_name in
+                  let codom_locref = spec_locref_of_ref codom in
+                  let codom_spec = lookup_spec codom_locref in
+                  let op_param_ids =
+                    concat_map op_param_ids (List.rev codom_spec.spec_ops) in
+                  let codom_args = List.map
+                                     (fun id -> (id, mk_var (loc, id)))
+                                     op_param_ids in
+                  ignore
+                    (add_instance_for_interp
+                       (* The loc *)
+                       loc
+                       (* Instance name: morph_name__instance *)
+                       (add_suffix morph_name "instance")
+                       (* Params: the args of codom plus a codom instance *)
+                       (List.map mk_implicit_var_assum op_param_ids
+                        @ [mk_implicit_assum
+                             (Id.of_string "Spec")
+                             (mk_ref_app_named_args
+                                loc
+                                (spec_typeclass_ref loc codom_locref)
+                                codom_args)])
+                       (* Domain globref *)
+                       (lookup_spec_globref (spec_locref_of_ref dom))
+                       (* Interpretation: the one we just added *)
+                       (mk_var (loc, morph_name))
+                       (* Co-domain spec ops: codom.codom__ops *)
+                       (mk_ref_app_named_args
                           loc
-                          (* Instance name: morph_name__instance *)
-                          (add_suffix morph_name "instance")
-                          (* Params: the args of codom plus a codom instance *)
-                          (List.map mk_implicit_var_assum op_param_ids
-                           @ [mk_implicit_assum
-                                (Id.of_string "Spec")
-                                (mk_ref_app_named_args
-                                   loc
-                                   (spec_typeclass_ref loc codom_locref)
-                                   codom_args)])
-                          (* Domain globref *)
-                          (lookup_spec_globref (spec_locref_of_ref dom))
-                          (* Interpretation: the one we just added *)
-                          (mk_var (loc, morph_name))
-                          (* Co-domain spec ops: codom.codom__ops *)
-                          (mk_ref_app_named_args
-                                   loc
-                                   (spec_ops_ref loc codom_locref)
-                                   codom_args)
-                          (* Co-domain spec model: proj1 spec_models_iso Spec *)
-                          (mkAppC (mk_reference ["Coq"; "Init"; "Logic"] "proj1",
-                                   [mk_specware_ref "spec_models_iso";
-                                    mk_var (loc, Id.of_string "Spec")]))))
+                          (spec_ops_ref loc codom_locref)
+                          codom_args)
+                       (* Co-domain spec model: proj1 spec_models_iso Spec *)
+                       (mkAppC (mk_reference ["Coq"; "Init"; "Logic"] "proj1",
+                                [mk_specware_ref "spec_models_iso";
+                                 mk_var (loc, Id.of_string "Spec")])))))
               lmorph_name []
               (mkAppC (mk_specware_ref "Interpretation",
                        [mkRefC (spec_repr_ref (qualid_of_reference dom));
@@ -1993,14 +2047,18 @@ VERNAC COMMAND EXTEND Spec
 
 END
 
-(* Top-level syntax for morphisms *)
-(*
-VERNAC COMMAND EXTEND Morphism
 
-  (* Define a named morphism with no name translation *)
-  | [ "Spec" "Morphism" ident(morph_name) ":" global(s1) "->" global(s2) ]
-    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity, [morph_name]),
-          Vernacexpr.VtLater) ]
-    -> [ start_morphism (dummy_loc, morph_name) s1 s2 [] ]
+(* Helper tactics *)
+
+TACTIC EXTEND intro_string_tac
+  | [ "intro_string" constr(s) ]
+    -> [ let str = destruct_constr string_descr s in
+         Proofview.tclUNIT ()
+           (*
+         Tacinterp.eval_tactic 
+           (Tacexpr.TacAtom
+              (dummy_loc,
+               Tacexpr.TacIntroMove (Some (Id.of_string str), MoveLast))) *)
+       ]
+
 END
- *)

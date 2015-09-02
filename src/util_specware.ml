@@ -499,9 +499,10 @@ let add_typeclass_hints hints =
   List.iter (Hints.add_hints false ["typeclass_instances"]) hints
 
 (* Reduce a constr using a list of reduction expressions *)
-let reduce_constr reds constr =
-  let env = Global.env () in
-  let evdref = ref Evd.empty in
+let reduce_constr ?(env_opt=None) ?(evdref_opt=None) reds constr =
+  let env = match env_opt with Some env -> env | None -> Global.env () in
+  let evdref =
+    match evdref_opt with Some evdref -> evdref | None -> ref Evd.empty in
   let apply_redexpr c r =
     let (evd,r_interp) = Tacinterp.interp_redexp env !evdref r in
     let _ = evdref := evd in
@@ -509,12 +510,13 @@ let reduce_constr reds constr =
   List.fold_left apply_redexpr constr reds
 
 (* Reduce a constr to head normal form *)
-let hnf_constr constr =
-  reduce_constr [Hnf] constr
+let hnf_constr ?(env_opt=None) ?(evdref_opt=None) constr =
+  reduce_constr ~env_opt ~evdref_opt [Hnf] constr
 
 (* Reduce a constr using the "compute" reduction (which is call-by-value) *)
-let compute_constr constr =
+let compute_constr ?(env_opt=None) ?(evdref_opt=None) constr =
   reduce_constr
+    ~env_opt ~evdref_opt
     [Cbv (Redops.make_red_flag [FBeta;FIota;FZeta;FDeltaBut []])]
     constr
 
@@ -882,7 +884,11 @@ let rec destruct_constr : type t f. (t,f) constr_descr -> Constr.t -> t = functi
   | Descr_Iso (name,iso_to, iso_from, descr') ->
      fun constr ->
      (try iso_to (destruct_constr descr' constr)
-      with DescrFailedInternal -> raise dummy_loc (DescrFailed (name, constr)))
+      with
+      | DescrFailedInternal -> raise dummy_loc (DescrFailed (name, constr))
+      | Not_found ->
+         anomaly (str ("Not_found raised while destructing " ^ name ^ " from constr ")
+                  ++ (Printer.pr_constr constr)))
   | Descr_ConstrMap (map_to, map_from, descr') ->
      fun constr -> destruct_constr descr' (map_to constr)
   | Descr_Rec f -> destruct_constr (f (Descr_Rec f))
@@ -982,8 +988,15 @@ let quinary_ctor =
               descr_rest)
 
 (* Description that always reduced a constr to hnf *)
-let hnf_descr (descr: ('t,'f) constr_descr) : ('t,'f) constr_descr =
-  Descr_ConstrMap (hnf_constr, (fun x -> x), descr)
+let hnf_descr ?(env_opt=None) ?(evdref_opt=None)
+              (descr: ('t,'f) constr_descr) : ('t,'f) constr_descr =
+  Descr_ConstrMap ((fun x ->
+                    try hnf_constr ~env_opt ~evdref_opt x
+                    with Not_found ->
+                      anomaly (str "Not_found raised while hnf-reducing constr "
+                               ++ brk (0,0)
+                               ++ Printer.pr_constr x)),
+                   (fun x -> x), descr)
 
 (* Description that always builds a hole *)
 let hole_descr (descr: ('t,'f) constr_descr) : ('t, unit) constr_descr =
