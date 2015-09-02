@@ -135,6 +135,11 @@ Print NatMonoid.NatMonoid.
 Print NatMonoid.NatMonoid__Spec.
 
 
+Spec Interpretation monoid_natmonoid : Monoid -> NatMonoid.
+prove_simple_interp {{ }}.
+Defined.
+
+
 Spec NatMonoid_Import.
 Spec Import NatMonoid.
 Spec End NatMonoid_Import.
@@ -147,7 +152,6 @@ apply id_refinement.
 Defined.
 
 Print NatMonoid_Import2.NatMonoid_Import2.
-
 
 Spec Group2.
 
@@ -167,6 +171,11 @@ Spec End Group2.
 
 
 Spec Interpretation Monoid_Group2 : Monoid -> Group2.
+unfold Monoid.Monoid__Spec, Group2.Group2__Spec.
+apply (interp_cons_strengthen_xlate {{ "m_"% +-> "g_"% }});
+  [ intros; apply I | ].
+intro_string ("T"%string).
+
 prove_simple_interp {{ "m_"% +-> "g_"% }}.
 Defined.
 
