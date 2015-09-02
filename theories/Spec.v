@@ -1345,6 +1345,34 @@ Definition interp_cons_strengthen_xlate xlate f1 T (oppred1 oppred2: OpPred T)
                     map_model (i t_o pf_o) rest_o model2
               end).
 
+(* Similar to the above, but substitute the definition of an op that is defined
+in the co-domain into the domain spec *)
+Definition interp_cons_def_xlate xlate f1 T (oppred1: OpPred T) t2
+           {spec1: forall t, oppred1 t -> Spec} {spec2}
+           (oppred1_pf: oppred1 t2)
+           (i: forall t pf2,
+                 Interpretation (spec1 t2 oppred1_pf) (spec2 t pf2)) :
+  Interpretation (Spec_ConsOp f1 T oppred1 spec1)
+                 (Spec_ConsOp (translate_field xlate f1) T (Pred_Eq t2) spec2) :=
+  mkInterp (fun ops2:spec_ops (Spec_ConsOp (translate_field xlate f1)
+                                           T (Pred_Eq t2) spec2) =>
+              let (t_o,o) := ops2 in
+              let (pf_o, rest_o) := o in
+              ops_cons t2 oppred1_pf (map_ops (i t_o pf_o) rest_o))
+           (fun ops2 =>
+              match ops2
+                    return spec_model (Spec_ConsOp (translate_field xlate f1)
+                                                   T (Pred_Eq t2) spec2) ops2 ->
+                           spec_model
+                             (Spec_ConsOp f1 T oppred1 spec1)
+                             (let (t_o,o) := ops2 in
+                              let (pf_o,rest_o) := o in
+                              ops_cons t2 oppred1_pf (map_ops (i _ _) rest_o)) with
+                | existT _ t_o (existT _ pf_o rest_o) =>
+                  fun model2 =>
+                    map_model (i t_o pf_o) rest_o model2
+              end).
+
 (* Similar to the above, but allow the field types to be provably, not just
 definitionally, equal *)
 Definition interp_cons_strengthen_xlate_eq xlate f1 T1 T2 (oppred1: OpPred T1)
@@ -1379,6 +1407,17 @@ have to be re-ordered, but where the fields can be translated between the domain
 spec and the co-domain spec. *)
 Ltac try_prove_simple_interp_pred :=
   try assumption; try apply I.
+Ltac intros_for_cons_op f oppred :=
+  (* FIXME: wish I could convert f to an id... *)
+  let f_var := fresh "t" in
+  let f_pf_var := fresh "pf" in
+  intros f_var f_pf_var;
+  (* (lazymatch oppred with
+     | Pred_Eq _ =>
+       rewrite f_pf_var
+     | _ => idtac
+   end) *)
+  idtac.
 Ltac prove_simple_interp xlate :=
   let next :=
       lazymatch goal with
@@ -1387,20 +1426,23 @@ Ltac prove_simple_interp xlate :=
         lazymatch (eval cbn in (Field_dec f2 (translate_field xlate f1))) with
           | left _ =>
             first
-              [ apply (interp_cons_strengthen_xlate xlate); intros;
-                [ try_prove_simple_interp_pred | prove_simple_interp xlate ]
-              | (let eT := fresh "eT" in
-                 let eT := evar (eT:@eq Type T2 T1) in
-                 apply (interp_cons_strengthen_xlate_eq
-                          xlate f1 T1 T2 oppred1 oppred2 eT);
-                 intros; [ try_prove_simple_interp_pred
-                         | prove_simple_interp xlate ]) ]
+              [ apply (interp_cons_def_xlate xlate);
+                [ intros; try_prove_simple_interp_pred
+                | intros_for_cons_op f2 oppred2; prove_simple_interp xlate ]
+              | apply (interp_cons_strengthen_xlate xlate);
+                [ intros; try_prove_simple_interp_pred
+                | intros_for_cons_op f2 oppred2; prove_simple_interp xlate ]
+              | (eapply (interp_cons_strengthen_xlate_eq
+                           xlate f1 T1 T2 oppred1 oppred2);
+                 [ intros; try_prove_simple_interp_pred
+                 | intros_for_cons_op f2 oppred2; prove_simple_interp xlate ]) ]
           | right _ =>
             apply interp_cons_r; intros; prove_simple_interp xlate
         end
       | |- Interpretation (Spec_Axioms _)
-                          (Spec_ConsOp ?f1 ?T1 ?oppred1 ?rest1) =>
-        apply interp_cons_r; intros; prove_simple_interp xlate
+                          (Spec_ConsOp ?f2 ?T2 ?oppred2 ?rest2) =>
+        apply interp_cons_r; intros_for_cons_op f2 oppred2;
+        prove_simple_interp xlate
       | |- Interpretation (Spec_Axioms _) (Spec_Axioms _) =>
         idtac "axioms";
         apply (mkInterp (fun _ => tt : spec_ops (Spec_Axioms _)));
