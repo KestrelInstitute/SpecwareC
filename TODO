@@ -1,3 +1,4 @@
+* pick a better wildcard character in translations than "%"
 * at tactics for refinement
 * Keep the op names, and possibly the type-classes, in prove_simple_interp
 * Tactic to apply an interpretation during a transformation
