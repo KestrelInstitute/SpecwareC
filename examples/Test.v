@@ -134,51 +134,27 @@ Spec End NatMonoid.
 Print NatMonoid.NatMonoid.
 Print NatMonoid.NatMonoid__Spec.
 
-(*
-Show Obligation Tactic.
-Print Ltac Tactics.program_simpl.
-Local Obligation Tactic := idtac.
 
-Program Definition monoid_natmonoid :
-  Specware.Spec.Interpretation Monoid.Monoid__Spec NatMonoid.NatMonoid__Spec :=
-  Specware.Spec.mkInterp
-    (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) =>
-     match ops with
-     | Coq.Init.Specif.existT _ T__var
-       (Coq.Init.Specif.existT _ T__proof
-        (Coq.Init.Specif.existT _ m_zero__var
-         (Coq.Init.Specif.existT _ m_zero__proof
-          (Coq.Init.Specif.existT _ m_plus__var
-           (Coq.Init.Specif.existT _ m_plus__proof Coq.Init.Datatypes.tt))))) =>
-         let T := nat in
-         let m_zero := 0 in
-         let m_plus := plus in
-         (Coq.Init.Specif.existT
-            _
-            nat
-           (Coq.Init.Specif.existT _ _
-              (Coq.Init.Specif.existT _ m_zero__var
-                 (Coq.Init.Specif.existT _ _
-                    (Coq.Init.Specif.existT _ m_plus__var
-                       (Coq.Init.Specif.existT _ _ Coq.Init.Datatypes.tt)))))
-          : spec_ops Monoid.Monoid__Spec)
-     end)
-    (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) model =>
-       _
-)
-.
+Section monoid_natmonoid__instance_section.
+Import NatMonoid.
+Program Instance monoid_natmonoid `{NatMonoid.NatMonoid} :
+  Monoid.Monoid (T__param:=NatMonoid.T:Type)
+                (m_zero__param:=NatMonoid.m_zero)
+                (m_plus__param:=NatMonoid.m_plus).
 Obligation 1.
-constructor.
-Defined.
+unfold Monoid.m_zero_left__class, Monoid.T, Monoid.m_zero, Monoid.m_plus.
+apply m_zero_left.
+Qed.
 Obligation 2.
-constructor.
-Defined.
+unfold Monoid.m_zero_right__class, Monoid.T, Monoid.m_zero, Monoid.m_plus.
+apply m_zero_right.
+Qed.
 Obligation 3.
-constructor.
-Defined.
-Obligation 4.
-intros.
-*)
+unfold Monoid.m_plus_assoc__class, Monoid.T, Monoid.m_zero, Monoid.m_plus.
+apply m_plus_assoc.
+Qed.
+End monoid_natmonoid__instance_section.
+
 
 Spec Interpretation monoid_natmonoid : Monoid -> NatMonoid := { T +-> (T:Type) }.
 Obligation 4.
