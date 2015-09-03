@@ -169,6 +169,18 @@ let match_prefix id prefix =
     Some (String.sub id_str pre_len (id_len - pre_len))
   else None
 
+(* Test if an identifier has a given suffix, and if so, return the
+   rest of the identifier after that suffix *)
+let match_suffix id suffix =
+  let suf_len = String.length suffix in
+  let id_str = Id.to_string id in
+  let id_len = String.length id_str in
+  if id_len >= suf_len &&
+       String.compare (String.sub id_str (id_len - suf_len) suf_len) suffix = 0
+  then
+    Some (String.sub id_str 0 (id_len - suf_len))
+  else None
+
 (* Check if an identifier has a given suffix *)
 let has_suffix id suffix =
   let str = Id.to_string id in
@@ -205,15 +217,16 @@ let mk_tactic_hole loc tac =
   (CHole (loc, None, IntroAnonymous,
           Some (Genarg.in_gen (Genarg.rawwit Constrarg.wit_tactic) tac)))
 
+(* Build a glob_tactic_expr for a call to a named tactic *)
+let mk_tactic_call loc tac_qualid args =
+  Tacexpr.TacArg (loc, Tacexpr.TacCall (loc, Qualid (loc, tac_qualid), args))
+
 (* Build a hole to be filled in by a specific, named tactic *)
 let mk_named_tactic_hole loc tac_qualid =
   (CHole (loc, None, IntroAnonymous,
           Some (Genarg.in_gen
                   (Genarg.rawwit Constrarg.wit_tactic)
-                  (Tacexpr.TacArg
-                     (loc,
-                      Tacexpr.TacCall
-                        (loc, Qualid (loc, tac_qualid), []))))))
+                  (mk_tactic_call loc tac_qualid []))))
 
 (* Build an application *)
 let mk_app f args =
@@ -344,6 +357,37 @@ let mk_explicit_var_assum id =
                                Some (Evar_kinds.BinderType (Name id)),
                                IntroAnonymous, None))
 
+(* Issue a Context command *)
+let add_to_context params =
+  let cmd = VernacContext params in
+  let _ = debug_printf 1 "@[context command:@ %a@]\n" pp_vernac cmd in
+  ignore (Classes.context false params)
+
+(* Begin a new module *)
+let begin_module mod_name =
+  let loc = located_loc mod_name in
+  interp (loc, VernacDefineModule (None, mod_name, [], Check [], []))
+
+(* End the current module, which should have name mod_name *)
+let end_module mod_name =
+  let loc = located_loc mod_name in
+  interp (loc, VernacEndSegment mod_name)
+
+(* Begin a new section *)
+let begin_section sect_id =
+  Lib.open_section sect_id
+
+(* End the current section *)
+let end_section () =
+  Lib.close_section ()
+
+(* Perform some operation(s) inside a newly-defined module *)
+let within_module mod_name f =
+  let _ = begin_module mod_name in
+  let ret = f () in
+  let _ = end_module mod_name in
+  ret
+
 (* Add a definition to the current Coq image *)
 let add_definition ?(hook = (fun _ _ -> ())) lid params type_opt body =
   let cmd = VernacDefinition
@@ -355,6 +399,61 @@ let add_definition ?(hook = (fun _ _ -> ())) lid params type_opt body =
   Command.do_definition
     (located_elem lid) (Global, false, Definition) params None body type_opt
     (Lemmas.mk_hook hook)
+
+(* Add a Program definition, with holes that are filled out by user tactics. The
+tac_map variable optionally maps evar names to tactics for them *)
+let add_program_definition ?(hook = (fun _ _ -> ())) ?tactic
+                           lid params tp_opt body =
+  let open Entries in
+  let id = located_elem lid in
+  let cmd = VernacDefinition
+              ((None, Definition), lid,
+               DefineBody (params, None, body, tp_opt))
+  in
+  let _ = debug_printf 1 "@[add_definition command: @ Program %a@]\n" pp_vernac cmd in
+  (* NOTE: this code is mostly copied Command.do_definition *)
+  let (ce, evd, imps as def) =
+    Command.interp_definition params false None body tp_opt in
+  let _ = debug_printf 1 "debug 0\n" in
+  let env = Global.env () in
+  let (c,ctx), sideff = Future.force ce.const_entry_body in
+  assert(Declareops.side_effects_is_empty sideff);
+  assert(Univ.ContextSet.is_empty ctx);
+  let typ = match ce.const_entry_type with
+    | Some t -> t
+    | None -> Retyping.get_type_of env evd c
+  in
+  let _ = debug_printf 1 "debug 1\n" in
+  Obligations.check_evars env evd;
+  let _ = debug_printf 1 "debug 2\n" in
+  let obls, _, c, cty =
+    Obligations.eterm_obligations env id evd 0 c typ
+  in
+  let _ = debug_printf 1 "debug 3\n" in
+  let (tac_interp_opt, wrapper, hook) =
+    match tactic with
+    | None -> (None, (fun f -> f ()), hook)
+    | Some tac ->
+       let tac_interp = Tacinterp.eval_tactic tac in
+       (Some tac_interp,
+        (fun f ->
+         let _ = begin_section (add_suffix id "program_section") in
+         let _ = Obligations.set_default_tactic true tac in
+         f ()),
+        (fun x y -> let _ = end_section () in hook x y))
+  in
+  let obls = Array.map (fun ((id, tp, k, status, set, tac_opt) as obl) ->
+                        (id, tp, k, status, set,
+                         Option.append tac_interp_opt tac_opt))
+                       obls in
+  let ctx = Evd.evar_universe_context evd in
+  wrapper (fun () ->
+           ignore(Obligations.add_definition
+                    id ~term:c cty ctx ~implicits:imps
+                    ~kind:(Global, false, Definition)
+                    ~hook:(Lemmas.mk_hook hook)
+                    ?tactic:tac_interp_opt obls))
+
 
 (* Add a local definition, i.e., do a Let vernacular command *)
 let add_local_definition id params type_opt body =
@@ -381,7 +480,7 @@ let start_theorem ?(hook = (fun _ _ -> ())) thm_kind lid params tp =
   let cmd = VernacStartTheoremProof
               (thm_kind, [Some lid, (params, tp, None)], false)
   in
-  let _ = debug_printf 1 "@[start_definition command:@ %a@]\n" pp_vernac cmd in
+  let _ = debug_printf 1 "@[start_theorem command:@ %a@]\n" pp_vernac cmd in
   (* interp (located_loc id, cmd) *)
   Lemmas.start_proof_com
     (Global, false, Proof thm_kind) [Some lid, (params, tp, None)]
@@ -462,37 +561,6 @@ let begin_instance ?(hook=(fun _ -> ())) inst_params inst_name inst_tp =
   ignore
     (Classes.new_instance
        false inst_params (inst_name, Explicit, inst_tp) None ~hook:hook None)
-
-(* Issue a Context command *)
-let add_to_context params =
-  let cmd = VernacContext params in
-  let _ = debug_printf 1 "@[context command:@ %a@]\n" pp_vernac cmd in
-  ignore (Classes.context false params)
-
-(* Begin a new module *)
-let begin_module mod_name =
-  let loc = located_loc mod_name in
-  interp (loc, VernacDefineModule (None, mod_name, [], Check [], []))
-
-(* End the current module, which should have name mod_name *)
-let end_module mod_name =
-  let loc = located_loc mod_name in
-  interp (loc, VernacEndSegment mod_name)
-
-(* Begin a new section *)
-let begin_section sect_id =
-  Lib.open_section sect_id
-
-(* End the current section *)
-let end_section () =
-  Lib.close_section ()
-
-(* Perform some operation(s) inside a newly-defined module *)
-let within_module mod_name f =
-  let _ = begin_module mod_name in
-  let ret = f () in
-  let _ = end_module mod_name in
-  ret
 
 (* Add a list of hints to the typeclass_instances database *)
 let add_typeclass_hints hints =

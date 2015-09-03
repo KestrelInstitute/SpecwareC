@@ -38,14 +38,7 @@ open Topconstr
 let field_param_id f = add_suffix f "param"
 
 (* Test if an id has the form f__param, returning f if so *)
-let match_param_id id =
-  let id_str = Id.to_string id in
-  let str_len = String.length id_str in
-  if str_len > 7 &&
-       String.compare (String.sub id_str (str_len - 7) 7) "__param" = 0 then
-    Some (Id.of_string (String.sub id_str 0 (str_len - 7)))
-  else
-    None
+let match_param_id id = Option.map Id.of_string (match_suffix id "__param")
 
 (* Build the identifier used to quantify over the proof of a field's oppred as a
    local variable *)
@@ -67,25 +60,11 @@ let field_pred_id f = add_suffix f "pred"
 let field_proof_id f = add_suffix f "proof"
 
 (* Test if an id has the form f__proof, returning f if so *)
-let match_proof_id id =
-  let id_str = Id.to_string id in
-  let str_len = String.length id_str in
-  if str_len > 7 &&
-       String.compare (String.sub id_str (str_len - 7) 7) "__proof" = 0 then
-    Some (Id.of_string (String.sub id_str 0 (str_len - 7)))
-  else
-    None
+let match_proof_id id = Option.map Id.of_string (match_suffix id "__proof")
 
 (* Test if an id has the form f__proof__param, returning f if so *)
 let match_proof_param_id id =
-  let id_str = Id.to_string id in
-  let str_len = String.length id_str in
-  if str_len > 14 &&
-       String.compare (String.sub id_str (str_len - 14) 14) "__proof__param" = 0
-  then
-    Some (Id.of_string (String.sub id_str 0 (str_len - 14)))
-  else
-    None
+  Option.map Id.of_string (match_suffix id "__proof__param")
 
 (* The name of the instance associated with a field *)
 let field_inst_id f = add_suffix f "inst"
@@ -456,6 +435,51 @@ let field_param_deps id =
 
 
 (***
+ *** Exceptions
+ ***)
+
+(* There is no current spec *)
+exception NoCurrentSpec
+
+(* There is already a current spec *)
+exception CurrentSpecExists
+
+(* Incorrect name for the current spec *)
+exception WrongCurrentSpecName
+
+(* Field already exists in the current spec *)
+exception FieldExists of Id.t
+
+(* MalformedSpec (spec_c,tag,sub_c): error parsing sub-component sub_c as a tag
+object in the Spec object spec_c *)
+exception MalformedSpec of Constr.t * string * Constr.t
+
+(* MalformedRefinement (ref_c,tag,sub_c): error parsing sub-component sub_c as a tag
+object in the RefinementOf object ref_c *)
+exception MalformedRefinement of Constr.t * string * Constr.t
+
+(* Run f, catching any exceptions and turning them into user_errors *)
+(* FIXME: actually write this! *)
+let reporting_exceptions f =
+  try f ()
+  with
+  | MalformedRefinement (constr, tag, sub_constr) ->
+     user_err_loc (dummy_loc, "_",
+                   str "Malformed refinement term "
+                   ++ brk (0,0)
+                   ++ Printer.pr_constr constr
+                   ++ brk (0,0)
+                   ++ str (": could not parse " ^ tag ^ " in subterm ")
+                   ++ brk (0,0)
+                   ++ Printer.pr_constr sub_constr)
+  | DescrFailed (tag, constr) ->
+     user_err_loc (dummy_loc, "_",
+                   str ("Could not parse " ^ tag ^ " in ")
+                   ++ brk (0,0)
+                   ++ Printer.pr_constr constr)
+
+
+(***
  *** Global registration of specs
  ***)
 
@@ -779,8 +803,6 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
                        pp_constr constr_unfolded in
   (constr_unfolded, uctx)
 
-exception MalformedSpec of Constr.t * string * Constr.t
-
 
 (* Reduce constr until it is a global_reference to a variable XXX.XXX__Spec,
 where XXX is some spec module registerd in spec_table. *)
@@ -850,8 +872,6 @@ let refinementof_descr : (refinementof_constr, refinementof) constr_descr =
        (fun _ _ -> Descr_Constr)
        (fun _ _ _ -> hnf_descr (list_descr (hnf_descr refinement_import_descr)))
        Descr_Fail)
-
-exception MalformedRefinement of Constr.t * string * Constr.t
 
 let destruct_refinementof constr =
   try
@@ -986,18 +1006,6 @@ let rec make_model_constr_expr loc axioms =
 (* The currrent spec being defined, if one exists *)
 let current_spec : spec option ref = ref None
 
-(* There is no current spec *)
-exception NoCurrentSpec
-
-(* There is already a current spec *)
-exception CurrentSpecExists
-
-(* Incorrect name for the current spec *)
-exception WrongCurrentSpecName
-
-(* Field already exists in the current spec *)
-exception FieldExists of Id.t
-
 (* Ensure that current_spec is up-to-date with the current image, dealing with
 possible Undos by the user *)
 let validate_current_spec loc =
@@ -1099,6 +1107,75 @@ let add_spec_field axiom_p lid tp oppred =
 
 
 (***
+ *** Spec Translations
+ ***)
+
+(* A spec translation specifies a map on identifiers *)
+type spec_translation_elem =
+  (* Map a single name to another *)
+  | XlateSingle of Id.t * Id.t
+  (* Map all names with a given prefix to instead use a different prefix *)
+  | XlatePrefix of string * string
+
+type spec_translation = spec_translation_elem list
+
+(* Inductive description of SpecTranslationElem objects *)
+let spec_translation_elem_descr : (spec_translation_elem,
+                                   spec_translation_elem) constr_descr =
+  Descr_Iso
+    ("SpecTranslationElem",
+     (function
+       | Left (f_from, (f_to, ())) -> XlateSingle (f_from, f_to)
+       | Right (Left (f_from_prefix, (f_to_prefix, ()))) ->
+          XlatePrefix (f_from_prefix, f_to_prefix)
+       | Right (Right emp) -> emp.elim_empty),
+     (function
+       | XlateSingle (f_from, f_to) -> Left (f_from, (f_to, ()))
+       | XlatePrefix (f_from_prefix, f_to_prefix) ->
+          Right (Left (f_from_prefix, (f_to_prefix, ())))),
+     binary_ctor
+       specware_mod "XlateSingle" id_descr (fun _ -> id_descr)
+       (binary_ctor
+          specware_mod "XlatePrefix"
+          string_fast_descr (fun _ -> string_fast_descr)
+          Descr_Fail))
+
+(* Inductive description of SpecTranslation objects *)
+let spec_translation_descr : (spec_translation, spec_translation) constr_descr =
+  Descr_Iso
+    ("SpecTranslation",
+     (function
+       | Left (elems, ()) -> elems
+       | Right emp -> emp.elim_empty),
+     (fun elems -> Left (elems, ())),
+     unary_ctor
+       specware_mod "mkSpecTranslation" (list_descr spec_translation_elem_descr)
+       Descr_Fail)
+
+(* Translate an id using a single translation_elem, returning None if the
+translation_elem had no effect; same as translate_field1 in Spec.v *)
+let translate_field1 xlate_elem f =
+  match xlate_elem with
+  | XlateSingle (f_from, f_to) ->
+     if Id.equal f f_from then
+       Some f_to
+     else None
+  | XlatePrefix (from_prefix, to_prefix) ->
+     (match match_prefix f from_prefix with
+      | None -> None
+      | Some f_suf -> Some (Id.of_string (to_prefix ^ f_suf)))
+
+(* Translate an id; this is the same as translate_field in Spec.v *)
+let rec translate_field xlate f =
+  match xlate with
+  | [] -> f
+  | elem::xlate' ->
+     (match translate_field1 elem f with
+      | None -> translate_field xlate' f
+      | Some res -> res)
+
+
+(***
  *** Interpretations
  ***)
 
@@ -1190,6 +1267,159 @@ let add_instance_for_interp loc id params dom_globref interp codom_ops codom_mod
   in
 
   op_constrs
+
+(* Mappings from names in a domain spec to names or terms in a codomain spec *)
+type interp_map_elem =
+  (* Map a name to another name using a spec translation *)
+  | InterpMapXlate of Loc.t * spec_translation_elem
+  (* Map a name to an expression *)
+  | InterpMapTerm of Id.t * constr_expr
+type interp_map = interp_map_elem list
+
+(* Apply an interp_map to an identifier *)
+let rec apply_interp_map top_loc interp_map f =
+  match interp_map with
+  | [] -> mk_var (top_loc, f)
+  | (InterpMapXlate (xloc, xelem))::interp_map' ->
+     (match translate_field1 xelem f with
+      | Some f' -> mk_var (xloc, f')
+      | None -> apply_interp_map top_loc interp_map' f)
+  | (InterpMapTerm (f_from, expr_to))::interp_map' ->
+     if Id.equal f f_from then expr_to else
+       apply_interp_map top_loc interp_map' f
+
+(* Start an interactive proof of an interpretation named lid from dom to codom,
+optionally supplying an interp_map for the ops *)
+let start_interpretation lid dom codom opt_interp_map =
+  let loc = located_loc lid in
+  let interp_name = located_elem lid in
+  let dom_locref = spec_locref_of_ref dom in
+  let dom_spec = lookup_spec dom_locref in
+  let codom_locref = spec_locref_of_ref codom in
+  let codom_spec = lookup_spec codom_locref in
+  let op_param_ids =
+    concat_map op_param_ids (List.rev codom_spec.spec_ops) in
+  let codom_args = List.map
+                     (fun id -> (id, mk_var (loc, id)))
+                     op_param_ids in
+  (* Hook function that generates an instance id__instance of the domain
+  typeclass from the codomain typeclass, when the obligations are done *)
+  let hook _ _ =
+    reporting_exceptions
+      (fun () ->
+       ignore
+         (add_instance_for_interp
+            (* The loc *)
+            loc
+            (* Instance name: morph_name__instance *)
+            (add_suffix interp_name "instance")
+            (* Params: the args of codom plus a codom instance *)
+            (List.map mk_implicit_var_assum op_param_ids
+             @ [mk_implicit_assum
+                  (Id.of_string "Spec")
+                  (mk_ref_app_named_args
+                     loc
+                     (spec_typeclass_ref loc codom_locref)
+                     codom_args)])
+            (* Domain globref *)
+            (lookup_spec_globref (spec_locref_of_ref dom))
+            (* Interpretation: the one we just added *)
+            (mk_var (loc, interp_name))
+            (* Co-domain spec ops: codom.codom__ops *)
+            (mk_ref_app_named_args
+               loc
+               (spec_ops_ref loc codom_locref)
+               codom_args)
+            (* Co-domain spec model: proj1 spec_models_iso Spec *)
+            (mkAppC (mk_reference ["Coq"; "Init"; "Logic"] "proj1",
+                     [mk_specware_ref "spec_models_iso";
+                      mk_var (loc, Id.of_string "Spec")]))))
+  in
+  let interp_tp = mkAppC (mk_specware_ref "Interpretation",
+                          [mkRefC (spec_repr_ref (qualid_of_reference dom));
+                           mkRefC (spec_repr_ref (qualid_of_reference codom))])
+  in
+  match opt_interp_map with
+  | None -> start_definition ~hook lid [] interp_tp
+  | Some interp_map ->
+     let ops_id = Id.of_string "ops" in
+     let existT_ref =
+       Qualid (loc, mk_qualid ["Coq"; "Init"; "Specif"] "existT") in
+     let tt_ref =
+       Qualid (loc, mk_qualid ["Coq"; "Init"; "Datatypes"] "tt") in
+     (* Build a pattern to match nested dependent pairs for codom_spec's ops;
+     the returned add_lets function adds let-bindings for the defined ops *)
+     let (codom_ops_pattern, add_codom_lets) =
+       (* Remember: we fold left here because ops are in reverse order *)
+       List.fold_left
+         (fun (pat,add_lets) op ->
+          let (op_id, op_tp, oppred) = op in
+          let field_id =
+            if oppred_is_eq oppred then field_var_id op_id else op_id in
+          (CPatCstr (loc, existT_ref, [],
+                     [CPatAtom (loc, None);
+                      CPatAtom (loc, Some (Ident (loc, field_id)));
+                      CPatCstr
+                        (loc, existT_ref, [],
+                         [CPatAtom (loc, None);
+                          CPatAtom (loc, Some (Ident (loc,
+                                                      field_proof_id op_id)));
+                          pat])]),
+           match oppred with
+           | Pred_Eq eq_expr ->
+              (fun expr ->
+               mkLetInC ((loc, Name op_id), eq_expr, add_lets expr))
+           | _ -> add_lets))
+         (CPatAtom (loc, Some tt_ref), fun expr -> expr)
+         codom_spec.spec_ops
+     in
+     (* Build nested dependent pairs for the ops of dom_spec *)
+     let dom_ops_expr =
+          List.fold_left
+            (fun expr op ->
+             let (op_id, _, _) = op in
+             mkAppC (mkRefC existT_ref,
+                     [mk_hole loc;
+                      apply_interp_map loc interp_map op_id;
+                      mkAppC (mkRefC existT_ref,
+                              [mk_hole loc;
+                               mk_named_hole loc (field_proof_id op_id);
+                               expr])]))
+            (mk_reference ["Coq"; "Init"; "Datatypes"] "tt")
+            dom_spec.spec_ops
+     in
+     (* Build a tactic expression to call interp_tactic *)
+     let tactic =
+       Tacexpr.TacArg
+         (loc,
+          Tacexpr.TacCall
+            (loc,
+             ArgArg (loc, Nametab.locate_tactic
+                            (mk_qualid specware_mod "interp_tactic")),
+             []))
+     in
+     (* Start the Program Definition of the interpretation *)
+     add_program_definition
+       ~hook ~tactic
+       lid [] (Some interp_tp)
+       (mkAppC
+          (mk_specware_ref "mkInterp",
+           [mkLambdaC
+              ([loc, Name ops_id], Default Explicit,
+               mkAppC (mk_specware_ref "spec_ops",
+                       [mkRefC (spec_repr_ref (loc, codom_locref))]),
+               CCases (loc, RegularStyle, None,
+                       [mk_var (loc, ops_id), (None, None)],
+                       [loc,
+                        [loc, [codom_ops_pattern]],
+                        CCast
+                          (loc,
+                           add_codom_lets dom_ops_expr,
+                           CastConv
+                             (mkAppC
+                                (mk_specware_ref "spec_ops",
+                                 [mkRefC (spec_repr_ref (loc, dom_locref))])))]));
+            mk_named_hole loc (Id.of_string "model_f")]))
 
 
 (***
@@ -1617,49 +1847,6 @@ let import_refinement_constr_expr loc constr_expr =
  *** Spec Terms
  ***)
 
-(* A spec translation specifies a map on identifiers *)
-type spec_translation_elem =
-  (* Map a single name to another *)
-  | XlateSingle of Id.t * Id.t
-  (* Map all names with a given prefix to instead use a different prefix *)
-  | XlateWild of string * string
-
-type spec_translation = spec_translation_elem list
-
-(* Inductive description of SpecTranslationElem objects *)
-let spec_translation_elem_descr : (spec_translation_elem,
-                                   spec_translation_elem) constr_descr =
-  Descr_Iso
-    ("SpecTranslationElem",
-     (function
-       | Left (f_from, (f_to, ())) -> XlateSingle (f_from, f_to)
-       | Right (Left (f_from_prefix, (f_to_prefix, ()))) ->
-          XlateWild (f_from_prefix, f_to_prefix)
-       | Right (Right emp) -> emp.elim_empty),
-     (function
-       | XlateSingle (f_from, f_to) -> Left (f_from, (f_to, ()))
-       | XlateWild (f_from_prefix, f_to_prefix) ->
-          Right (Left (f_from_prefix, (f_to_prefix, ())))),
-     binary_ctor
-       specware_mod "XlateSingle" id_descr (fun _ -> id_descr)
-       (binary_ctor
-          specware_mod "XlateWild"
-          string_fast_descr (fun _ -> string_fast_descr)
-          Descr_Fail))
-
-(* Inductive description of SpecTranslation objects *)
-let spec_translation_descr : (spec_translation, spec_translation) constr_descr =
-  Descr_Iso
-    ("SpecTranslation",
-     (function
-       | Left (elems, ()) -> elems
-       | Right emp -> emp.elim_empty),
-     (fun elems -> Left (elems, ())),
-     unary_ctor
-       specware_mod "mkSpecTranslation" (list_descr spec_translation_elem_descr)
-       Descr_Fail)
-
-
 (* A spec term is shorthand for refinements involving named specs, translations,
 and spec substitutions *)
 type spec_term =
@@ -1706,6 +1893,11 @@ let refinement_expr_of_spec_term st =
 (* Import a spec_term *)
 let import_spec_term loc st =
   import_refinement_constr_expr loc (refinement_expr_of_spec_term st)
+
+
+(***
+ *** 
+ ***)
 
 
 (***
@@ -1818,31 +2010,11 @@ let end_new_spec spec_lid =
  *** Additions to the Coq parser
  ***)
 
-(* Run f, catching any exceptions and turning them into user_errors *)
-(* FIXME: actually write this! *)
-let reporting_exceptions f =
-  try f ()
-  with
-  | MalformedRefinement (constr, tag, sub_constr) ->
-     user_err_loc (dummy_loc, "_",
-                   str "Malformed refinement term "
-                   ++ brk (0,0)
-                   ++ Printer.pr_constr constr
-                   ++ brk (0,0)
-                   ++ str (": could not parse " ^ tag ^ " in subterm ")
-                   ++ brk (0,0)
-                   ++ Printer.pr_constr sub_constr)
-  | DescrFailed (tag, constr) ->
-     user_err_loc (dummy_loc, "_",
-                   str ("Could not parse " ^ tag ^ " in ")
-                   ++ brk (0,0)
-                   ++ Printer.pr_constr constr)
-
 (* Syntactic class to parse name translation elements *)
 VERNAC ARGUMENT EXTEND name_translation_elem
   | [ ident(lhs) "+->" ident(rhs) ] -> [ XlateSingle (lhs,rhs) ]
   | [ ident(lhs) "%" "+->" ident(rhs) "%" ] ->
-     [ XlateWild (Id.to_string lhs, Id.to_string rhs) ]
+     [ XlatePrefix (Id.to_string lhs, Id.to_string rhs) ]
 END
 
 (* Syntactic class to parse name translations *)
@@ -1851,13 +2023,30 @@ VERNAC ARGUMENT EXTEND name_translation
   | [ name_translation_elem(elem) ] -> [ [elem] ]
 END
 
+(* Syntactic class to parse interp  elements *)
+VERNAC ARGUMENT EXTEND interp_map_elem
+  | [ ident(lhs) "%" "+->" global(rhs_ref) "%" ] ->
+     [ match rhs_ref with
+       | Ident (loc, rhs) ->
+          InterpMapXlate (loc, XlatePrefix (Id.to_string lhs, Id.to_string rhs))
+       | Qualid (loc, q) ->
+          user_err_loc (loc, "_", str "Identifier expected") ]
+  | [ ident(lhs) "+->" constr(rhs) ] -> [ InterpMapTerm (lhs, rhs) ]
+END
+
+(* Syntactic class to parse interp maps *)
+VERNAC ARGUMENT EXTEND interp_map
+  | [ interp_map_elem(elem) ";" interp_map(rest) ] -> [ elem::rest ]
+  | [ interp_map_elem(elem) ] -> [ [elem] ]
+END
+
 (* Syntactic class to parse spec terms *)
 VERNAC ARGUMENT EXTEND spec_term
   | [ global(r) ] -> [ SpecRef r ]
-  | [ spec_term(st) "{{" name_translation(xlate) "}}" ] -> [ SpecXlate (st, xlate) ]
-  | [ spec_term(st) "[[" global(interp_ref) "]]" ] ->
+  | [ spec_term(st) "{" name_translation(xlate) "}" ] -> [ SpecXlate (st, xlate) ]
+  | [ spec_term(st) "[" global(interp_ref) "]" ] ->
      [ SpecSubst (st, mkRefC interp_ref) ]
-  | [ spec_term(st) "[[" global(interp_ref) "{{" name_translation(xlate) "}}" "]]" ] ->
+  | [ spec_term(st) "[" global(interp_ref) "{" name_translation(xlate) "}" "]" ] ->
      [ SpecSubstXlate (st, mkRefC interp_ref, xlate) ]
 END
 
@@ -1993,57 +2182,22 @@ VERNAC COMMAND EXTEND Spec
            (fun () -> import_spec_term dummy_loc st) ]
 
   (* Define an interpretation *)
+  | [ "Spec" "Interpretation" var(lmorph_name)
+             ":" global(dom) "->" global(codom) ":="
+             "{" interp_map(imap) "}"]
+    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity,
+                                   [located_elem lmorph_name]),
+          Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () -> start_interpretation lmorph_name dom codom (Some imap)) ]
+
+  (* Define an interpretation using tactics *)
   | [ "Spec" "Interpretation" var(lmorph_name) ":" global(dom) "->" global(codom) ]
     => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity,
                                    [located_elem lmorph_name]),
           Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () ->
-            start_definition
-              ~hook:
-              (fun _ _ ->
-               reporting_exceptions
-                 (fun () ->
-                  let loc = located_loc lmorph_name in
-                  let morph_name = located_elem lmorph_name in
-                  let codom_locref = spec_locref_of_ref codom in
-                  let codom_spec = lookup_spec codom_locref in
-                  let op_param_ids =
-                    concat_map op_param_ids (List.rev codom_spec.spec_ops) in
-                  let codom_args = List.map
-                                     (fun id -> (id, mk_var (loc, id)))
-                                     op_param_ids in
-                  ignore
-                    (add_instance_for_interp
-                       (* The loc *)
-                       loc
-                       (* Instance name: morph_name__instance *)
-                       (add_suffix morph_name "instance")
-                       (* Params: the args of codom plus a codom instance *)
-                       (List.map mk_implicit_var_assum op_param_ids
-                        @ [mk_implicit_assum
-                             (Id.of_string "Spec")
-                             (mk_ref_app_named_args
-                                loc
-                                (spec_typeclass_ref loc codom_locref)
-                                codom_args)])
-                       (* Domain globref *)
-                       (lookup_spec_globref (spec_locref_of_ref dom))
-                       (* Interpretation: the one we just added *)
-                       (mk_var (loc, morph_name))
-                       (* Co-domain spec ops: codom.codom__ops *)
-                       (mk_ref_app_named_args
-                          loc
-                          (spec_ops_ref loc codom_locref)
-                          codom_args)
-                       (* Co-domain spec model: proj1 spec_models_iso Spec *)
-                       (mkAppC (mk_reference ["Coq"; "Init"; "Logic"] "proj1",
-                                [mk_specware_ref "spec_models_iso";
-                                 mk_var (loc, Id.of_string "Spec")])))))
-              lmorph_name []
-              (mkAppC (mk_specware_ref "Interpretation",
-                       [mkRefC (spec_repr_ref (qualid_of_reference dom));
-                        mkRefC (spec_repr_ref (qualid_of_reference codom))]))) ]
+           (fun () -> start_interpretation lmorph_name dom codom None) ]
 
 END
 

@@ -60,7 +60,7 @@ End Monoid_Thms.
 
 Spec Group.
 
-Spec Import Monoid {{m_% +-> g_%}}.
+Spec Import Monoid {m_% +-> g_%}.
 
 Spec Variable g_inv : (T -> T).
 Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
@@ -134,9 +134,57 @@ Spec End NatMonoid.
 Print NatMonoid.NatMonoid.
 Print NatMonoid.NatMonoid__Spec.
 
+(*
+Show Obligation Tactic.
+Print Ltac Tactics.program_simpl.
+Local Obligation Tactic := idtac.
 
-Spec Interpretation monoid_natmonoid : Monoid -> NatMonoid.
-prove_simple_interp {{ }}.
+Program Definition monoid_natmonoid :
+  Specware.Spec.Interpretation Monoid.Monoid__Spec NatMonoid.NatMonoid__Spec :=
+  Specware.Spec.mkInterp
+    (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) =>
+     match ops with
+     | Coq.Init.Specif.existT _ T__var
+       (Coq.Init.Specif.existT _ T__proof
+        (Coq.Init.Specif.existT _ m_zero__var
+         (Coq.Init.Specif.existT _ m_zero__proof
+          (Coq.Init.Specif.existT _ m_plus__var
+           (Coq.Init.Specif.existT _ m_plus__proof Coq.Init.Datatypes.tt))))) =>
+         let T := nat in
+         let m_zero := 0 in
+         let m_plus := plus in
+         (Coq.Init.Specif.existT
+            _
+            nat
+           (Coq.Init.Specif.existT _ _
+              (Coq.Init.Specif.existT _ m_zero__var
+                 (Coq.Init.Specif.existT _ _
+                    (Coq.Init.Specif.existT _ m_plus__var
+                       (Coq.Init.Specif.existT _ _ Coq.Init.Datatypes.tt)))))
+          : spec_ops Monoid.Monoid__Spec)
+     end)
+    (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) model =>
+       _
+)
+.
+Obligation 1.
+constructor.
+Defined.
+Obligation 2.
+constructor.
+Defined.
+Obligation 3.
+constructor.
+Defined.
+Obligation 4.
+intros.
+*)
+
+Spec Interpretation monoid_natmonoid : Monoid -> NatMonoid := { T +-> (T:Type) }.
+Obligation 4.
+repeat interp_tactic.
+destruct ops.
+admit.
 Defined.
 
 
@@ -172,11 +220,11 @@ Spec End Group2.
 
 Spec Interpretation Monoid_Group2 : Monoid -> Group2.
 unfold Monoid.Monoid__Spec, Group2.Group2__Spec.
-apply (interp_cons_strengthen_xlate {{ "m_"% +-> "g_"% }});
+apply (interp_cons_strengthen_xlate { "m_"% +-> "g_"% });
   [ intros; apply I | ].
 intro_string ("T"%string).
 
-prove_simple_interp {{ "m_"% +-> "g_"% }}.
+prove_simple_interp { "m_"% +-> "g_"% }.
 Defined.
 
 
@@ -191,7 +239,7 @@ Qed.
 End Group2_Thms.
 
 
-Spec Group3 := Monoid[[Monoid_Group2 {{ T +-> T }} ]].
+Spec Group3 := Monoid[Monoid_Group2 { T +-> T } ].
 
 Section Group3_Thms.
 Import Group3.

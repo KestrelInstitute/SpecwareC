@@ -1169,11 +1169,11 @@ f_from to field f_to, or a set of mappings from fields with prefix f_from_prefix
 to the result of replacing that prefix with f_to_prefix. *)
 Inductive SpecTranslationElem : Set :=
 | XlateSingle (f_from f_to : Field)
-| XlateWild (f_from_prefix f_to_prefix : string)
+| XlatePrefix (f_from_prefix f_to_prefix : string)
 .
 
 Arguments XlateSingle (f_from%string) (f_to%string).
-Arguments XlateWild (f_from_prefix%string) (f_to_prefix%string).
+Arguments XlatePrefix (f_from_prefix%string) (f_to_prefix%string).
 
 (* A spec translation is just a list of spec translation elements *)
 Inductive SpecTranslation : Set :=
@@ -1183,25 +1183,28 @@ Notation "f_from '+->' f_to" :=
   (XlateSingle f_from f_to)
   (at level 80, no associativity) : spec_translation_elem_scope.
 Notation "f_from '%' '+->' f_to '%'" :=
-  (XlateWild f_from f_to)
+  (XlatePrefix f_from f_to)
   (at level 80, no associativity) : spec_translation_elem_scope.
 
 Bind Scope spec_translation_elem_scope with SpecTranslationElem.
 Delimit Scope spec_translation_elem_scope with spec_translation_elem.
 
 (* We use double curly brackets to write spec translations *)
-Notation "'{{' elem1 , .. , elemn '}}'" :=
+Notation "'{' elem1 , .. , elemn '}'" :=
   (mkSpecTranslation (cons elem1%spec_translation_elem .. (cons elemn%spec_translation_elem nil) ..))
-  (at level 0).
-Notation "'{{' '}}'" :=
+  (at level 0) : spec_translation_scope.
+Notation "'{' '}'" :=
   (mkSpecTranslation nil)
-  (at level 0).
+  (at level 0) : spec_translation_scope.
+
+Bind Scope spec_translation_scope with SpecTranslation.
+Delimit Scope spec_translation_scope with spec_translation.
 
 Definition translate_field1 elem (f: Field) : option Field :=
   match elem with
     | XlateSingle f_from f_to =>
       if Field_dec f f_from then Some f_to else None
-    | XlateWild f_from_prefix f_to_prefix =>
+    | XlatePrefix f_from_prefix f_to_prefix =>
       if Field_dec (substring 0 (length f_from_prefix) f) f_from_prefix then
         Some (append f_to_prefix (substring (length f_from_prefix)
                                             (length f - length f_from_prefix) f))
@@ -1476,6 +1479,18 @@ Ltac prove_simple_interp xlate :=
   unfold spec_model, conjoin_axioms, specAxiom, snd; repeat split;
   try assumption.
 *)
+
+
+(* For proving the model part of an interpretation given by an interp_map *)
+Ltac interp_tactic :=
+  intros;
+  lazymatch goal with
+    | |- spec_model ?dom_spec (let (rest, t) := ?ops in ?body) =>
+      destruct ops as [t ops]
+    | |- Pred_Trivial _ => apply I
+    | |- Pred_Fun _ => try assumption
+    | |- _ => try (apply I); try assumption
+  end.
 
 
 (*** Refinement ***)
