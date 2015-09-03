@@ -1422,9 +1422,50 @@ let start_interpretation lid dom codom opt_interp_map =
             mk_named_hole loc (Id.of_string "model_f")]))
 
 
-(***
- *** Spec Imports
- ***)
+(* Start an interactive definition of an instance id__instance from the
+typeclass of codom to that of dom, and then generate an interpretation id from
+that instance. *)
+(*
+let start_interp_instance lid dom codom interp_map =
+  let loc = located_loc lid in
+  let id = located_elem lid in
+  let dom_locref = spec_locref_of_ref dom in
+  let dom_spec = lookup_spec dom_locref in
+  let codom_locref = spec_locref_of_ref codom in
+  let codom_spec = lookup_spec codom_locref in
+  let op_param_ids =
+    concat_map op_param_ids (List.rev codom_spec.spec_ops) in
+  let codom_args = List.map
+                     (fun id -> (id, mk_var (loc, id)))
+                     op_param_ids in
+  (* Start a section id__instance_section *)
+  let _ = begin_section (add_suffix id "instance_section") in
+  (* Import the codomain spec's module *)
+  let _ = Library.import_module false (qualid_of_reference codom) in
+  (* Hook function that gets called when the instance is complete: creates an
+  interpretation named id from the instance *)
+  let hook =
+    (fun _ ->
+     reporting_exceptions
+       (fun () ->
+        (* End the section started above *)
+        let _ = end_section () in
+        FIXME HERE NOW
+        ))
+  in
+  begin_instance
+    ~hook
+    [LocalRawAssum ([Id.of_string "H"],
+                    Generalized (Implicit, Implicit, b),
+                    mkRefC (spec_typeclass_ref loc codom_locref))]
+    (loc, add_suffix id "instance")
+    FIXME HERE NOW
+ *)
+
+
+  (***
+   *** Spec Imports
+   ***)
 
 (* FIXME: hints are not currently used; they also assume that subtype predicates
 are classes, which they currently are not... *)

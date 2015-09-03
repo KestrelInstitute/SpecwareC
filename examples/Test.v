@@ -135,34 +135,98 @@ Print NatMonoid.NatMonoid.
 Print NatMonoid.NatMonoid__Spec.
 
 
+(* Building the Monoid -> NatMonoid interpretation manually *)
 Section monoid_natmonoid__instance_section.
 Import NatMonoid.
-Program Instance monoid_natmonoid `{NatMonoid.NatMonoid} :
-  Monoid.Monoid (T__param:=NatMonoid.T:Type)
-                (m_zero__param:=NatMonoid.m_zero)
-                (m_plus__param:=NatMonoid.m_plus).
-Obligation 1.
+
+Instance monoid_natmonoid__instance
+         `{Spec:NatMonoid} :
+  Monoid.Monoid (T__param:=T:Type)
+                (m_zero__param:=m_zero__var)
+                (m_plus__param:=m_plus__var).
+constructor.
 unfold Monoid.m_zero_left__class, Monoid.T, Monoid.m_zero, Monoid.m_plus.
+unfold m_zero__var.
+(* FIXME: why do we need m_zero__proof__param instead of m_zero__proof here? *)
+rewrite m_zero__proof__param. rewrite m_plus__proof.
 apply m_zero_left.
-Qed.
-Obligation 2.
 unfold Monoid.m_zero_right__class, Monoid.T, Monoid.m_zero, Monoid.m_plus.
+unfold m_zero__var.
+rewrite m_zero__proof__param. rewrite m_plus__proof.
 apply m_zero_right.
-Qed.
-Obligation 3.
 unfold Monoid.m_plus_assoc__class, Monoid.T, Monoid.m_zero, Monoid.m_plus.
+rewrite m_plus__proof.
 apply m_plus_assoc.
-Qed.
+Defined.
+
+Definition monoid_natmonoid : Interpretation Monoid.Monoid__Spec NatMonoid.NatMonoid__Spec :=
+  mkInterp
+    (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) =>
+       match ops with
+         | existT
+             _ T__var
+             (existT
+                _ T__proof
+                (existT
+                   _ m_zero__var
+                   (existT
+                      _ m_zero__proof
+                      (existT
+                         _ m_plus__var
+                         (existT
+                            _ m_plus__proof tt))))) =>
+           existT
+             _ (nat:Type)
+             (existT
+                _ I
+                (existT
+                   _ m_zero__var
+                   (existT
+                      _ I
+                      (existT
+                         _ m_plus__var
+                         (existT
+                            _ I tt))))) : spec_ops Monoid.Monoid__Spec
+       end)
+    (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) model =>
+       match ops with
+         | existT
+             _ T__var
+             (existT
+                _ T__proof
+                (existT
+                   _ m_zero__var
+                   (existT
+                      _ m_zero__proof
+                      (existT
+                         _ m_plus__var
+                         (existT
+                            _ m_plus__proof tt))))) =>
+           let T := nat in
+           let m_zero := 0 in
+           let m_plus := plus in
+           proj1 (spec_models_iso
+                    (IsoToSpecModels:=
+                       Monoid.Monoid__Iso (T__param:=T) (m_zero__param:=m_zero__var)
+                                          (m_plus__param:=m_plus__var)))
+                 (monoid_natmonoid__instance
+                    (Spec:=
+                       proj2 (spec_models_iso
+                                (IsoToSpecModels:=
+                                   @NatMonoid.NatMonoid__Iso T__var T__proof m_zero__var m_zero__proof m_plus__var m_plus__proof))
+                             model))
+       end).
+
 End monoid_natmonoid__instance_section.
 
-
-Spec Interpretation monoid_natmonoid : Monoid -> NatMonoid := { T +-> (T:Type) }.
+(*
+Spec Interpretation monoid_natmonoid2 : Monoid -> NatMonoid := { T +-> (T:Type) }.
 Obligation 4.
 repeat interp_tactic.
 destruct ops.
 admit.
 Defined.
-
+*)
 
 Spec NatMonoid_Import.
 Spec Import NatMonoid.
@@ -176,6 +240,30 @@ apply id_refinement.
 Defined.
 
 Print NatMonoid_Import2.NatMonoid_Import2.
+
+
+
+(* Building the NatMonoid -> NatMonoid_Import interpretation manually *)
+Section natmonoid_natmonoid__instance_section.
+Import NatMonoid_Import.
+Set Printing All.
+Program Instance natmonoid_natmonoid__instance
+         `{Spec:NatMonoid_Import} :
+  NatMonoid.NatMonoid (T__param:=T__var)
+                      (m_zero__param:=m_zero__var)
+                      (m_plus__param:=m_plus__var).
+
+(*
+Instance natmonoid_natmonoid__instance
+         `{Spec:NatMonoid_Import} :
+  NatMonoid.NatMonoid (T__param:=T__param)
+                      (T__proof__param:=T__proof__param)
+                      (m_zero__param:=m_zero__param)
+                      (m_zero__proof__param:=m_zero__proof__param)
+                      (m_plus__param:=m_plus__param)
+                      (m_plus__proof__param:=m_plus__proof__param).
+*)
+
 
 Spec Group2.
 
