@@ -981,6 +981,7 @@ let nullary_ctor : 't_rest 'f_rest . string list -> string -> ('t_rest,'f_rest) 
   fun dir name descr_rest ->
   Descr_Ctor (mk_constructor dummy_loc dir name,
               ArrayDescr_Nil, descr_rest)
+
 let unary_ctor : 't1 'f1 't_rest 'f_rest . string list -> string ->
                  ('t1,'f1) constr_descr ->
                  ('t_rest,'f_rest) constr_descr ->
@@ -989,6 +990,7 @@ let unary_ctor : 't1 'f1 't_rest 'f_rest . string list -> string ->
   fun dir name descr_a descr_rest ->
   Descr_Ctor (mk_constructor dummy_loc dir name,
               ArrayDescr_Cons (descr_a, fun _ -> ArrayDescr_Nil), descr_rest)
+
 let binary_ctor : 't1 'f1 't2 'f2 't_rest 'f_rest . string list -> string ->
                   ('t1,'f1) constr_descr ->
                   (('t1,'f1) sum -> ('t2,'f2) constr_descr) ->
@@ -1002,6 +1004,7 @@ let binary_ctor : 't1 'f1 't2 'f2 't_rest 'f_rest . string list -> string ->
                  fun a ->
                  ArrayDescr_Cons (descr_b a, fun _ -> ArrayDescr_Nil)),
               descr_rest)
+
 let ternary_ctor : 't1 'f1 't2 'f2 't3 'f3 't_rest 'f_rest .
                    string list -> string ->
                    ('t1,'f1) constr_descr ->
@@ -1020,6 +1023,7 @@ let ternary_ctor : 't1 'f1 't2 'f2 't3 'f3 't_rest 'f_rest .
                     fun b -> ArrayDescr_Cons
                                (descr_c a b, fun _ -> ArrayDescr_Nil))),
               descr_rest)
+
 let quaternary_ctor =
   fun dir name descr_a descr_b descr_c descr_d descr_rest ->
   Descr_Ctor (mk_constructor dummy_loc dir name,
@@ -1035,6 +1039,7 @@ let quaternary_ctor =
                        ArrayDescr_Cons
                          (descr_d a b c, fun _ -> ArrayDescr_Nil)))),
               descr_rest)
+
 let quinary_ctor =
   fun dir name descr_a descr_b descr_c descr_d descr_e descr_rest ->
   Descr_Ctor (mk_constructor dummy_loc dir name,
@@ -1053,6 +1058,30 @@ let quinary_ctor =
                           ArrayDescr_Cons
                             (descr_e a b c d,
                              fun _ -> ArrayDescr_Nil))))),
+              descr_rest)
+
+let senary_ctor =
+  fun dir name descr_a descr_b descr_c descr_d descr_e descr_f descr_rest ->
+  Descr_Ctor (mk_constructor dummy_loc dir name,
+              ArrayDescr_Cons
+                (descr_a,
+                 fun a ->
+                 ArrayDescr_Cons
+                   (descr_b a,
+                    fun b ->
+                    ArrayDescr_Cons
+                      (descr_c a b,
+                       fun c ->
+                       ArrayDescr_Cons
+                         (descr_d a b c,
+                          fun d ->
+                          ArrayDescr_Cons
+                            (descr_e a b c d,
+                             fun e ->
+                             ArrayDescr_Cons
+                               (descr_f a b c d e,
+                                fun _ ->
+                                ArrayDescr_Nil)))))),
               descr_rest)
 
 (* Description that always reduced a constr to hnf *)
