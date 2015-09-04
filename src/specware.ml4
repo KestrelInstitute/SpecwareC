@@ -40,10 +40,6 @@ let field_param_id f = add_suffix f "param"
 (* Test if an id has the form f__param, returning f if so *)
 let match_param_id id = Option.map Id.of_string (match_suffix id "__param")
 
-(* Build the identifier used to quantify over the proof of a field's oppred as a
-   local variable *)
-let field_proof_param_id f = add_suffix f "proof__param"
-
 (* Get the identifier used for the underlying variable of a defined op *)
 let field_var_id f = add_suffix f "var"
 
@@ -59,6 +55,12 @@ let field_pred_id f = add_suffix f "pred"
 (* Get the identifier used for the proof of a field predicate *)
 let field_proof_id f = add_suffix f "proof"
 
+(* Build the identifier used to quantify over the proof of a field's oppred as a
+   local variable *)
+let field_proof_param_id f =
+  (* field_param_id (field_proof_id f) *)
+  add_suffix f "proof__param"
+
 (* Test if an id has the form f__proof, returning f if so *)
 let match_proof_id id = Option.map Id.of_string (match_suffix id "__proof")
 
@@ -71,6 +73,14 @@ let field_inst_id f = add_suffix f "inst"
 
 (* The axiom typeclass field pointing to an instance of this axiom *)
 let field_axelem_id f = add_suffix f "axiom"
+
+(* The spec typeclass field pointing to an instance of this class *)
+let field_classelem_id f = add_suffix f "field"
+
+(* The spec typeclass field pointing to an instance of this predicate *)
+let field_predelem_id f =
+  (* field_classelem_id (field_proof_id f) *)
+  add_suffix f "proof__field"
 
 (* The name of the Spec representation of a spec named s_id *)
 let spec_repr_id s_id = add_suffix s_id "Spec"
@@ -288,12 +298,15 @@ let op_params (op: constr_expr op) : (Id.t * constr_expr) list =
     [field_param_id op_id, op_tp;
      field_proof_param_id op_id, pred]
 
-let op_param_ids (op : 'a op) : Id.t list =
+let op_ids (op : 'a op) : Id.t list =
   let (op_id,_,oppred) = op in
   if oppred_is_nontrivial oppred then
-    [field_param_id op_id; field_proof_param_id op_id]
+    [op_id; field_proof_id op_id]
   else
-    [field_param_id op_id]
+    [op_id]
+
+let op_param_ids (op : 'a op) : Id.t list =
+  List.map field_param_id (op_ids op)
 
 (* FIXME: documentation *)
 (* NOTE: the op constrs are all in the context of the ops (and their proofs) of
@@ -309,7 +322,6 @@ type spec_import = {
 type spec_import_group = {
   spec_impgrp_num : int;
   spec_impgrp_ops : (Id.t * bool) list;
-  spec_impgrp_axioms : Id.t list;
   spec_impgrp_imports : spec_import list
 }
 
@@ -320,7 +332,6 @@ type spec = {
   spec_name : Id.t;
   spec_path : DirPath.t;
   spec_ops : (constr_expr op) list;
-  spec_axioms : (Id.t * constr_expr) list;
   spec_imports : spec_import_group list
 }
 
@@ -379,12 +390,11 @@ let lambda_ops loc (ops : constr_expr op list) body : constr_expr =
 (* Create an empty spec with the given name *)
 let make_empty_spec spec_id =
   { spec_name = spec_id; spec_path = Lib.cwd_except_section ();
-    spec_ops = []; spec_axioms = []; spec_imports = [] }
+    spec_ops = []; spec_imports = [] }
 
 (* Whether spec contains an op or axiom named f *)
 let contains_field spec f =
-  List.exists (fun (f',_,_) -> Id.equal f f') spec.spec_ops ||
-    List.exists (fun (f', _) -> Id.equal f f') spec.spec_axioms
+  List.exists (fun (f',_,_) -> Id.equal f f') spec.spec_ops
 
 (* Check that a field (op or axiom) of the given name exists in the current spec *)
 let spec_field_exists f =
@@ -409,7 +419,6 @@ let filter_nonexistent_fields_and_imports spec =
   { spec with
     spec_ops = List.filter (fun op ->
                             spec_field_exists (op_accessor_id op)) spec.spec_ops;
-    spec_axioms = List.filter (fun (id,_) -> spec_field_exists id) spec.spec_axioms;
     spec_imports =
       List.filter (fun impgrp ->
                    spec_field_exists (spec_import_id impgrp.spec_impgrp_num))
@@ -529,7 +538,6 @@ let id_descr : (Id.t, Id.t) constr_descr =
 (* A description of an OpPred. Note that the constr_expr side is a pair, of the
 oppred itself as well as the type of the underlying op, which is needed to build
 a constr_expr for the oppred. *)
-
 let oppred_descr f : (Constr.t oppred,
                       constr_expr * constr_expr oppred) constr_descr =
   Descr_Iso
@@ -558,42 +566,23 @@ let oppred_descr f : (Constr.t oppred,
              Descr_Constr (fun _ -> Descr_Constr)
              Descr_Fail)))
 
-(* A description of the SpecAxiom type *)
-let spec_axiom_descr : (Id.t * Constr.t, Id.t * constr_expr) constr_descr =
-  Descr_Iso
-    ("SpecAxiom",
-     (function
-       | Left (f, (tp, ())) -> (f, tp)
-       | Right emp -> emp.elim_empty),
-     (fun (f,tp) -> Left (f, (tp, ()))),
-     binary_ctor
-       specware_mod "specAxiom" id_descr (fun _ -> Descr_Constr) Descr_Fail)
-
-(* The description of a list of axioms *)
-let axiom_list_descr : ((Id.t * Constr.t) list,
-                        (Id.t * constr_expr) list) constr_descr =
-  list_descr spec_axiom_descr
-
-type spec_fields = (constr_expr op) list * (Id.t * constr_expr) list
-type spec_fields_constr = (Constr.t op) list * (Id.t * Constr.t) list
-
 (* The description of the Spec inductive type. *)
-let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
+let spec_descr : ((Constr.t op) list, (constr_expr op) list) constr_descr =
   Descr_Rec
     (fun spec_descr ->
      Descr_Iso
        ("Spec",
         (function
-          | Left (f, (tp, (oppred, ((ops, axioms), ())))) ->
-             ((f, tp, oppred)::ops, axioms)
-          | Right (Left (axioms, ())) -> ([], axioms)
+          | Left (f, (tp, (oppred, (rest, ())))) ->
+             ((f, tp, oppred)::rest)
+          | Right (Left ()) -> []
           | Right (Right emp) -> emp.elim_empty),
         (function
-          | ((f,tp,oppred)::ops', axioms) ->
-             Left (f, (tp, ((tp, oppred), ((ops', axioms), ()))))
-          | ([], axioms) -> Right (Left (axioms, ()))),
+          | (f,tp,oppred)::ops' ->
+             Left (f, (tp, ((tp, oppred), (ops', ()))))
+          | [] -> Right (Left ())),
         quaternary_ctor
-          specware_mod "Spec_ConsOp"
+          specware_mod "Spec_Cons"
           (hnf_descr id_descr) (fun _ -> Descr_Constr)
           (fun f_sum _ ->
            let f = match f_sum with Left f -> f | Right f -> f in
@@ -623,7 +612,7 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
                  | _ -> rest_body_constr in
                hnf_constr rest_body_constr'),
               (fun rest_expr ->
-               (* Make a lambda expression for the rest argument of Spec_ConsOp.
+               (* Make a lambda expression for the rest argument of Spec_Cons.
                The expressions class_expr and pred_expr are applications of
                f__class and f__pred, respectively, to all of their implicit
                arguments corresponding to fields in the current spec. *)
@@ -657,8 +646,8 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
                    else
                      rest_expr))),
               spec_descr))
-          (unary_ctor
-             specware_mod "Spec_Axioms" (hnf_descr axiom_list_descr)
+          (nullary_ctor
+             specware_mod "Spec_Nil"
              Descr_Fail)))
 
 (* Build a constr of type Spec that represents a spec; we don't use constr_expr
@@ -669,8 +658,7 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
   let (evd,env) = Lemmas.get_current_context () in
   (* Build the constr_expr the represents the spec *)
   let spec_expr =
-    build_constr_expr spec_descr (List.rev spec.spec_ops,
-                                  List.rev spec.spec_axioms) in
+    build_constr_expr spec_descr (List.rev spec.spec_ops) in
   let _ = debug_printf 1 "@[build_spec_repr (1):@ %a@]\n"
                        pp_constr_expr spec_expr in
   (* Internalize spec_expr into a construction *)
@@ -679,8 +667,8 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
                        pp_constr constr in
 
   (* Helper definitions *)
-  let consop_constructor = mk_constructor loc specware_mod "Spec_ConsOp" in
-  let axioms_constructor = mk_constructor loc specware_mod "Spec_Axioms" in
+  let consop_constructor = mk_constructor loc specware_mod "Spec_Cons" in
+  let nil_constructor = mk_constructor loc specware_mod "Spec_Nil" in
   (* Helper: unfold constants in constr using const_map, which either maps to a
   variable id in scope or to None, meaning the constant should be unfolded *)
   let rec unfold_helper const_map constr =
@@ -715,7 +703,7 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
   in
   let const_map_add_multi ids const_map =
     List.fold_right const_map_add ids const_map in
-  (* Helper: unfold a rest function, the 4th argument of Spec_ConsOp, depending
+  (* Helper: unfold a rest function, the 4th argument of Spec_Cons, depending
   on the form of the oppred *)
   let rec unfold_rest_fun const_map rem_ops' op_id oppred rest_f =
     let (f__proof__param,f__proof__param_tp,f__param,f__param_tp,body) =
@@ -773,19 +761,16 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
   (* Helper: unfold all the constant definitions in a Spec *)
   and unfold_spec_repr const_map rem_ops constr =
     match Term.kind_of_term constr with
-    | Term.App (head, args)
-         when constr_is_constructor axioms_constructor head ->
-       Term.mkApp (head, Array.map (unfold_helper const_map) args)
     | Term.App (head, [| f_c; tp_c; oppred_c; rest_c |])
          when constr_is_constructor consop_constructor head ->
        let ((op_id,_,oppred),rem_ops') =
          match rem_ops with
          | op::rem_ops' -> (op,rem_ops')
-         | [] -> raise loc (Failure "unfold_spec_repr")
+         | [] -> raise loc (Failure "unfold_spec_repr (1)")
        in
        let _ =
          if not (Id.equal op_id (destruct_constr id_descr f_c)) then
-           raise loc (Failure "unfold_spec_repr")
+           raise loc (Failure "unfold_spec_repr (2)")
        in
        Term.mkApp (head,
                    [| unfold_helper const_map f_c;
@@ -794,7 +779,9 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
                       instead of f__param... *)
                       unfold_helper (const_map_add op_id const_map) oppred_c;
                       unfold_rest_fun const_map rem_ops' op_id oppred rest_c |])
-    | _ -> raise loc (Failure "unfold_spec_repr")
+    | _ when constr_is_constructor nil_constructor constr ->
+       constr
+    | _ -> raise loc (Failure "unfold_spec_repr (3)")
   in
 
   (* Now, unfold all the f, f__var, f__proof, f_pred, and f__class constants *)
@@ -852,9 +839,9 @@ let refinement_import_descr :
        (fun _ _ -> Descr_Constr)
        Descr_Fail)
 
-type refinementof = spec_fields * constr_expr * refinement_import list
+type refinementof = (constr_expr op) list * constr_expr * refinement_import list
 type refinementof_constr =
-    spec_fields_constr * Constr.t * refinement_import_constr list
+    (Constr.t op) list * Constr.t * refinement_import_constr list
 
 (* A description of the RefinementOf type *)
 let refinementof_descr : (refinementof_constr, refinementof) constr_descr =
@@ -884,119 +871,86 @@ let destruct_refinementof constr =
  *** Inductive Descriptions of Ops and Models
  ***)
 
-(* A description of the spec_ops S type for any given spec S. *)
-let spec_ops_descr ?(env_opt=None) ?(evdref_opt=None) ()
+(* A description of the spec_model S type for any given spec S. *)
+let spec_model_descr ?(env_opt=None) ?(evdref_opt=None) ()
     : ((Constr.t * Constr.t) list,
-       (constr_expr * constr_expr) list) constr_descr =
-  Descr_Rec
-    (fun spec_ops_descr ->
-     Descr_Iso
-       ("spec_ops",
-        (function
-          | Left (_, (_, (x1, (Left (_, (_, (x2, (x3, ())))), ())))) -> (x1,x2)::x3
-          | Left (_, (_, (x1, (Right emp, ())))) -> emp.elim_empty
-          | Right (Left ()) -> []
-          | Right (Right emp) -> emp.elim_empty),
-        (function
-          | [] -> Right (Left ())
-          | (op,op_pf)::rest ->
-             Left ((), ((), (op, (Left ((), ((), (op_pf, (rest, ())))), ()))))),
-        quaternary_ctor
-          ["Coq"; "Init"; "Specif"] "existT"
-          (hole_descr Descr_Constr)
-          (fun _ -> hole_descr Descr_Constr)
-          (fun _ _ -> Descr_Constr)
-          (fun _ _ _ ->
-           quaternary_ctor
-             ["Coq"; "Init"; "Specif"] "existT"
-             (hole_descr Descr_Constr)
-             (fun _ -> hole_descr Descr_Constr)
-             (fun _ _ -> Descr_Constr)
-             (fun _ _ _ -> hnf_descr ~env_opt ~evdref_opt spec_ops_descr)
-             Descr_Fail)
-          (nullary_ctor
-             ["Coq"; "Init"; "Datatypes"] "tt"
-             Descr_Fail)))
-
-(* Take a list of ops for a spec S and build a constr_expr of type spec_ops S.
-NOTE: expects ops to be in non-reversed order. *)
-let make_ops_constr_expr loc ops =
-  build_constr_expr (spec_ops_descr ())
-                    (List.map (fun (op_id,_,oppred) ->
-                               (mk_var (loc, field_param_id op_id),
-                                match oppred with
-                                | Pred_Trivial -> mk_reference ["Coq"; "Init"; "Logic"] "I"
-                                | _ -> mk_var (loc, field_proof_param_id op_id)))
-                              ops)
-
-(*
-let make_ops_constr_expr loc ops =
-  (List.fold_right
-     (fun (op_id, op_tp, pred_opt) rest_expr ->
-      mkAppC (mk_specware_ref "ops_cons",
-              [mk_var (loc, field_param_id op_id);
-               (match pred_opt with
-                | Some _ -> mk_var (loc, field_proof_id op_id)
-                | None ->
-                   mkCastC (mk_reference ["Coq"; "Init"; "Logic"] "I",
-                            CastConv
-                              (mkAppC
-                                 (mk_specware_ref "sats_op_pred",
-                                  [mk_reference datatypes_mod "None";
-                                   mk_hole loc]))));
-               rest_expr]))
-     ops
-     (mkCastC (mk_reference datatypes_mod "tt",
-               CastConv
-                 (mkAppC (mk_specware_ref "spec_ops",
-                          [mkAppC (mk_specware_ref "Spec_Axioms",
-                                   [mk_hole loc])])))))
- *)
-
-
-(* This describes a spec_model, which is a right-nested series of conj's, or the
-single term I (proof of True) for the empty model, or a single proof for the
-singleton list. *)
-let spec_model_descr : (Constr.t list, constr_expr list) constr_descr =
+       (constr_expr op * constr_expr * constr_expr) list) constr_descr =
   Descr_Rec
     (fun spec_model_descr ->
      Descr_Iso
        ("spec_model",
         (function
-          | Left (_, (_, (x1, (x2, ())))) -> x1::x2
+          | Left (_, (_, (_, (x1, (x2, (x3, ())))))) -> (x1,x2)::x3
           | Right (Left ()) -> []
-          | Right (Right x1) -> [x1]),
+          | Right (Right emp) -> emp.elim_empty),
         (function
           | [] -> Right (Left ())
-          | [pf] -> Right (Right pf)
-          | pf::rest -> Left ((), ((), (pf, (rest, ()))))),
-        quaternary_ctor
-          ["Coq"; "Init"; "Logic"] "conj"
+          | ((op_id,op_tp,oppred), op_expr, op_pf)::rest ->
+             Left ((), (build_constr_expr (oppred_descr op_id) (op_tp,oppred),
+                        ((), (op_expr, (op_pf, (rest, ()))))))),
+        senary_ctor
+          specware_mod "modelCons"
           (hole_descr Descr_Constr)
-          (fun _ -> hole_descr Descr_Constr)
-          (fun _ _ -> Descr_Constr)
-          (fun _ _ _ -> spec_model_descr)
+          (fun _ -> Descr_Constr)
+          (fun _ _ -> hole_descr Descr_Constr)
+          (fun _ _ _ -> Descr_Constr)
+          (fun _ _ _ _ -> Descr_Constr)
+          (fun _ _ _ _ _ -> hnf_descr ~env_opt ~evdref_opt spec_model_descr)
           (nullary_ctor
-             ["Coq"; "Init"; "Logic"] "I"
-             Descr_Constr)))
+             ["Coq"; "Init"; "Datatypes"] "tt"
+             Descr_Fail)))
 
+(* Take a list of ops for a spec S and build a constr_expr of type spec_model S.
+NOTE: expects ops to be in non-reversed order. *)
+let make_model_constr_expr loc ops =
+  build_constr_expr (spec_model_descr ())
+                    (List.map (fun op ->
+                               let (op_id,_,oppred) = op in
+                               (op, mk_var (loc, field_param_id op_id),
+                                match oppred with
+                                | Pred_Trivial -> mk_reference ["Coq"; "Init"; "Logic"] "I"
+                                | _ -> mk_var (loc, field_proof_param_id op_id)))
+                              ops)
 
-(* Take axioms for a spec S and build a constr_expr of type spec_model S ops
-(where ops is implicit), assuming that a variable ax__param is in scope for each
-axiom ax. NOTE: expects axioms to be in non-reversed order. *)
-let rec make_model_constr_expr loc axioms =
-  build_constr_expr spec_model_descr
-                    (List.map (fun (ax_id, _) ->
-                               mk_var (loc, field_param_id ax_id)) axioms)
-(*
-  match axioms with
-  | [] -> mk_reference ["Coq"; "Init"; "Logic"] "I"
-  | [(ax_id,_)] -> 
-  | (ax_id,_)::axioms' ->
-     mkAppC (mk_reference ["Coq"; "Init"; "Logic"] "conj",
-             [mk_var (loc, field_param_id ax_id);
-              make_model_constr_expr loc axioms'])
- *)
+(* Build a pattern to match models of spec; the returned add_lets function adds
+   let-bindings for the defined ops around any expression *)
+let make_spec_model_pattern ?(use_params=true) loc spec =
+  let modelCons_ref =
+    Qualid (loc, mk_qualid specware_mod "modelCons") in
+  let tt_ref =
+    Qualid (loc, mk_qualid ["Coq"; "Init"; "Datatypes"] "tt") in
+  (* Remember: we fold left here because ops are in reverse order *)
+  List.fold_left
+    (fun (pat,add_lets) op ->
+     let (op_id, op_tp, oppred) = op in
+     let field_id =
+       if oppred_is_eq oppred then field_var_id op_id else op_id in
+     let add_param id =
+       if use_params then add_suffix id "param" else id in
+     (CPatCstr (loc, modelCons_ref, [],
+                [CPatAtom (loc, Some (Ident (loc, add_param field_id)));
+                 CPatAtom (loc, Some (Ident (loc, add_param (field_proof_id op_id))));
+                 pat]),
+      match oppred with
+      | Pred_Eq eq_expr ->
+         (fun expr ->
+          mkLetInC ((loc, Name op_id), eq_expr, add_lets expr))
+      | _ -> add_lets))
+    (CPatAtom (loc, Some tt_ref), fun expr -> expr)
+    spec.spec_ops
+
+(* Build a function (fun model => match model with ... => body:body_tp end) that
+matches on models of spec *)
+let make_spec_model_match_fun ?(use_params=true) loc spec_expr spec body body_tp =
+  let (model_pattern, add_lets) = make_spec_model_pattern ~use_params loc spec in
+  mkLambdaC
+    ([loc, Name (Id.of_string "model")], Default Explicit,
+     mkAppC (mk_specware_ref "spec_model", [spec_expr]),
+     CCases (loc, RegularStyle, None,
+             [mk_var (loc, Id.of_string "model"), (None, None)],
+             [loc,
+              [loc, [model_pattern]],
+              CCast (loc, add_lets body, CastConv body_tp)]))
 
 
 (***
@@ -1038,11 +992,12 @@ let update_current_spec loc f =
   | Some spec -> current_spec := Some (f spec)
   | None -> raise loc NoCurrentSpec
 
-(* Add a field (op or axiom) to the current spec *)
-let add_spec_field axiom_p lid tp oppred =
-  (* Extract the field id and loc from field_name *)
+(* Add a field to the current spec *)
+let add_spec_field lid tp oppred =
+  (* Extract the field id and loc *)
   let f = located_elem lid in
   let loc = located_loc lid in
+  (* Get the name of the accessor in the type-class *)
   let acc_id = op_accessor_id (f,tp,oppred) in
 
   update_current_spec
@@ -1053,57 +1008,40 @@ let add_spec_field axiom_p lid tp oppred =
                raise loc (FieldExists f)
              else ()
      in
-     (* Test that we do not have an axiom with a (non-trivial) predicate *)
-     let _ =
-       match axiom_p, oppred with
-       | false, _ -> ()
-       | true, Pred_Trivial -> ()
-       | true, _ ->
-          anomaly ~loc:loc (str "Declaration of an axiom with an op predicate")
-     in
      (* Add the operationaly type-class f__class := acc : tp *)
-     let _ = add_typeclass (loc, field_class_id f) true axiom_p []
+     let _ = add_typeclass (loc, field_class_id f) true false []
                            [((loc, acc_id), tp, false)]
      in
-
-     if axiom_p then
-       (* For axioms, just add the new axiom to the current spec *)
-       { spec with spec_axioms = (f,tp)::spec.spec_axioms }
-
-     else
-       (* For ops, add an instance of the type-class to the context *)
-       let _ =
+     (* Add an instance of the type-class to the context *)
+     let _ =
+       add_to_context [mk_implicit_assum
+                         (field_param_id f)
+                         (mk_var (loc, field_class_id f))] in
+     (* Add f__pred typeclass for non-trivial predicates *)
+     let _ =
+       if oppred_is_nontrivial oppred then
+         let _ =
+           (* Add typeclass f__pred : Prop := f__proof : pred *)
+           add_typeclass (loc, field_pred_id f) true true []
+                         [(loc, field_proof_id f),
+                          op_pred_expr loc (f, tp, oppred), false] in
+         (* Add f__proof__param : f__pred to the context *)
          add_to_context [mk_implicit_assum
-                           (field_param_id f)
-                           (mk_var (loc, field_class_id f))] in
-       let _ =
-         match oppred with
-         | Pred_Trivial -> ()
-         | _ ->
-            (* For ops with predicates, add typeclass
-               f__pred : Prop := f__proof : pred *)
-            let _ =
-              add_typeclass (loc, field_pred_id f) true true []
-                            [(loc, field_proof_id f),
-                             op_pred_expr loc (f, tp, oppred), false] in
-            (* Add f__proof__param : f__pred to the context *)
-            let _ =
-              add_to_context [mk_implicit_assum
-                                (field_proof_param_id f)
-                                (mk_var (loc, field_pred_id f))] in
-            (* For defined ops, also add a local definition of the form
-               f := def f__var f__proof *)
-            (match oppred with
-             | Pred_Eq _ ->
-                add_definition lid [] None
-                               (mkAppC
-                                  (mk_specware_ref "def",
-                                   [mk_var (loc, acc_id);
-                                    mk_var (loc, field_proof_id f)]))
-             | _ -> ())
-       in
-       (* Then, finally, add the op to the current spec *)
-       { spec with spec_ops = (f,tp,oppred)::spec.spec_ops })
+                           (field_proof_param_id f)
+                           (mk_var (loc, field_pred_id f))]
+     in
+     (* For defined ops, also add a local definition of the form
+          f := def f__var f__proof *)
+     let _ =
+       if oppred_is_eq oppred then
+         add_definition lid [] None
+                        (mkAppC
+                           (mk_specware_ref "def",
+                            [mk_var (loc, acc_id);
+                             mk_var (loc, field_proof_id f)]))
+     in
+     (* Then, finally, add the op to the current spec *)
+     { spec with spec_ops = (f,tp,oppred)::spec.spec_ops })
 
 
 (***
@@ -1179,94 +1117,20 @@ let rec translate_field xlate f =
  *** Interpretations
  ***)
 
-let add_instance_for_interp loc id params dom_globref interp codom_ops codom_model =
-  (* Build a Coq environment with the params *)
-  let env = Global.env () in
-  let evd = Evd.from_env env in
-  let evdref = ref evd in
-  let (_, ((env_with_params, _), _)) =
-    Constrintern.interp_context_evars env evdref params in
-
-  (* Look up the spec structure for the domain spec *)
-  let dom_spec = lookup_global_spec dom_globref in
-
-  (* Normalize the term (map_ops interp codom_ops) to get the ops of the domain
-     spec in terms of the ops of the co-domain spec *)
-  let (map_ops_constr, uctx) =
-    Constrintern.interp_constr
-      env_with_params !evdref
-      (mkAppC (mk_specware_ref "map_ops", [interp; codom_ops])) in
-  let map_ops_constr_red =
-    compute_constr
-      ~env_opt:(Some env_with_params) ~evdref_opt:(Some evdref)
-      map_ops_constr in
-  let op_constr_list =
-    destruct_constr (spec_ops_descr ~env_opt:(Some env_with_params)
-                                    ~evdref_opt:(Some evdref) ())
-                    map_ops_constr_red in
-  (* Helper to substitute the param variable names for the "rel" variables that
-  were introduced in env_with_params *)
-  let subst_vars constr =
-    Vars.substl
-      (List.rev_map (function
-                      | (_, Name id) -> Term.mkVar id
-                      | (_, Anonymous) ->
-                         raise loc (Failure "add_instance_for_interp"))
-                    (names_of_local_assums params))
-      constr in
-
-  (* Build a list that maps each op in the domain spec to the constrs that build
-     it and (optionally) its proof in the co-domain spec *)
-  let op_constrs =
-    List.map2
-      (fun (op_id, _, oppred) (op_constr, op_proof_constr) ->
-       (op_id, subst_vars op_constr,
-        map_oppred (fun _ -> subst_vars op_proof_constr) oppred))
-      (List.rev dom_spec.spec_ops) op_constr_list
-  in
-
-  (* Build a list of the arguments of the domain spec's typeclass *)
-  (* FIXME: figure out a way to not use extern_constr here (which would need a
-  way to add type-class instances from constrs instead of constr_exprs...) *)
-  let typeclass_args =
-    concat_map (fun (op_id, op_constr, op_pf_oppred) ->
-                (field_param_id op_id, Constrextern.extern_constr
-                                         true env !evdref op_constr)
-                ::(match op_pf_oppred with
-                   | Pred_Trivial -> []
-                   | Pred_Eq op_pf_constr ->
-                      [field_proof_param_id op_id,
-                       Constrextern.extern_constr
-                         true env !evdref op_pf_constr]
-                   | Pred_Fun op_pf_constr ->
-                      [field_proof_param_id op_id,
-                       Constrextern.extern_constr
-                         true env !evdref op_pf_constr]))
-               op_constrs in
-
-  (* Now add the actual instance *)
-  let _ =
-    add_term_instance
-      (loc, Name id)
-      params
-      (mk_ref_app_named_args loc
-                             (global_spec_typeclass_ref loc dom_globref)
-                             typeclass_args)
-      (mkAppC
-         (mk_reference ["Coq"; "Init"; "Logic"] "proj2",
-          [mk_ref_app_named_args
-             loc
-             (Qualid (loc, mk_qualid specware_mod "spec_models_iso"))
-             [Id.of_string "IsoToSpecModels",
-              mk_ref_app_named_args
-                loc
-                (global_spec_iso_ref loc dom_globref)
-                typeclass_args];
-           mkAppC
-             (mk_specware_ref "map_model", [interp; codom_ops; codom_model])]))
-  in
-
-  op_constrs
+(* Build an instance, named id, of the dom spec's typeclass from a model of the
+codom spec and an interpretation from dom to codom *)
+let add_instance_for_interp loc id params dom_globref interp codom_model =
+  add_term_instance
+    (loc, Name id)
+    params
+    (mkRefC (global_spec_typeclass_ref loc dom_globref))
+    (mkAppC
+       (mk_ref_app_named_args
+          loc
+          (Qualid (loc, mk_qualid specware_mod "spec_iso2"))
+          [Id.of_string "IsoToSpec",
+           mkRefC (global_spec_iso_ref loc dom_globref)],
+        [mkAppC (interp, [codom_model])]))
 
 (* Mappings from names in a domain spec to names or terms in a codomain spec *)
 type interp_map_elem =
@@ -1297,11 +1161,6 @@ let start_interpretation lid dom codom opt_interp_map =
   let dom_spec = lookup_spec dom_locref in
   let codom_locref = spec_locref_of_ref codom in
   let codom_spec = lookup_spec codom_locref in
-  let op_param_ids =
-    concat_map op_param_ids (List.rev codom_spec.spec_ops) in
-  let codom_args = List.map
-                     (fun id -> (id, mk_var (loc, id)))
-                     op_param_ids in
   (* Hook function that generates an instance id__instance of the domain
   typeclass from the codomain typeclass, when the obligations are done *)
   let hook _ _ =
@@ -1311,29 +1170,19 @@ let start_interpretation lid dom codom opt_interp_map =
          (add_instance_for_interp
             (* The loc *)
             loc
-            (* Instance name: morph_name__instance *)
+            (* Instance name: id__instance *)
             (add_suffix interp_name "instance")
-            (* Params: the args of codom plus a codom instance *)
-            (List.map mk_implicit_var_assum op_param_ids
-             @ [mk_implicit_assum
-                  (Id.of_string "Spec")
-                  (mk_ref_app_named_args
-                     loc
-                     (spec_typeclass_ref loc codom_locref)
-                     codom_args)])
+            (* Params: {Spec:codom} *)
+            [mk_implicit_assum
+               (Id.of_string "Spec")
+               (mkRefC (spec_typeclass_ref loc codom_locref))]
             (* Domain globref *)
             (lookup_spec_globref (spec_locref_of_ref dom))
             (* Interpretation: the one we just added *)
             (mk_var (loc, interp_name))
-            (* Co-domain spec ops: codom.codom__ops *)
-            (mk_ref_app_named_args
-               loc
-               (spec_ops_ref loc codom_locref)
-               codom_args)
-            (* Co-domain spec model: proj1 spec_models_iso Spec *)
-            (mkAppC (mk_reference ["Coq"; "Init"; "Logic"] "proj1",
-                     [mk_specware_ref "spec_models_iso";
-                      mk_var (loc, Id.of_string "Spec")]))))
+            (* Co-domain spec model: spec_iso1 Spec *)
+            (mkAppC (mk_specware_ref "spec_iso1",
+                     [mk_var (loc, Id.of_string "Spec")]))))
   in
   let interp_tp = mkAppC (mk_specware_ref "Interpretation",
                           [mkRefC (spec_repr_ref (qualid_of_reference dom));
@@ -1342,53 +1191,28 @@ let start_interpretation lid dom codom opt_interp_map =
   match opt_interp_map with
   | None -> start_definition ~hook lid [] interp_tp
   | Some interp_map ->
-     let ops_id = Id.of_string "ops" in
-     let existT_ref =
-       Qualid (loc, mk_qualid ["Coq"; "Init"; "Specif"] "existT") in
+     let modelCons_ref =
+       Qualid (loc, mk_qualid specware_mod "modelCons") in
      let tt_ref =
        Qualid (loc, mk_qualid ["Coq"; "Init"; "Datatypes"] "tt") in
-     (* Build a pattern to match nested dependent pairs for codom_spec's ops;
-     the returned add_lets function adds let-bindings for the defined ops *)
-     let (codom_ops_pattern, add_codom_lets) =
-       (* Remember: we fold left here because ops are in reverse order *)
-       List.fold_left
-         (fun (pat,add_lets) op ->
-          let (op_id, op_tp, oppred) = op in
-          let field_id =
-            if oppred_is_eq oppred then field_var_id op_id else op_id in
-          (CPatCstr (loc, existT_ref, [],
-                     [CPatAtom (loc, None);
-                      CPatAtom (loc, Some (Ident (loc, field_id)));
-                      CPatCstr
-                        (loc, existT_ref, [],
-                         [CPatAtom (loc, None);
-                          CPatAtom (loc, Some (Ident (loc,
-                                                      field_proof_id op_id)));
-                          pat])]),
-           match oppred with
-           | Pred_Eq eq_expr ->
-              (fun expr ->
-               mkLetInC ((loc, Name op_id), eq_expr, add_lets expr))
-           | _ -> add_lets))
-         (CPatAtom (loc, Some tt_ref), fun expr -> expr)
-         codom_spec.spec_ops
-     in
-     (* Build nested dependent pairs for the ops of dom_spec *)
+     (* Build a model of dom_spec *)
+     (* FIXME: incorporate non-variable models into make_model_constr_expr *)
      let dom_ops_expr =
           List.fold_left
             (fun expr op ->
-             let (op_id, _, _) = op in
-             mkAppC (mkRefC existT_ref,
-                     [mk_hole loc;
-                      apply_interp_map loc interp_map op_id;
-                      mkAppC (mkRefC existT_ref,
-                              [mk_hole loc;
-                               mk_named_hole loc (field_proof_id op_id);
-                               expr])]))
-            (mk_reference ["Coq"; "Init"; "Datatypes"] "tt")
+             let (op_id, op_tp, oppred) = op in
+             mkAppC (mk_ref_app_named_args
+                       loc modelCons_ref
+                       [Id.of_string "oppred",
+                        build_constr_expr (oppred_descr op_id) (op_tp, oppred)],
+                     [apply_interp_map loc interp_map op_id;
+                      mk_named_hole loc (field_proof_id op_id);
+                      expr]))
+            (mkRefC tt_ref)
             dom_spec.spec_ops
      in
      (* Build a tactic expression to call interp_tactic *)
+     (* FIXME: use or remove *)
      let tactic =
        Tacexpr.TacArg
          (loc,
@@ -1400,26 +1224,16 @@ let start_interpretation lid dom codom opt_interp_map =
      in
      (* Start the Program Definition of the interpretation *)
      add_program_definition
-       ~hook ~tactic
+       ~hook (* ~tactic *)
        lid [] (Some interp_tp)
-       (mkAppC
-          (mk_specware_ref "mkInterp",
-           [mkLambdaC
-              ([loc, Name ops_id], Default Explicit,
-               mkAppC (mk_specware_ref "spec_ops",
-                       [mkRefC (spec_repr_ref (loc, codom_locref))]),
-               CCases (loc, RegularStyle, None,
-                       [mk_var (loc, ops_id), (None, None)],
-                       [loc,
-                        [loc, [codom_ops_pattern]],
-                        CCast
-                          (loc,
-                           add_codom_lets dom_ops_expr,
-                           CastConv
-                             (mkAppC
-                                (mk_specware_ref "spec_ops",
-                                 [mkRefC (spec_repr_ref (loc, dom_locref))])))]));
-            mk_named_hole loc (Id.of_string "model_f")]))
+       (make_spec_model_match_fun
+          ~use_params:false
+          loc
+          (mkRefC (spec_repr_ref (loc, codom_locref)))
+          codom_spec dom_ops_expr
+          (mkAppC
+             (mk_specware_ref "spec_model",
+              [mkRefC (spec_repr_ref (loc, dom_locref))])))
 
 
 (* Start an interactive definition of an instance id__instance from the
@@ -1463,12 +1277,11 @@ let start_interp_instance lid dom codom interp_map =
  *)
 
 
-  (***
-   *** Spec Imports
-   ***)
+(***
+ *** Spec Imports
+ ***)
 
-(* FIXME: hints are not currently used; they also assume that subtype predicates
-are classes, which they currently are not... *)
+(* FIXME: hints are not currently used *)
 
 let add_import_hints loc free_vars hole_map imp =
   let env = Global.env () in
@@ -1563,9 +1376,6 @@ let add_import_group_hints loc impgrp =
             [field_proof_id op_id, field_pred_id op_id]
           else []))
       impgrp.spec_impgrp_ops
-    @ List.map
-        (fun ax_id -> (ax_id, field_class_id ax_id))
-        impgrp.spec_impgrp_axioms
   in
   let free_vars = List.map fst free_var_class_list in
   (* Build a map from each free variable f__param or f__proof to the hole
@@ -1595,7 +1405,7 @@ let import_refinement_constr_expr loc constr_expr =
   let (constr,_) = Constrintern.interp_constr env evd constr_expr in
   let constr_hnf = hnf_constr constr in
   (* Destruct constr as a RefinementOf object *)
-  let ((ops,axioms),_,imports) = destruct_refinementof constr_hnf in
+  let (ops,_,imports) = destruct_refinementof constr_hnf in
   (* Get a fresh import number in the current spec *)
   let imp_num = find_unused_import_id (get_current_spec loc) in
 
@@ -1651,66 +1461,35 @@ let import_refinement_constr_expr loc constr_expr =
     Constrextern.extern_constr true env evd (fold_defs op_ids eq_ids constr)
   in
 
-  (*** Add definitions that contain the RefinementOf object itself as well as
-  ops and a model of the ref_spec of this RefinementOf object. NOTE: we do this
-  before adding the ops / axioms to the current spec, since having the latter in
-  the context seems to make things slow... ***)
+  (*** Add definitions that contain the RefinementOf object itself as well as a
+  model of the ref_spec of this RefinementOf object. NOTE: we do this before
+  adding the ops to the current spec, since having the latter in the context
+  seems to make things slow... ***)
 
   (* Add a definition spec__import<i> := constr_expr *)
   let _ = add_definition (loc, spec_import_id imp_num) [] None constr_expr in
-  (* Add spec_ops__import<i> : spec_ops (ref_spec _ spec__import<i>) := ... *)
-  let op_param_ids = (concat_map op_param_ids ops) in
+  (* Add spec_model__import<i> : spec_model (ref_spec _ spec__import<i>) := ... *)
+  let op_param_ids = concat_map op_param_ids ops in
   let ops_expr =
     List.map (map_op (Constrextern.extern_constr true env evd)) ops in
   let op_param_vars = mk_vars loc op_param_ids in
   let op_param_set = Id.Set.of_list op_param_ids in
   let _ = add_definition
-            (loc, spec_import_ops_id imp_num)
+            (loc, spec_import_model_id imp_num)
             []
             (Some
                (forall_ops
                   loc
                   ops_expr
-                  (mkAppC (mk_specware_ref "spec_ops",
+                  (mkAppC (mk_specware_ref "spec_model",
                            [mkAppC (mk_specware_ref "ref_spec",
                                     [mk_hole loc;
                                      mk_var (loc, spec_import_id imp_num)])]))))
-            (lambda_ops loc ops_expr (make_ops_constr_expr loc ops)) in
-  (* Build the expr (spec_ops__import<i> op1__param op1__proof__param ...) *)
-  let spec_ops_expr =
-    mkAppC (mk_var (loc, spec_import_ops_id imp_num),
-            op_param_vars) in
-  (* Add spec_model__import<i> : spec_model spec_ops__import<i>
-                                      (ref_spec _ spec__import<i>) := ... *)
-  let axiom_params =
-    List.map (fun (ax_id, ax_tp) ->
-              mk_explicit_assum
-                (field_param_id ax_id)
-                (Constrextern.extern_constr true env evd ax_tp))
-             axioms in
-  let _ = add_definition
-            (loc, spec_import_model_id imp_num)
-            []
-            (Some
-               (forall_ops
-                  loc ops_expr
-                  (mkCProdN
-                     loc axiom_params
-                     (mkAppC
-                        (mk_specware_ref "spec_model",
-                         [mkAppC (mk_specware_ref "ref_spec",
-                                  [mk_hole loc;
-                                   mk_var (loc, spec_import_id imp_num)]);
-                          spec_ops_expr])))))
-            (lambda_ops loc ops_expr
-                        (mkCLambdaN loc axiom_params
-                                    (make_model_constr_expr loc axioms))) in
-  (* Build the expr (spec_model__import<i> <op params> <axiom params>) *)
+            (lambda_ops loc ops_expr (make_model_constr_expr loc ops_expr)) in
+  (* Build the expr (spec_model__import<i> op1__param op1__proof__param ...) *)
   let spec_model_expr =
     mkAppC (mk_var (loc, spec_import_model_id imp_num),
-            op_param_vars
-            @ (List.map (fun (ax_id,_) ->
-                         mk_var (loc, field_param_id ax_id)) axioms)) in
+            op_param_vars) in
 
   (*** Now we add the imported ops and axioms to the current spec ***)
 
@@ -1719,22 +1498,12 @@ let import_refinement_constr_expr loc constr_expr =
     List.fold_left
       (fun eq_ids (f,tp,oppred) ->
        let _ =
-         add_spec_field false (loc, f)
+         add_spec_field (loc, f)
                         (extern_with_folds op_param_set eq_ids tp)
                         (map_oppred (extern_with_folds op_param_set eq_ids) oppred) in
        if oppred_is_eq oppred then Id.Set.add f eq_ids else eq_ids)
       Id.Set.empty
       ops
-  in
-  (* Add all the axioms specified by constr *)
-  let _ =
-    List.iter
-      (fun (ax_name,ax_tp) ->
-       add_spec_field true
-                      (loc, ax_name)
-                      (extern_with_folds op_param_set eq_ids ax_tp)
-                      Pred_Trivial)
-      axioms
   in
 
   (*** Now we build the instances ***)
@@ -1751,14 +1520,6 @@ let import_refinement_constr_expr loc constr_expr =
     hnf_constr
       (fst (Constrintern.interp_constr env evd spec_ops_expr))
   in
-   *)
-  (* Interpret the value of spec_model__import<i> to a constr *)
-  (*
-     let model_constr =
-       compute_constr
-         (fst (Constrintern.interp_constr
-                 env_with_axs evd (mk_var (loc, spec_import_model_id imp_num))))
-     in
    *)
 
   (* Add the typeclass instances, while building the spec_imports list *)
@@ -1792,69 +1553,22 @@ let import_refinement_constr_expr loc constr_expr =
        in
 
        (* Add instance spec__import<i>__instance<j> *)
-       let imp_op_constrs =
+       let _ =
          add_instance_for_interp
            loc (spec_import_instance_id imp_num j)
-           (* Parameters: the axiom typeclasses *)
-           (List.map
-              (fun (ax_id, _) ->
-               (mk_implicit_assum
-                  (field_param_id ax_id)
-                  (mk_var (loc, field_class_id ax_id))))
-              axioms)
+           (* Parameters: empty (already in context from add_spec_field) *)
+           []
            (* Domain spec *)
            refimp.ref_import_fromspec
-           (* Co-domain spec: the ref_spec of spec__import<i> *)
-           (*
-           (Term.mkApp
-              (Term.mkConst (mk_constant specware_mod "ref_spec"),
-               [| Term.mkConst (global_spec_repr_constant
-                                  loc src_spec_globref);
-                  Term.mkVar (spec_import_id imp_num) |]))
-            *)
            (* Interpretation: spec__import<i>__interp<j> *)
            (mk_var (loc, spec_import_interp_id imp_num j))
-           (* The ops of the co-domain spec *)
-           spec_ops_expr
            (* The model of the co-domain spec *)
            spec_model_expr
        in
 
-       (* Build (map_model interp spec_ops__import<i> spec_model__import<i>)
-          to get the proofs of the imp_spec axioms in the current spec *)
-       (*
-          let imp_ax_proofs_constr =
-            compute_constr
-              (Term.mkApp
-                 (Term.mkConst (mk_constant specware_mod "map_model"),
-                  [| Term.mkConst (global_spec_repr_constant
-                                     loc refimp.ref_import_fromspec);
-                     Term.mkApp
-                       (Term.mkConst (mk_constant specware_mod "ref_spec"),
-                        [| Term.mkConst (global_spec_repr_constant
-                                           loc src_spec_globref);
-                           Term.mkVar (spec_import_id imp_num) |]);
-                     refimp.ref_import_interp;
-                     ops_constr; model_constr |])) in
-          let imp_ax_constr_list =
-            destruct_constr spec_model_descr imp_ax_proofs_constr
-          in
-          let _ =
-            if List.length imp_ax_constr_list
-               = List.length imp_spec.spec_axioms
-            then () else
-              raise loc (MalformedRefinement
-                           (constr, "axiom proofs", imp_ax_proofs_constr))
-          in
-
-          (* Build a list that maps each axiom in the imported spec to the
-          constrs that build its proof in the current spec *)
-          let imp_ax_constrs =
-            List.map2
-              (fun (ax_id, _) ax_constr -> (ax_id, ax_constr))
-              (List.rev imp_spec.spec_axioms) imp_ax_constr_list
-          in
-        *)
+       (* FIXME: this field was used for hints, but hints are no longer being
+       used, so we don't generate it any more... *)
+       let imp_op_constrs = [] in
 
        { spec_import_globref = refimp.ref_import_fromspec;
          spec_import_op_constrs = imp_op_constrs;
@@ -1869,8 +1583,6 @@ let import_refinement_constr_expr loc constr_expr =
                  spec_impgrp_ops =
                    List.map (fun (op_id,_,oppred) ->
                              (op_id, oppred_is_nontrivial oppred)) ops;
-                 spec_impgrp_axioms =
-                   List.map (fun (ax_id,_) -> ax_id) axioms;
                  spec_impgrp_imports = spec_imports }
   in
   (*
@@ -1937,74 +1649,107 @@ let import_spec_term loc st =
 
 
 (***
- *** 
- ***)
-
-
-(***
  *** Beginning and Ending the Current Spec
  ***)
 
-(* Complete the current spec, by creating its axiom type-class, registering it
-   in the global spec table, and creating representation as a Spec object. NOTE:
+(* Complete the current spec, by creating its type-class, registering it in the
+   global spec table, and creating its representation as a Spec object. NOTE:
    this needs to be called after the spec's section is closed, but before its
    module is closed. *)
 let complete_spec loc =
   let spec = get_current_spec loc in
-  (* First, build the axioms into fields for the axiom type-class *)
-  let ax_fields =
-    List.rev_map
-      (fun (ax_id, ax_tp) -> ((loc, field_axelem_id ax_id),
-                              mk_var (loc, field_class_id ax_id),
-                              true))
-      spec.spec_axioms
+  (* First, build the ops into fields for the type-class *)
+  let class_fields =
+    concat_map
+      (fun op ->
+       let (op_id,_,oppred) = op in
+       ((loc, field_classelem_id op_id),
+        mk_var (loc, field_class_id op_id),
+        true)
+       ::(if oppred_is_nontrivial oppred then
+            [(loc, field_predelem_id op_id),
+             mk_var (loc, field_pred_id op_id),
+             true]
+          else []))
+      (List.rev spec.spec_ops)
   in
-  (* Next, build parameters for all the ops and their subtype predicates. NOTE:
-  we do this explicitly, rather than implicitly relying on the context, so that
-  we can ensure all of the ops become params *)
-  let op_params =
-    List.concat
-      (List.rev_map
-         (fun (op_id, op_tp, oppred) ->
-          let op_param =
-            mk_implicit_assum (field_param_id op_id)
-                              (mk_var (loc, field_class_id op_id)) in
-          if oppred_is_nontrivial oppred then
-            [op_param; mk_implicit_assum (field_proof_param_id op_id)
-                                         (mk_var (loc, field_pred_id op_id))]
-          else
-            [op_param])
-         spec.spec_ops)
-  in
-  let _ = add_typeclass (loc, spec.spec_name) false true op_params ax_fields in
+  (* Now add the typeclass *)
+  let _ = add_typeclass (loc, spec.spec_name) false false [] class_fields in
   (* Build the spec representation spec__Spec *)
   let _ = add_definition_constr (spec_repr_id spec.spec_name) None
                                 (build_spec_repr loc spec) in
-  (* Build spec__ops {op_params} : spec_ops spec__Spec *)
+  (* Build spec__model {op_params} : spec_model spec__Spec *)
+  (*
   let _ = add_definition
-            (loc, spec_ops_id spec.spec_name)
-            op_params
-            (Some mkAppC (mk_specware_ref "spec_ops",
+            (loc, spec_model_id spec.spec_name)
+            []
+            (Some mkAppC (mk_specware_ref "spec_model",
                           [mk_var (loc, spec_repr_id spec.spec_name)]))
-            (make_ops_constr_expr loc (List.rev spec.spec_ops))
+            (make_model_constr_expr loc (List.rev spec.spec_ops))
   in
-  (* Build a proof spec__iso that spec__Spec is isomorphic to the spec *)
-  let _ = add_term_instance
-            (loc, Name spec_iso_id spec.spec_name)
-            op_params
-            (mkAppC (mk_specware_ref "IsoToSpecModels",
-                     [mk_var (loc, spec_ops_id spec.spec_name);
-                      CAppExpl
-                        (loc, (None, Ident (loc, spec.spec_name), None),
-                         List.concat
-                           (List.rev_map
-                              (fun op ->
-                               List.map (fun id -> mk_var (loc, id))
-                                        (op_param_ids op))
-                              spec.spec_ops))]))
-            (mk_named_tactic_hole
-               loc
-               (mk_qualid specware_mod "prove_spec_models_iso"))
+   *)
+  (* Build a proof spec__Iso that spec__Spec is isomorphic to the spec *)
+  let field_ids =
+    concat_map op_ids (List.rev spec.spec_ops) in
+  let _ =
+    add_term_instance
+      (loc, Name spec_iso_id spec.spec_name)
+      []
+      (mkAppC (mk_specware_ref "IsoToSpec",
+               [mk_var (loc, spec_repr_id spec.spec_name);
+                mk_var (loc, spec.spec_name)]))
+      (mkAppC
+         (mk_specware_ref "Build_IsoToSpec",
+          [mk_hole loc; mk_hole loc;
+           (* Function to map typeclass instances to models of the spec *)
+           mkCLambdaN
+             loc
+             [mk_explicit_assum (Id.of_string "inst")
+                                (mk_var (loc, spec.spec_name))]
+             (CCases
+                (loc, RegularStyle, None,
+                 [mk_var (loc, Id.of_string "inst"), (None, None)],
+                 [loc,
+                  [loc,
+                   [CPatRecord
+                      (loc, List.map
+                              (fun id ->
+                               (Ident (loc, field_classelem_id id),
+                                CPatAtom (loc, Some (Ident (loc, field_param_id id)))))
+                              field_ids)]],
+                  CCast (loc, make_model_constr_expr
+                                loc (List.rev spec.spec_ops),
+                         CastConv
+                           (mkAppC (mk_specware_ref "spec_model",
+                                    [mk_var (loc, spec_repr_id
+                                                    spec.spec_name)])))]))
+             (*
+             (CLetTuple
+                (loc,
+                 List.map (fun id ->
+                           (loc, Name (field_param_id id))) field_ids,
+                 (None, None),
+                 mk_var (loc, Id.of_string "inst"),
+                 CCast
+                   (loc,
+                    make_model_constr_expr loc (List.rev spec.spec_ops),
+                    CastConv (mkAppC (mk_specware_ref "spec_model",
+                                      [mk_var (loc, spec_repr_id
+                                                      spec.spec_name)]))))) *)
+           ;
+           (* Function to map spec models to typeclass instances *)
+           make_spec_model_match_fun
+             ~use_params:true
+             loc
+             (mk_var (loc, spec_repr_id spec.spec_name))
+             spec
+             (CRecord
+                (loc, None,
+                 List.rev_map
+                   (fun id ->
+                    (Ident (loc, field_classelem_id id),
+                     mk_var (loc, field_param_id id))) field_ids))
+             (mk_var (loc, spec.spec_name))]))
   in
 
   (* Add all hints in the import list to the current module *)
@@ -2161,20 +1906,20 @@ VERNAC COMMAND EXTEND Spec
   | [ "Spec" "Variable" var(lid) ":" constr(tp) ]
     => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () -> add_spec_field false lid tp Pred_Trivial) ]
+           (fun () -> add_spec_field lid tp Pred_Trivial) ]
 
   (* Add a declared op with a subtype predicate *)
   | [ "Spec" "Variable" var(lid) ":" constr(tp) "|" constr(pred) ]
     => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () -> add_spec_field false lid tp (Pred_Fun pred)) ]
+           (fun () -> add_spec_field lid tp (Pred_Fun pred)) ]
 
   (* Add a defined op with a type *)
   | [ "Spec" "Definition" var(lid) ":" constr(tp) ":=" constr(body) ]
     => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
            (fun () ->
-            add_spec_field false lid tp (Pred_Eq body)) ]
+            add_spec_field lid tp (Pred_Eq body)) ]
 
   (* Add a defined op without a type *)
   (* FIXME: figure out how to handle defs with no type... *)
@@ -2189,7 +1934,7 @@ VERNAC COMMAND EXTEND Spec
   | [ "Spec" "Axiom" var(lid) ":" constr(tp) ]
     => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () -> add_spec_field true lid tp Pred_Trivial) ]
+           (fun () -> add_spec_field lid tp Pred_Trivial) ]
 
   (* Add a theorem *)
   | [ "Spec" "Theorem" var(lid) ":" constr(tp) ]
@@ -2197,16 +1942,7 @@ VERNAC COMMAND EXTEND Spec
                                    [located_elem lid]),
           Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () ->
-            let loc = located_loc lid in
-            let cur_spec = get_current_spec loc in
-            let ax_params = List.map
-                              (fun (ax_id, _) ->
-                               (mk_implicit_assum
-                                  (field_param_id ax_id)
-                                  (mk_var (loc, field_class_id ax_id))))
-                               cur_spec.spec_axioms in
-            start_theorem Theorem lid ax_params tp) ]
+           (fun () -> start_theorem Theorem lid [] tp) ]
 
   (* Import a spec using a "raw" expression of type RefinementOf *)
   | [ "Spec" "RawImport" constr(tm) ]
