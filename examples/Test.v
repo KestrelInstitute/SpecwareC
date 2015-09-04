@@ -20,15 +20,58 @@ Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus 
 
 Spec End Monoid.
 
+(*
+Module Monoid.
+Section Monoid.
+
+Definition T__type := Type.
+Context {T__param:T__type}.
+Let T := T__param.
+
+Definition m_zero__type := T.
+Context {m_zero__param:m_zero__type}.
+Let m_zero := m_zero__param.
+
+Definition m_plus__type := T -> T -> T.
+Context {m_plus__param: m_plus__type}.
+Let m_plus := m_plus__param.
+
+Definition m_zero_left__type := (forall x, m_plus m_zero x = x).
+Context {m_zero_left__param : m_zero_left__type}.
+Let m_zero_left := m_zero_left__param.
+
+Definition m_zero_right__type := (forall x, m_plus x m_zero = x).
+Context {m_zero_right__param : m_zero_right__type}.
+Let m_zero_right := m_zero_right__param.
+
+Definition m_plus_assoc__type :=
+  (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z).
+Context {m_plus_assoc__param : m_plus_assoc__type}.
+Let m_plus_assoc := m_plus_assoc__param.
+
+End Monoid.
+Class Monoid : Type :=
+  {T:Type;
+   m_zero:T;
+   m_plus:T -> T -> T;
+   m_zero_left: (forall x, m_plus m_zero x = x);
+   m_zero_right: (forall x, m_plus x m_zero = x);
+   m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z)}.
+
+End Monoid.
+*)
+
 
 (***
  *** The results are: a type-class; a Spec inductive object that represents the
  *** type-class; and a proof that the two are isomorphic.
  ***)
 
+(*
 Print Monoid.Monoid.
 Print Monoid.Monoid__Spec.
 Print Monoid.Monoid__Iso.
+*)
 
 
 (***
@@ -39,7 +82,12 @@ Print Monoid.Monoid__Iso.
 
 Section Monoid_Thms.
 Import Monoid.
-Context `{Monoid}.
+(* Context `{Monoid}. *)
+Context {T__param m_zero__param m_plus__param m_zero_left__param
+                  m_zero_right__param m_plus_assoc__param}
+        (H := @Build_Monoid T__param m_zero__param m_plus__param m_zero_left__param
+                            m_zero_right__param m_plus_assoc__param).
+
 Lemma left_id_uniq (x:T) : (forall y, m_plus x y = y) -> x = m_zero.
   intros left_id.
   rewrite <- (left_id m_zero).
@@ -61,6 +109,14 @@ End Monoid_Thms.
 Spec Group.
 
 Spec Import Monoid {m_% +-> g_%}.
+(*
+Spec Variable T : Type.
+Spec Variable g_zero : T.
+Spec Variable g_plus : (T -> T -> T).
+Spec Axiom g_zero_left : (forall x, g_plus g_zero x = x).
+Spec Axiom g_zero_right : (forall x, g_plus x g_zero = x).
+Spec Axiom g_plus_assoc : (forall x y z, g_plus x (g_plus y z) = g_plus (g_plus x y) z).
+*)
 
 Spec Variable g_inv : (T -> T).
 Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
@@ -68,13 +124,41 @@ Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 
 Spec End Group.
 
+(*
+Instance group2mon {T__param : Group.T__class}
+         {g_zero__param : Group.g_zero__class}
+         {g_plus__param : Group.g_plus__class}
+         {g_zero_left__param} {g_zero_right__param}
+         {g_plus_assoc__param} : Monoid.Monoid :=
+  {| Monoid.T__field := T__param;
+     Monoid.m_zero__field := g_zero__param;
+     Monoid.m_plus__field := g_plus__param;
+     Monoid.m_zero_left__field := g_zero_left__param;
+     Monoid.m_zero_right__field := g_zero_right__param;
+     Monoid.m_plus_assoc__field := g_plus_assoc__param |}.
+*)
+
+(*
+Instance group2mon {G:Group.Group} : Monoid.Monoid :=
+  {| Monoid.T__field := @Group.T__field G;
+     Monoid.m_zero__field := @Group.g_zero__field G;
+     Monoid.m_plus__field := @Group.g_plus__field G;
+     Monoid.m_zero_left__field := @Group.g_zero_left__field G;
+     Monoid.m_zero_right__field := @Group.g_zero_right__field G;
+     Monoid.m_plus_assoc__field := @Group.g_plus_assoc__field G |}.
+*)
+
+(*
+Print HintDb typeclass_instances.
+Typeclasses eauto := debug.
+*)
+
 
 (***
  *** We can see the type-class that was created:
  ***)
 
 Print Group.Group.
-
 
 
 (***
@@ -86,7 +170,83 @@ Print Group.Group.
 
 Section Group_Thms.
 Import Group.
-Context `{Group}.
+(* Context `{Group}. *)
+Print Group.
+Context {T__param:T__class}
+        {g_zero__param : g_zero__class}
+        {g_plus__param : g_plus__class}
+        {g_zero_left__param : g_zero_left__class}
+        {g_zero_right__param : g_zero_right__class}
+        {g_plus_assoc__param : g_plus_assoc__class}
+        {g_inv__param : g_inv__class}
+        {g_inv_left__param : g_inv_left__class}
+        {g_inv_right__param : g_inv_right__class}
+        (H:=@Build_Group T__param g_zero__param g_plus__param g_zero_left__param
+                         g_zero_right__param g_plus_assoc__param
+                         g_inv__param g_inv_left__param g_inv_right__param).
+
+(*
+Instance blah : Monoid.Monoid :=
+  {| Monoid.T__field := T__param;
+     Monoid.m_zero__field := g_zero__param;
+     Monoid.m_plus__field := g_plus__param;
+     Monoid.m_zero_left__field := g_zero_left__param;
+     Monoid.m_zero_right__field := g_zero_right__param;
+     Monoid.m_plus_assoc__field := g_plus_assoc__param |}.
+*)
+
+(*
+Instance blah : Monoid.Monoid :=
+  {| Monoid.T__field := T;
+     Monoid.m_zero__field := g_zero;
+     Monoid.m_plus__field := g_plus;
+     Monoid.m_zero_left__field := g_zero_left;
+     Monoid.m_zero_right__field := g_zero_right;
+     Monoid.m_plus_assoc__field := g_plus_assoc |}.
+*)
+
+Instance m_zero_right__instance : @Monoid.m_zero_right__class T__param g_zero__param g_plus__param :=
+  g_zero_right__param.
+
+(*
+Program Definition m_zero_right__instance : @Monoid.m_zero_right__class _ _ _ :=
+  Eval compute in _.
+Set Printing All.
+Print m_zero_right__instance.
+*)
+
+(*
+Instance blah : Monoid.Monoid :=
+  {| Monoid.T := T;
+     Monoid.m_zero := g_zero;
+     Monoid.m_plus := g_plus;
+     Monoid.m_zero_left := g_zero_left;
+     Monoid.m_zero_right := g_zero_right;
+     Monoid.m_plus_assoc := g_plus_assoc |}.
+*)
+
+(*
+Instance blah : Monoid.Monoid :=
+  {| Monoid.T := T__param;
+     Monoid.m_zero := g_zero__param;
+     Monoid.m_plus := g_plus__param;
+     Monoid.m_zero_left := g_zero_left__param;
+     Monoid.m_zero_right := g_zero_right__param;
+     Monoid.m_plus_assoc := g_plus_assoc__param |}.
+*)
+
+(*
+Instance blah : Monoid.Monoid.
+eauto with typeclass_instances.
+Defined.
+
+Set Printing All.
+Eval hnf in left_id_uniq.
+*)
+
+Set Printing All.
+Print left_id_uniq.
+Eval hnf in left_id_uniq.
 
 Lemma g_left_id_uniq (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
   apply left_id_uniq.
