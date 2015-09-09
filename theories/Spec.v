@@ -99,12 +99,12 @@ Inductive Spec : Type :=
 | Spec_Axioms (axioms : list SpecAxiom) : Spec
 (* The inductive case adds an op named f with zero or more definitions to the
 rest of the spec, that can depend on any f equal to all the definitions *)
-| Spec_ConsOp (f:Field) (T : Type) (oppred: OpPred T)
-              (rest : forall t, oppred t -> Spec) : Spec
+| Spec_Cons (f:Field) (T : Type) (oppred: OpPred T)
+            (rest : forall t, oppred t -> Spec) : Spec
 .
 
 (* Make the field argument be parsed by Coq as a string *)
-Arguments Spec_ConsOp f%string T oppred rest.
+Arguments Spec_Cons f%string T oppred rest.
 
 (* Unfold a definition *)
 Definition def {T x} (t:T) (t__pf: t = x) : T := x.
@@ -132,12 +132,21 @@ Lemma conjoin_axioms_destruct f (P:Prop) axioms :
   intro H; destruct axioms; try (destruct H); split; try assumption; try constructor.
 Qed.
 
+(* The type of an op of type T, a proof of its oppred, and some further type U
+that depends on the op; this is essentially a doubly nested dependent pair. *)
+Inductive OpCons (T:Type) (oppred:OpPred T)
+          (U: forall t, oppred t -> Type) : Type :=
+| opCons (t:T) (pf:oppred t) (model':U t pf)
+.
+
+Arguments opCons {T oppred U} t pf model'.
+
 (* Build the type of the op of a spec *)
 Fixpoint spec_ops spec : Type :=
   match spec with
     | Spec_Axioms axioms => unit
-    | Spec_ConsOp f T oppred rest =>
-      { t : T & {pf: oppred t & spec_ops (rest t pf)}}
+    | Spec_Cons f T oppred rest =>
+      OpCons T oppred (fun t pf => spec_ops (rest t pf))
   end.
 
 (* Build the type of the models of spec as a nested dependent pair *)
@@ -145,34 +154,32 @@ Fixpoint spec_model spec : spec_ops spec -> Prop :=
   match spec return spec_ops spec -> Prop with
     | Spec_Axioms axioms =>
       fun _ => conjoin_axioms axioms
-    | Spec_ConsOp f T oppred rest =>
+    | Spec_Cons f T oppred rest =>
       fun ops =>
-        spec_model (rest (projT1 ops) (projT1 (projT2 ops)))
-                   (projT2 (projT2 ops))
+        let (t,pf,ops') := ops in
+        spec_model (rest t pf) ops'
   end.
-
-(* Build the ops for a spec from an op for the head and ops for the tail *)
-Definition ops_cons {f T} {oppred: OpPred T} {rest}
-           (t:T) (pf:oppred t) (ops_rest:spec_ops (rest t pf)) :
-  spec_ops (Spec_ConsOp f T oppred rest) :=
-  existT _ t (existT _ pf ops_rest).
 
 (* Project the first op of a spec *)
 Definition ops_head {f T oppred rest}
-           (ops: spec_ops (Spec_ConsOp f T oppred rest)) : T :=
-  projT1 ops.
+           (ops: spec_ops (Spec_Cons f T oppred rest)) : T :=
+  let (t,pf,ops') := ops in t.
 
 (* Project the proof that the first op of a spec meets its oppred *)
 Definition ops_proof {f T oppred rest}
-           (ops: spec_ops (Spec_ConsOp f T oppred rest)) :
+           (ops: spec_ops (Spec_Cons f T oppred rest)) :
   oppred (ops_head ops) :=
-  projT1 (projT2 ops).
+  match ops with
+    | opCons t pf ops' => pf
+  end.
 
 (* Project the tail of the ops of a spec *)
 Definition ops_rest {f T oppred rest}
-           (ops: spec_ops (Spec_ConsOp f T oppred rest)) :
+           (ops: spec_ops (Spec_Cons f T oppred rest)) :
   spec_ops (rest (ops_head ops) (ops_proof ops)) :=
-  projT2 (projT2 ops).
+  match ops with
+    | opCons t pf ops' => ops'
+  end.
 
 
 (*** Spec Examples ***)
@@ -191,31 +198,31 @@ Notation "'Axioms f1 t1 ; .. ; fn tn'" :=
 
 (* Example 1:  op n:nat;  axiom gt1: n > 1 *)
 Definition spec_example_1 :=
-  Spec_ConsOp "n" nat Pred_Trivial
+  Spec_Cons "n" nat Pred_Trivial
               (fun n _ => Spec_Axioms [specAxiom "gt1" (n > 1)]).
 
 (* Example 2:  op n:nat := 2;  (no axioms) *)
 Definition spec_example_2 :=
-  Spec_ConsOp "n" nat (Pred_Eq 2)
+  Spec_Cons "n" nat (Pred_Eq 2)
               (fun n _ => Spec_Axioms []).
 
 (* Example 3:  op T:Set := nat;  op n:T__def;  axiom gt1: n > 1 *)
 Definition spec_example_3 :=
-  Spec_ConsOp
+  Spec_Cons
     "T" Set (Pred_Eq nat)
     (fun T T__pf =>
-       Spec_ConsOp "n" (def T T__pf) Pred_Trivial
+       Spec_Cons "n" (def T T__pf) Pred_Trivial
                    (fun n _ => Spec_Axioms [specAxiom "gt1" (n > 1)])).
 
 (* Example 4: Monoids *)
 Definition spec_example_monoid :=
-  Spec_ConsOp
+  Spec_Cons
     "T" Set Pred_Trivial
     (fun T _ =>
-       Spec_ConsOp
+       Spec_Cons
          "m_zero" T Pred_Trivial
          (fun m_zero _ =>
-            Spec_ConsOp
+            Spec_Cons
               "m_plus" (T -> T -> T) Pred_Trivial
               (fun m_plus _ =>
                  Spec_Axioms
@@ -227,16 +234,16 @@ Definition spec_example_monoid :=
 
 (* Example 5: Groups *)
 Definition spec_example_group :=
-  Spec_ConsOp
+  Spec_Cons
     "T" Set Pred_Trivial
     (fun T _ =>
-       Spec_ConsOp
+       Spec_Cons
          "g_zero" T Pred_Trivial
          (fun g_zero _ =>
-            Spec_ConsOp
+            Spec_Cons
               "g_plus" (T -> T -> T) Pred_Trivial
               (fun g_plus _ =>
-                 Spec_ConsOp
+                 Spec_Cons
                    "g_inv" (T -> T) Pred_Trivial
                    (fun g_inv _ =>
                         Spec_Axioms
@@ -253,11 +260,11 @@ Definition spec_example_group :=
 
 (* Example 6: The Natural Numbers as a Monoid *)
 Definition spec_example_natmonoid :=
-Spec_ConsOp "T" Type (@Pred_Eq Type nat)
+Spec_Cons "T" Type (@Pred_Eq Type nat)
   (fun T__param T__proof =>
-   Spec_ConsOp "m_zero" (def T__param T__proof) (Pred_Eq 0)
+   Spec_Cons "m_zero" (def T__param T__proof) (Pred_Eq 0)
      (fun m_zero__param m_zero__proof =>
-      Spec_ConsOp "m_plus"
+      Spec_Cons "m_plus"
         (def T__param T__proof ->
          def T__param T__proof -> def T__param T__proof) 
         (Pred_Eq Nat.add)
@@ -282,12 +289,11 @@ Spec_ConsOp "T" Type (@Pred_Eq Type nat)
 Definition spec_example_ops_natmonoid
            T__param T__proof m_zero__param m_zero__proof m_plus__param m_plus__proof :
   spec_ops spec_example_natmonoid :=
-  (@existT) _ _ T__param
-    ((@existT) _ _ T__proof
-       ((@existT) _ _ m_zero__param
-          ((@existT) _ _ m_zero__proof
-             ((@existT) _ _ m_plus__param
-                ((@existT) _ _ m_plus__proof ((@tt))))))).
+  opCons
+    T__param T__proof
+    (opCons
+       m_zero__param m_zero__proof
+       (opCons m_plus__param m_plus__proof tt)).
 
 Definition spec_example_model_natmonoid
            T__param T__proof m_zero__param m_zero__proof m_plus__param m_plus__proof
@@ -349,23 +355,21 @@ head into an interpretation between the whole of the two specs *)
 Definition interp_cons f T (oppred: OpPred T)
            {spec1 spec2 : forall t, oppred t -> Spec}
            (i: forall t pfs, Interpretation (spec1 t pfs) (spec2 t pfs)) :
-  Interpretation (Spec_ConsOp f T oppred spec1)
-                 (Spec_ConsOp f T oppred spec2) :=
-  mkInterp (fun ops2:spec_ops (Spec_ConsOp f T oppred spec2) =>
-              let (t_o,o) := ops2 in
-              let (pf_o, rest_o) := o in
-              ops_cons t_o pf_o (map_ops (i _ _) rest_o))
+  Interpretation (Spec_Cons f T oppred spec1)
+                 (Spec_Cons f T oppred spec2) :=
+  mkInterp (fun ops2:spec_ops (Spec_Cons f T oppred spec2) =>
+              let (t,pf,ops2') := ops2 in
+              opCons t pf (map_ops (i _ _) ops2') : spec_ops (Spec_Cons _ _ _ _))
            (fun ops2 =>
               match ops2
-                    return spec_model (Spec_ConsOp f T oppred spec2) ops2 ->
+                    return spec_model (Spec_Cons f T oppred spec2) ops2 ->
                            spec_model
-                             (Spec_ConsOp f T oppred spec1)
-                             (let (t_o,o) := ops2 in
-                              let (pf_o,rest_o) := o in
-                              ops_cons t_o pf_o (map_ops (i _ _) rest_o)) with
-                | existT _ t_o (existT _ pf_o rest_o) =>
+                             (Spec_Cons f T oppred spec1)
+                             (let (t,pf,ops2') := ops2 in
+                              opCons t pf (map_ops (i _ _) ops2')) with
+                | opCons t pf ops2' =>
                   fun model2 =>
-                    map_model (i t_o pf_o) rest_o model2
+                    map_model (i t pf) ops2' model2
               end).
 
 (* The simpler version, that does not destruct ops2. We choose the above version
@@ -374,8 +378,8 @@ to make it more efficient to compute with this interpretation. *)
 Definition interp_cons f T (oppred: OpPred T)
            {spec1 spec2 : forall t, oppred t -> Spec}
            (i: forall t pfs, Interpretation (spec1 t pfs) (spec2 t pfs)) :
-  Interpretation (Spec_ConsOp f T oppred spec1)
-                 (Spec_ConsOp f T oppred spec2) :=
+  Interpretation (Spec_Cons f T oppred spec1)
+                 (Spec_Cons f T oppred spec2) :=
   mkInterp (fun ops2 =>
               ops_cons (ops_head ops2) (ops_proof ops2)
                        (map_ops (i _ _) (ops_rest ops2)))
@@ -387,21 +391,19 @@ Definition interp_cons f T (oppred: OpPred T)
 Definition interp_cons_r f T (oppred: OpPred T)
            {spec1} {spec2: forall t, oppred t -> Spec}
            (i: forall t pfs, Interpretation spec1 (spec2 t pfs)) :
-  Interpretation spec1 (Spec_ConsOp f T oppred spec2) :=
-  mkInterp (fun ops2:spec_ops (Spec_ConsOp f T oppred spec2) =>
-              let (t_o,o) := ops2 in
-              let (pf_o,rest_o) := o in
-              map_ops (i t_o pf_o) rest_o)
+  Interpretation spec1 (Spec_Cons f T oppred spec2) :=
+  mkInterp (fun ops2:spec_ops (Spec_Cons f T oppred spec2) =>
+              let (t,pf,ops2') := ops2 in
+              map_ops (i t pf) ops2')
            (fun ops2 =>
               match ops2
-                    return spec_model (Spec_ConsOp f T oppred spec2) ops2 ->
+                    return spec_model (Spec_Cons f T oppred spec2) ops2 ->
                            spec_model spec1
-                                      (let (t_o,o) := ops2 in
-                                       let (pf_o,rest_o) := o in
-                                       map_ops (i _ _) rest_o) with
-                | existT _ t_o (existT _ pf_o rest_o) =>
+                                      (let (t,pf,ops2') := ops2 in
+                                       map_ops (i _ _) ops2') with
+                | opCons t pf ops2' =>
                   fun model2 =>
-                    map_model (i t_o pf_o) rest_o model2
+                    map_model (i t pf) ops2' model2
               end).
 
 
@@ -411,7 +413,7 @@ to make it more efficient to compute with this interpretation. *)
 Definition interp_cons_r f T (oppred: OpPred T)
            {spec1} {spec2: forall t, oppred t -> Spec}
            (i: forall t pfs, Interpretation spec1 (spec2 t pfs)) :
-  Interpretation spec1 (Spec_ConsOp f T oppred spec2) :=
+  Interpretation spec1 (Spec_Cons f T oppred spec2) :=
   mkInterp (fun ops2 => map_ops (i (ops_head ops2) (ops_proof ops2)) (ops_rest ops2))
            (fun ops2 model2 => map_model (i (ops_head ops2) (ops_proof ops2)) _ model2).
 *)
@@ -422,8 +424,18 @@ Definition interp_cons_r f T (oppred: OpPred T)
 (* Interpret T as nat and n as n for spec_example_3 into spec_example_2 *)
 Program Definition interp_example_3_2 : Interpretation spec_example_3 spec_example_2 :=
   fun ops2 =>
-    (ops_cons (oppred:= Pred_Eq nat) nat eq_refl
-              (ops_cons (oppred:=Pred_Trivial) (ops_head ops2) I (tt : spec_ops (Spec_Axioms _)))) : spec_ops spec_example_3.
+    match ops2 with
+      | opCons n n__proof tt =>
+        (opCons
+           (oppred:= Pred_Eq nat) nat eq_refl
+           (opCons (oppred:=Pred_Trivial) n I
+                   (tt : spec_ops (Spec_Axioms _)))) : spec_ops spec_example_3
+    end.
+Obligation 1.
+destruct ops as [ n n__proof ops ]; destruct ops.
+rewrite n__proof.
+auto.
+Qed.
 
 
 (*** Appending Specs ***)
@@ -432,8 +444,8 @@ Program Definition interp_example_3_2 : Interpretation spec_example_3 spec_examp
 Fixpoint spec_append_axioms spec axioms2 : Spec :=
   match spec with
     | Spec_Axioms axioms1 => Spec_Axioms (axioms1 ++ axioms2)
-    | Spec_ConsOp f T oppred rest =>
-      Spec_ConsOp f T oppred (fun t pf => spec_append_axioms (rest t pf) axioms2)
+    | Spec_Cons f T oppred rest =>
+      Spec_Cons f T oppred (fun t pf => spec_append_axioms (rest t pf) axioms2)
   end.
 
 Lemma conjoin_axioms_append1 axioms1 axioms2 :
@@ -460,7 +472,7 @@ Fixpoint append_axioms_interp1 spec axioms2 :
       mkInterp 
         (spec1:=Spec_Axioms axioms1) (spec2:=Spec_Axioms (axioms1++axioms2))
         id (fun _ model => conjoin_axioms_append1 axioms1 axioms2 model)
-    | Spec_ConsOp f T oppred rest =>
+    | Spec_Cons f T oppred rest =>
       interp_cons f T oppred (fun t pf => append_axioms_interp1 (rest t pf) axioms2)
   end.
 
@@ -473,7 +485,7 @@ Fixpoint append_axioms_interp2 spec axioms2 :
         (spec1:=Spec_Axioms axioms2) (spec2:=Spec_Axioms (axioms1++axioms2))
         (fun _ => tt)
         (fun _ model => conjoin_axioms_append2 axioms1 axioms2 model)
-    | Spec_ConsOp f T oppred rest =>
+    | Spec_Cons f T oppred rest =>
       interp_cons_r f T oppred
                     (fun t pf => append_axioms_interp2 (rest t pf) axioms2)
   end.
@@ -484,12 +496,12 @@ Fixpoint spec_append spec1 : (spec_ops spec1 -> Spec) -> Spec :=
   match spec1 return (spec_ops spec1 -> Spec) -> Spec with
     | Spec_Axioms axioms1 =>
       fun spec2 => spec_append_axioms (spec2 tt) axioms1
-    | Spec_ConsOp f T oppred rest =>
+    | Spec_Cons f T oppred rest =>
       fun spec2 =>
-        Spec_ConsOp f T oppred
+        Spec_Cons f T oppred
                     (fun t pf =>
                        spec_append (rest t pf)
-                                   (fun ops1 => spec2 (ops_cons t pf ops1)))
+                                   (fun ops1 => spec2 (opCons t pf ops1)))
   end.
 
 (* Helper for the next definition *)
@@ -514,12 +526,12 @@ Fixpoint interp_append1 spec1 :
         forall spec2, Interpretation spec1 (spec_append spec1 spec2) with
     | Spec_Axioms axioms1 =>
       fun spec2 => append_axioms_interp2 (spec2 tt) axioms1
-    | Spec_ConsOp f T oppred rest =>
+    | Spec_Cons f T oppred rest =>
       fun spec2 =>
         interp_cons f T oppred
                     (fun t pf =>
                        interp_append1 (rest t pf)
-                                      (fun ops1 => spec2 (ops_cons t pf ops1)))
+                                      (fun ops1 => spec2 (opCons t pf ops1)))
   end.
 
 (* Extract the ops for spec2 from ops for (spec_append spec1 spec2). This
@@ -536,12 +548,12 @@ Fixpoint interp_append2_ops spec1 :
               return spec_ops (spec2 ops1) with
           | tt => map_ops (append_axioms_interp1 _ _) ops12
         end
-    | Spec_ConsOp f T oppred rest =>
+    | Spec_Cons f T oppred rest =>
       fun spec2 ops12 =>
         match ops12 return
               spec_ops (spec2 (map_ops (interp_append1 _ spec2) ops12)) with
-          | existT _ t (existT _ pf ops12') =>
-            interp_append2_ops (rest t pf) (fun ops1 => spec2 (ops_cons t pf ops1))
+          | opCons t pf ops12' =>
+            interp_append2_ops (rest t pf) (fun ops1 => spec2 (opCons t pf ops1))
                                ops12'
         end
   end.
@@ -557,8 +569,8 @@ Lemma interp_append2_model spec1 spec2
   unfold interp_append2_ops.
   destruct (map_ops (interp_append1 (Spec_Axioms axioms) spec2) ops12).
   apply map_model; apply model12.
-  destruct ops12 as [ t x ]; destruct x as [ pf ops12' ].
-  apply (H t pf (fun ops1 : spec_ops (rest t pf) => spec2 (ops_cons t pf ops1))).
+  destruct ops12 as [ t pf ops12' ].
+  apply (H t pf (fun ops1 : spec_ops (rest t pf) => spec2 (opCons t pf ops1))).
   assumption.
 Qed.
 
@@ -590,13 +602,13 @@ Inductive NotInSpec (f:Field) : Spec -> Prop :=
 | NotInSpec_cons f' T oppred rest :
     f <> f' ->
     (forall t pf, NotInSpec f (rest t pf)) ->
-    NotInSpec f (Spec_ConsOp f' T oppred rest)
+    NotInSpec f (Spec_Cons f' T oppred rest)
 .
 
 (* Tactic to prove NotInSpec goals *)
 Ltac prove_not_in_spec :=
   match goal with
-    | |- NotInSpec ?f (Spec_ConsOp ?f' _ _ _) =>
+    | |- NotInSpec ?f (Spec_Cons ?f' _ _ _) =>
       apply NotInSpec_cons; [ discriminate | intros; prove_not_in_spec ]
     | |- NotInSpec ?f (Spec_Axioms _) =>
       apply NotInSpec_base
@@ -645,15 +657,15 @@ Inductive SpecOverlap : Spec -> Spec -> Type :=
     SpecOverlap (Spec_Axioms axioms1) (Spec_Axioms axioms2)
 | SpecOverlap_eq f T oppred rest1 rest2 :
     (forall t pf, SpecOverlap (rest1 t pf) (rest2 t pf)) ->
-    SpecOverlap (Spec_ConsOp f T oppred rest1) (Spec_ConsOp f T oppred rest2)
+    SpecOverlap (Spec_Cons f T oppred rest1) (Spec_Cons f T oppred rest2)
 | SpecOverlap_neq1 f1 T1 oppred1 rest1 spec2 :
     NotInSpec f1 spec2 ->
     (forall t pf, SpecOverlap (rest1 t pf) spec2) ->
-    SpecOverlap (Spec_ConsOp f1 T1 oppred1 rest1) spec2
+    SpecOverlap (Spec_Cons f1 T1 oppred1 rest1) spec2
 | SpecOverlap_neq2 f2 T2 oppred2 rest2 spec1 :
     NotInSpec f2 spec1 ->
     (forall t pf, SpecOverlap spec1 (rest2 t pf)) ->
-    SpecOverlap spec1 (Spec_ConsOp f2 T2 oppred2 rest2)
+    SpecOverlap spec1 (Spec_Cons f2 T2 oppred2 rest2)
 .
 
 (* Tactic to prove AxiomOverlap *)
@@ -688,8 +700,8 @@ Ltac prove_axiom_overlap :=
 (* Tactic to prove spec overlap *)
 Ltac prove_spec_overlap :=
   lazymatch goal with
-    | |- SpecOverlap (Spec_ConsOp ?f1 ?T1 ?oppred1 ?rest1)
-                     (Spec_ConsOp ?f2 ?T2 ?oppred2 ?rest2) =>
+    | |- SpecOverlap (Spec_Cons ?f1 ?T1 ?oppred1 ?rest1)
+                     (Spec_Cons ?f2 ?T2 ?oppred2 ?rest2) =>
       lazymatch eval hnf in (Field_dec f1 f2) with
         | left _ =>
           (apply SpecOverlap_eq
@@ -703,9 +715,9 @@ Ltac prove_spec_overlap :=
            fail "The fields " f1 " and " f2 " appear to be in a different order in the two specs");
           prove_spec_overlap
       end
-    | |- SpecOverlap (Spec_ConsOp _ _ _ _) (Spec_Axioms _) =>
+    | |- SpecOverlap (Spec_Cons _ _ _ _) (Spec_Axioms _) =>
       apply SpecOverlap_neq1; [ apply NotInSpec_base | intros; prove_spec_overlap ]
-    | |- SpecOverlap (Spec_Axioms _) (Spec_ConsOp _ _ _ _) =>
+    | |- SpecOverlap (Spec_Axioms _) (Spec_Cons _ _ _ _) =>
       apply SpecOverlap_neq2; [ apply NotInSpec_base | intros; prove_spec_overlap ]
     | |- SpecOverlap (Spec_Axioms _) (Spec_Axioms _) =>
       apply SpecOverlap_base; prove_axiom_overlap
@@ -722,8 +734,8 @@ Ltac prove_spec_overlapN n :=
     | 0 => idtac "prove_spec_overlapN: n exhausted"
     | S ?n' =>
       lazymatch goal with
-        | |- SpecOverlap (Spec_ConsOp ?f1 ?T1 ?oppred1 ?rest1)
-                         (Spec_ConsOp ?f2 ?T2 ?oppred2 ?rest2) =>
+        | |- SpecOverlap (Spec_Cons ?f1 ?T1 ?oppred1 ?rest1)
+                         (Spec_Cons ?f2 ?T2 ?oppred2 ?rest2) =>
           idtac "prove_spec_overlapN: cons-cons";
           lazymatch eval hnf in (Field_dec f1 f2) with
             | left _ =>
@@ -738,10 +750,10 @@ Ltac prove_spec_overlapN n :=
                fail "The fields " f1 " and " f2 " appear to be in a different order in the two specs");
               prove_spec_overlapN n'
           end
-        | |- SpecOverlap (Spec_ConsOp _ _ _ _) (Spec_Axioms _) =>
+        | |- SpecOverlap (Spec_Cons _ _ _ _) (Spec_Axioms _) =>
           idtac "prove_spec_overlapN: cons-axiom";
           apply SpecOverlap_neq1; [ apply NotInSpec_base | intros; prove_spec_overlapN n' ]
-        | |- SpecOverlap (Spec_Axioms _) (Spec_ConsOp _ _ _ _) =>
+        | |- SpecOverlap (Spec_Axioms _) (Spec_Cons _ _ _ _) =>
           idtac "prove_spec_overlapN: axiom-cons";
           apply SpecOverlap_neq2; [ apply NotInSpec_base | intros; prove_spec_overlapN n' ]
         | |- SpecOverlap (Spec_Axioms _) (Spec_Axioms _) =>
@@ -799,18 +811,16 @@ Fixpoint spec_subtract spec1 spec2 (overlap: SpecOverlap spec1 spec2) :
       fun _ => Spec_Axioms (axioms_subtract axioms1 axioms2 overlap')
     | SpecOverlap_eq f T oppred rest1 rest2 overlap' =>
       fun ops2 =>
-        let (t,x) := ops2 in
-        let (pf,ops2') := x in
+        let (t,pf,ops2') := ops2 in
         spec_subtract (rest1 t pf) (rest2 t pf) (overlap' t pf) ops2'
     | SpecOverlap_neq1 f1 T1 oppred1 rest1 spec2 not_in overlap' =>
       fun ops2 =>
-        Spec_ConsOp f1 T1 oppred1
+        Spec_Cons f1 T1 oppred1
                     (fun t pf =>
                        spec_subtract (rest1 t pf) spec2 (overlap' t pf) ops2)
     | SpecOverlap_neq2 f2 T2 oppred2 rest2 spec1 not_in overlap' =>
       fun ops2 =>
-        let (t,x) := ops2 in
-        let (pf,ops2') := x in
+        let (t,pf,ops2') := ops2 in
         spec_subtract spec1 (rest2 t pf) (overlap' t pf) ops2'
   end.
 
@@ -832,16 +842,16 @@ Fixpoint spec_subtract_interp_ops spec1 spec2 (overlap : SpecOverlap spec1 spec2
         match ops2 return
               spec_ops (spec_subtract
                           _ _ (SpecOverlap_eq _ _ _ _ _ overlap') ops2) ->
-              spec_ops (Spec_ConsOp f T oppred rest1) with
-          | existT _ t (existT _ pf ops2') =>
+              spec_ops (Spec_Cons f T oppred rest1) with
+          | opCons t pf ops2' =>
             fun ops21 =>
-              ops_cons t pf (spec_subtract_interp_ops _ _ (overlap' t pf) ops2' ops21)
+              opCons t pf (spec_subtract_interp_ops _ _ (overlap' t pf) ops2' ops21)
         end
     | SpecOverlap_neq1 f1 T1 oppred1 rest1 spec2 not_in overlap' =>
       fun ops2 ops21 =>
-        match ops21 return spec_ops (Spec_ConsOp f1 T1 oppred1 rest1) with
-          | existT _ t (existT _ pf ops21') =>
-            ops_cons t pf (spec_subtract_interp_ops _ _ (overlap' t pf) ops2 ops21')
+        match ops21 return spec_ops (Spec_Cons f1 T1 oppred1 rest1) with
+          | opCons t pf ops21' =>
+            opCons t pf (spec_subtract_interp_ops _ _ (overlap' t pf) ops2 ops21')
         end
     | SpecOverlap_neq2 f2 T2 oppred2 rest2 spec1 not_in overlap' =>
       fun ops2 =>
@@ -849,7 +859,7 @@ Fixpoint spec_subtract_interp_ops spec1 spec2 (overlap : SpecOverlap spec1 spec2
               spec_ops (spec_subtract
                           _ _ (SpecOverlap_neq2 _ _ _ _ _ _ overlap') ops2) ->
               spec_ops spec1 with
-          | existT _ t (existT _ pf ops2') =>
+          | opCons t pf ops2' =>
             fun ops21 =>
               spec_subtract_interp_ops _ _ (overlap' t pf) ops2' ops21
         end
@@ -865,11 +875,11 @@ Lemma spec_subtract_interp_model spec1 spec2 (overlap : SpecOverlap spec1 spec2)
     spec_model spec1 (spec_subtract_interp_ops spec1 spec2 overlap ops2 ops21).
   induction overlap; intros.
   apply (axioms_subtract_interp axioms1 axioms2 a); assumption.
-  destruct ops2 as [t x]; destruct x as [pf ops2'].
+  destruct ops2 as [t pf ops2'].
   apply H; assumption.
-  destruct ops21 as [t x]; destruct x as [pf ops21'].
+  destruct ops21 as [t pf ops21'].
   apply H; assumption.
-  destruct ops2 as [t x]; destruct x as [pf ops2'].
+  destruct ops2 as [t pf ops2'].
   apply H; assumption.
 Qed.
 
@@ -955,11 +965,11 @@ Definition ApplyOp T (oppred: OpPred T) :
 Fixpoint ForallOps spec : (spec_ops spec -> Type) -> Type :=
   match spec with
     | Spec_Axioms _ => fun body_tp => body_tp tt
-    | Spec_ConsOp f T oppred rest =>
+    | Spec_Cons f T oppred rest =>
       fun body_tp =>
         ForallOp T oppred
                  (fun t pf => ForallOps (rest t pf)
-                                        (fun ops => body_tp (ops_cons t pf ops)))
+                                        (fun ops => body_tp (opCons t pf ops)))
   end.
 
 (* The type of Curried predicates on the ops of spec *)
@@ -972,20 +982,20 @@ Fixpoint LambdaOps spec : forall body_tp, (forall ops, body_tp ops) ->
                                     ForallOps spec body_tp with
     | Spec_Axioms _ =>
       fun body_tp body => body tt
-    | Spec_ConsOp f T oppred rest =>
+    | Spec_Cons f T oppred rest =>
       fun body_tp body =>
         LambdaOp T oppred _
                  (fun t pf =>
-                    LambdaOps (rest t pf) _ (fun ops => body (ops_cons t pf ops)))
+                    LambdaOps (rest t pf) _ (fun ops => body (opCons t pf ops)))
   end.
 
 (* Replace all the trivial True proofs in a spec_ops with I *)
 Fixpoint replace_op_proofs spec : spec_ops spec -> spec_ops spec :=
   match spec with
     | Spec_Axioms _ => fun ops => ops
-    | Spec_ConsOp f T oppred rest =>
+    | Spec_Cons f T oppred rest =>
       fun ops =>
-        ops_cons (ops_head ops)
+        opCons (ops_head ops)
                  (replace_op_proof T oppred _ (ops_proof ops))
                  (replace_op_proofs (rest _ _)
                                     (rew [fun pf => spec_ops (rest _ pf)]
@@ -998,9 +1008,8 @@ Lemma replace_op_proofs_eq spec ops : replace_op_proofs spec ops = ops.
   induction spec.
   reflexivity.
   unfold replace_op_proofs; fold replace_op_proofs.
-  destruct ops as [t ops]; destruct ops as [pf ops].
-  unfold ops_head; unfold ops_proof; unfold ops_rest; unfold ops_cons;
-    unfold projT1; unfold projT2.
+  destruct ops as [t pf ops].
+  unfold ops_head; unfold ops_proof; unfold ops_rest.
   destruct oppred; unfold replace_op_proof; unfold replace_op_proof_eq;
     rewrite H; unfold eq_rect;
     [ destruct pf | | ]; reflexivity.
@@ -1013,12 +1022,12 @@ Fixpoint ApplyOps spec : forall A, (ForallOps spec A) ->
                               forall ops, A (replace_op_proofs spec ops) with
     | Spec_Axioms _ =>
       fun A body ops => rew [A] (unit_eq _ _) in body
-    | Spec_ConsOp f T oppred rest =>
+    | Spec_Cons f T oppred rest =>
       fun A body ops =>
         ApplyOps
           (rest (ops_head ops)
                 (replace_op_proof T oppred _ (ops_proof ops)))
-          (fun ops => A (ops_cons _ _ ops))
+          (fun ops => A (opCons _ _ ops))
           (ApplyOp T oppred _ body (ops_head ops) (ops_proof ops))
           (rew [fun pf => spec_ops (rest _ pf)]
                replace_op_proof_eq T oppred _ _ in ops_rest ops)
@@ -1086,28 +1095,36 @@ Class spec_example_1_class (n:nat) : Prop :=
   { example_1__gt1 : n > 1 }.
 
 (* Isomorphism between spec_example_1 and spec_example_1_class *)
+(*
 Instance iso_example_1 : IsoToSpec spec_example_1 spec_example_1_class.
 prove_spec_iso.
 Qed.
+*)
 
 (* Example 2:  op n:nat := 2;  (no axioms) *)
 Class spec_example_2_class (n:nat) (n__pf: n = 2) : Prop := { }.
 
+(*
 Instance iso_example_2 : IsoToSpec spec_example_2 spec_example_2_class.
 prove_spec_iso.
 Qed.
+*)
 
 (* Example 3:  op T:Set := nat;  op n:T__def;  axiom gt1: n > 1 *)
 Class spec_example_3_class (T:Set) (T__pf: T = nat) (n: def T T__pf) : Prop :=
   { example_3__gt1 : n > 1 }.
 
+(*
 Instance iso_example_3 : IsoToSpec spec_example_3 spec_example_3_class.
 prove_spec_iso.
 Qed.
+*)
 
 (* Example: lift the spec3 -> spec2 interpretation to an instance function *)
+(*
 Instance iso_interp_example_3_2 : forall `{spec_example_2_class}, spec_example_3_class _ _ _ :=
   toIsoInterp (interp_example_3_2).
+*)
 
 (* Example 4: monoids *)
 Class Monoid {T:Set} {m_zero:T} {m_plus:T -> T -> T} : Prop :=
@@ -1115,9 +1132,11 @@ Class Monoid {T:Set} {m_zero:T} {m_plus:T -> T -> T} : Prop :=
    m_zero_right : (forall x, m_plus x m_zero = x);
    m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z)}.
 
+(*
 Instance iso_example_monoid : IsoToSpec spec_example_monoid (@Monoid).
 prove_spec_iso.
 Qed.
+*)
 
 (* Example 4: groups *)
 Class Group {T:Set} {g_zero:T} {g_plus:T -> T -> T} {g_inv:T -> T} : Prop :=
@@ -1127,9 +1146,11 @@ Class Group {T:Set} {g_zero:T} {g_plus:T -> T -> T} {g_inv:T -> T} : Prop :=
    g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero);
    g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero)}.
 
+(*
 Instance iso_example_group : IsoToSpec spec_example_group (@Group).
 prove_spec_iso.
 Qed.
+*)
 
 (* Interpretation from Monoid to Group type classes *)
 Program Instance group_as_monoid `{Group} :
@@ -1231,8 +1252,8 @@ Fixpoint translate_spec xlate spec : Spec :=
   match spec with
     | Spec_Axioms axioms =>
       Spec_Axioms (translate_spec_axioms xlate axioms)
-    | Spec_ConsOp f T oppred rest =>
-      Spec_ConsOp (translate_field xlate f) T oppred
+    | Spec_Cons f T oppred rest =>
+      Spec_Cons (translate_field xlate f) T oppred
                   (fun x x__pf => translate_spec xlate (rest x x__pf))
   end.
 
@@ -1243,11 +1264,11 @@ Fixpoint translate_spec_ops xlate spec :
   spec_ops (translate_spec xlate spec) -> spec_ops spec :=
   match spec return spec_ops (translate_spec xlate spec) -> spec_ops spec with
     | Spec_Axioms _ => fun ops => ops
-    | Spec_ConsOp f T oppred rest =>
+    | Spec_Cons f T oppred rest =>
       fun ops =>
         match ops with
-          | existT _ t_o (existT _ pf_o ops') =>
-            ops_cons t_o pf_o (translate_spec_ops xlate _ ops')
+          | opCons t pf ops' =>
+            opCons t pf (translate_spec_ops xlate _ ops')
         end
   end.
 
@@ -1269,7 +1290,7 @@ Program Definition interp_translate_spec xlate spec :
 Next Obligation.
 revert ops H; induction spec; intros.
 apply (translate_spec_axioms_impl xlate); assumption.
-destruct ops as [t_o ops]; destruct ops as [pf_o ops].
+destruct ops as [t pf ops].
 apply H. assumption.
 Defined.
 
@@ -1278,11 +1299,11 @@ Fixpoint untranslate_spec_ops xlate spec :
   spec_ops spec -> spec_ops (translate_spec xlate spec) :=
   match spec return spec_ops spec -> spec_ops (translate_spec xlate spec) with
     | Spec_Axioms _ => fun ops => ops
-    | Spec_ConsOp f T oppred rest =>
+    | Spec_Cons f T oppred rest =>
       fun ops =>
         match ops with
-          | existT _ t_o (existT _ pf_o ops') =>
-            ops_cons t_o pf_o (untranslate_spec_ops xlate _ ops')
+          | opCons t pf ops' =>
+            opCons t pf (untranslate_spec_ops xlate _ ops')
         end
   end.
 
@@ -1304,7 +1325,7 @@ Program Definition interp_untranslate_spec xlate spec :
 Next Obligation.
 revert ops H; induction spec; intros.
 apply (untranslate_spec_axioms_impl xlate); assumption.
-destruct ops as [t_o ops]; destruct ops as [pf_o ops].
+destruct ops as [t pf ops].
 apply H. assumption.
 Defined.
 
@@ -1327,25 +1348,24 @@ Definition interp_cons_strengthen_xlate xlate f1 T (oppred1 oppred2: OpPred T)
            (impl: forall t, oppred2 t -> oppred1 t)
            (i: forall t pf2,
                  Interpretation (spec1 t (impl t pf2)) (spec2 t pf2)) :
-  Interpretation (Spec_ConsOp f1 T oppred1 spec1)
-                 (Spec_ConsOp (translate_field xlate f1) T oppred2 spec2) :=
-  mkInterp (fun ops2:spec_ops (Spec_ConsOp (translate_field xlate f1)
+  Interpretation (Spec_Cons f1 T oppred1 spec1)
+                 (Spec_Cons (translate_field xlate f1) T oppred2 spec2) :=
+  mkInterp (fun ops2:spec_ops (Spec_Cons (translate_field xlate f1)
                                            T oppred2 spec2) =>
-              let (t_o,o) := ops2 in
-              let (pf_o, rest_o) := o in
-              ops_cons t_o (impl _ pf_o) (map_ops (i t_o pf_o) rest_o))
+              let (t,pf,ops2') := ops2 in
+              opCons t (impl _ pf) (map_ops (i t pf) ops2')
+              : spec_ops (Spec_Cons _ _ _ _))
            (fun ops2 =>
               match ops2
-                    return spec_model (Spec_ConsOp (translate_field xlate f1)
+                    return spec_model (Spec_Cons (translate_field xlate f1)
                                                    T oppred2 spec2) ops2 ->
                            spec_model
-                             (Spec_ConsOp f1 T oppred1 spec1)
-                             (let (t_o,o) := ops2 in
-                              let (pf_o,rest_o) := o in
-                              ops_cons t_o (impl t_o pf_o) (map_ops (i _ _) rest_o)) with
-                | existT _ t_o (existT _ pf_o rest_o) =>
+                             (Spec_Cons f1 T oppred1 spec1)
+                             (let (t,pf,ops2') := ops2 in
+                              opCons t (impl t pf) (map_ops (i _ _) ops2')) with
+                | opCons t pf ops2' =>
                   fun model2 =>
-                    map_model (i t_o pf_o) rest_o model2
+                    map_model (i t pf) ops2' model2
               end).
 
 (* Similar to the above, but substitute the definition of an op that is defined
@@ -1355,25 +1375,24 @@ Definition interp_cons_def_xlate xlate f1 T (oppred1: OpPred T) t2
            (oppred1_pf: oppred1 t2)
            (i: forall t pf2,
                  Interpretation (spec1 t2 oppred1_pf) (spec2 t pf2)) :
-  Interpretation (Spec_ConsOp f1 T oppred1 spec1)
-                 (Spec_ConsOp (translate_field xlate f1) T (Pred_Eq t2) spec2) :=
-  mkInterp (fun ops2:spec_ops (Spec_ConsOp (translate_field xlate f1)
+  Interpretation (Spec_Cons f1 T oppred1 spec1)
+                 (Spec_Cons (translate_field xlate f1) T (Pred_Eq t2) spec2) :=
+  mkInterp (fun ops2:spec_ops (Spec_Cons (translate_field xlate f1)
                                            T (Pred_Eq t2) spec2) =>
-              let (t_o,o) := ops2 in
-              let (pf_o, rest_o) := o in
-              ops_cons t2 oppred1_pf (map_ops (i t_o pf_o) rest_o))
+              let (t,pf,ops2') := ops2 in
+              opCons t2 oppred1_pf (map_ops (i t pf) ops2')
+              : spec_ops (Spec_Cons _ _ _ _))
            (fun ops2 =>
               match ops2
-                    return spec_model (Spec_ConsOp (translate_field xlate f1)
+                    return spec_model (Spec_Cons (translate_field xlate f1)
                                                    T (Pred_Eq t2) spec2) ops2 ->
                            spec_model
-                             (Spec_ConsOp f1 T oppred1 spec1)
-                             (let (t_o,o) := ops2 in
-                              let (pf_o,rest_o) := o in
-                              ops_cons t2 oppred1_pf (map_ops (i _ _) rest_o)) with
-                | existT _ t_o (existT _ pf_o rest_o) =>
+                             (Spec_Cons f1 T oppred1 spec1)
+                             (let (t,pf,ops2') := ops2 in
+                              opCons t2 oppred1_pf (map_ops (i _ _) ops2')) with
+                | opCons t pf ops2' =>
                   fun model2 =>
-                    map_model (i t_o pf_o) rest_o model2
+                    map_model (i t pf) ops2' model2
               end).
 
 (* Similar to the above, but allow the field types to be provably, not just
@@ -1384,25 +1403,25 @@ Definition interp_cons_strengthen_xlate_eq xlate f1 T1 T2 (oppred1: OpPred T1)
            (eT: T2 = T1) (impl: forall t, oppred2 t -> oppred1 (rew eT in t))
            (i: forall t pf2,
                  Interpretation (spec1 (rew eT in t) (impl t pf2)) (spec2 t pf2)) :
-  Interpretation (Spec_ConsOp f1 T1 oppred1 spec1)
-                 (Spec_ConsOp (translate_field xlate f1) T2 oppred2 spec2) :=
-  mkInterp (fun ops2:spec_ops (Spec_ConsOp (translate_field xlate f1)
+  Interpretation (Spec_Cons f1 T1 oppred1 spec1)
+                 (Spec_Cons (translate_field xlate f1) T2 oppred2 spec2) :=
+  mkInterp (fun ops2:spec_ops (Spec_Cons (translate_field xlate f1)
                                            T2 oppred2 spec2) =>
-              let (t_o,o) := ops2 in
-              let (pf_o, rest_o) := o in
-              ops_cons (rew eT in t_o) (impl _ pf_o) (map_ops (i t_o pf_o) rest_o))
+              let (t,pf,ops2') := ops2 in
+              opCons (rew eT in t) (impl _ pf) (map_ops (i t pf) ops2')
+              : spec_ops (Spec_Cons _ _ _ _))
            (fun ops2 =>
               match ops2
-                    return spec_model (Spec_ConsOp (translate_field xlate f1)
+                    return spec_model (Spec_Cons (translate_field xlate f1)
                                                    T2 oppred2 spec2) ops2 ->
                            spec_model
-                             (Spec_ConsOp f1 T1 oppred1 spec1)
-                             (let (t_o,o) := ops2 in
-                              let (pf_o,rest_o) := o in
-                              ops_cons (rew eT in t_o) (impl t_o pf_o) (map_ops (i _ _) rest_o)) with
-                | existT _ t_o (existT _ pf_o rest_o) =>
+                             (Spec_Cons f1 T1 oppred1 spec1)
+                             (let (t,pf,ops2') := ops2 in
+                              opCons (rew eT in t) (impl t pf)
+                                     (map_ops (i _ _) ops2')) with
+                | opCons t pf ops2' =>
                   fun model2 =>
-                    map_model (i t_o pf_o) rest_o model2
+                    map_model (i t pf) ops2' model2
               end).
 
 (* Tactic to prove a "simple" interpretation, which is one where none of the ops
@@ -1424,8 +1443,8 @@ Ltac intros_for_cons_op f oppred :=
 Ltac prove_simple_interp xlate :=
   let next :=
       lazymatch goal with
-      | |- Interpretation (Spec_ConsOp ?f1 ?T1 ?oppred1 ?rest1)
-                          (Spec_ConsOp ?f2 ?T2 ?oppred2 ?rest2) =>
+      | |- Interpretation (Spec_Cons ?f1 ?T1 ?oppred1 ?rest1)
+                          (Spec_Cons ?f2 ?T2 ?oppred2 ?rest2) =>
         lazymatch (eval cbn in (Field_dec f2 (translate_field xlate f1))) with
           | left _ =>
             first
@@ -1443,7 +1462,7 @@ Ltac prove_simple_interp xlate :=
             apply interp_cons_r; intros; prove_simple_interp xlate
         end
       | |- Interpretation (Spec_Axioms _)
-                          (Spec_ConsOp ?f2 ?T2 ?oppred2 ?rest2) =>
+                          (Spec_Cons ?f2 ?T2 ?oppred2 ?rest2) =>
         apply interp_cons_r; intros_for_cons_op f2 oppred2;
         prove_simple_interp xlate
       | |- Interpretation (Spec_Axioms _) (Spec_Axioms _) =>
