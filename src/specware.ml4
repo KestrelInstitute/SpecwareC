@@ -2232,8 +2232,8 @@ VERNAC COMMAND EXTEND Spec
 END
 
 
-(* Helper tactics *)
-
+(* Tactic to do "intro s" where s is computed as a constr *)
+(* FIXME: this doesn't work yet... *)
 TACTIC EXTEND intro_string_tac
   | [ "intro_string" constr(s) ]
     -> [ let str = destruct_constr string_descr s in
@@ -2242,5 +2242,19 @@ TACTIC EXTEND intro_string_tac
               (dummy_loc,
                Tacexpr.TacIntroMove (Some (Id.of_string str), MoveLast)))
        ]
+
+END
+
+(* FIXME: why does this need an argument in order to work...? *)
+TACTIC EXTEND pushout_tactics
+  | [ "pushout_tactic" constr(s) ]
+    -> [ Proofview.Goal.nf_enter
+           (fun gl ->
+            let env = Proofview.Goal.env gl in
+            let sigma = Proofview.Goal.sigma gl in
+            let concl = Proofview.Goal.concl gl in
+            (* FIXME HERE NOW: do this!! *)
+            Proofview.tclUNIT ()
+       )]
 
 END
