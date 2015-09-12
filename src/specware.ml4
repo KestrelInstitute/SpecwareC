@@ -8,7 +8,7 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY
 WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
 PARTICULAR PURPOSE. See the LICENSE.txt for more details. *)
 
-DECLARE PLUGIN "specware"
+DECLARE PLUGIN "specware_c_plugin"
 
 open Util_specware
 
@@ -2248,12 +2248,10 @@ END
 TACTIC EXTEND intro_string_tac
   | [ "intro_string" constr(s) ]
     -> [ let str = destruct_constr string_descr s in
-         Proofview.tclUNIT ()
-           (*
          Tacinterp.eval_tactic 
            (Tacexpr.TacAtom
               (dummy_loc,
-               Tacexpr.TacIntroMove (Some (Id.of_string str), MoveLast))) *)
+               Tacexpr.TacIntroMove (Some (Id.of_string str), MoveLast)))
        ]
 
 END
