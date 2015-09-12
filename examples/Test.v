@@ -139,6 +139,46 @@ Print NatMonoid.NatMonoid__Spec.
 Section monoid_natmonoid__instance_section.
 Import NatMonoid.
 
+Program Definition monoid_natmonoid : Interpretation Monoid.Monoid__Spec NatMonoid.NatMonoid__Spec :=
+  let ops_f :=
+      (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) =>
+         match ops with
+           | opCons
+               T__var T__proof
+               (opCons
+                  m_zero__var m_zero__proof
+                  (opCons
+                     m_plus__var m_plus__proof
+                     tt)) =>
+             opCons
+               (oppred:=Pred_Trivial) (nat:Type) _
+               (opCons
+                  (oppred:=Pred_Trivial) m_zero__var _
+                  (opCons
+                     (oppred:=Pred_Trivial) m_plus__var _
+                     tt)) : spec_ops Monoid.Monoid__Spec
+         end) in
+  mkInterp
+    ops_f
+    (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) =>
+       match ops return
+             spec_model NatMonoid.NatMonoid__Spec ops ->
+             spec_model Monoid.Monoid__Spec (ops_f ops)
+       with
+         | opCons
+             T__var T__proof
+             (opCons m_zero__var m_zero__proof
+                     (opCons m_plus__var m_plus__proof tt)) =>
+           let T := nat in
+           let m_zero := 0 in
+           let m_plus := plus in
+           fun model => _
+       end).
+
+Print monoid_natmonoid.
+Print monoid_natmonoid_obligation_4.
+
+(*
 Instance monoid_natmonoid__instance
          `{Spec:NatMonoid} :
   Monoid.Monoid (T__param:=T:Type)
@@ -159,52 +199,40 @@ rewrite m_plus__proof.
 apply m_plus_assoc.
 Defined.
 
-Definition monoid_natmonoid : Interpretation Monoid.Monoid__Spec NatMonoid.NatMonoid__Spec :=
+Program Definition monoid_natmonoid : Interpretation Monoid.Monoid__Spec NatMonoid.NatMonoid__Spec :=
+  let ops_f :=
+      (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) =>
+         match ops with
+           | opCons
+               T__var T__proof
+               (opCons
+                  m_zero__var m_zero__proof
+                  (opCons
+                     m_plus__var m_plus__proof
+                     tt)) =>
+             opCons
+               (oppred:=Pred_Trivial) (nat:Type) _
+               (opCons
+                  (oppred:=Pred_Trivial) m_zero__var _
+                  (opCons
+                     (oppred:=Pred_Trivial) m_plus__var _
+                     tt)) : spec_ops Monoid.Monoid__Spec
+         end) in
   mkInterp
+    ops_f
     (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) =>
-       match ops with
-         | existT
-             _ T__var
-             (existT
-                _ T__proof
-                (existT
-                   _ m_zero__var
-                   (existT
-                      _ m_zero__proof
-                      (existT
-                         _ m_plus__var
-                         (existT
-                            _ m_plus__proof tt))))) =>
-           existT
-             _ (nat:Type)
-             (existT
-                _ I
-                (existT
-                   _ m_zero__var
-                   (existT
-                      _ I
-                      (existT
-                         _ m_plus__var
-                         (existT
-                            _ I tt))))) : spec_ops Monoid.Monoid__Spec
-       end)
-    (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) model =>
-       match ops with
-         | existT
-             _ T__var
-             (existT
-                _ T__proof
-                (existT
-                   _ m_zero__var
-                   (existT
-                      _ m_zero__proof
-                      (existT
-                         _ m_plus__var
-                         (existT
-                            _ m_plus__proof tt))))) =>
+       match ops return
+             spec_model NatMonoid.NatMonoid__Spec ops ->
+             spec_model Monoid.Monoid__Spec (ops_f ops)
+       with
+         | opCons
+             T__var T__proof
+             (opCons m_zero__var m_zero__proof
+                     (opCons m_plus__var m_plus__proof tt)) =>
            let T := nat in
            let m_zero := 0 in
            let m_plus := plus in
+           fun model =>
            proj1 (spec_models_iso
                     (IsoToSpecModels:=
                        Monoid.Monoid__Iso (T__param:=T) (m_zero__param:=m_zero__var)
@@ -214,8 +242,9 @@ Definition monoid_natmonoid : Interpretation Monoid.Monoid__Spec NatMonoid.NatMo
                        proj2 (spec_models_iso
                                 (IsoToSpecModels:=
                                    @NatMonoid.NatMonoid__Iso T__var T__proof m_zero__var m_zero__proof m_plus__var m_plus__proof))
-                             model))
+                             _))
        end).
+*)
 
 End monoid_natmonoid__instance_section.
 
@@ -244,14 +273,61 @@ Print NatMonoid_Import2.NatMonoid_Import2.
 
 
 (* Building the NatMonoid -> NatMonoid_Import interpretation manually *)
-Section natmonoid_natmonoid__instance_section.
+Section natmonoid_natmonoid_import_section.
 Import NatMonoid_Import.
-Set Printing All.
+
+(* Local Obligation Tactic := idtac. *)
+
+Program Definition natmonoid_natmonoid_import_ops_f
+        (ops:spec_ops NatMonoid.NatMonoid__Spec) :
+  spec_ops NatMonoid_Import.NatMonoid_Import__Spec :=
+  match ops with
+    | opCons
+        T__var T__proof
+        (opCons
+           m_zero__var m_zero__proof
+           (opCons
+              m_plus__var m_plus__proof
+              tt)) =>
+      opCons
+        (oppred:=_) (nat:Type) _
+        (opCons
+           (oppred:=_) m_zero__var _
+           (opCons
+              (oppred:=_) m_plus__var _
+              tt))
+  end.
+
+Definition natmonoid_natmonoid_import_model_f
+        (ops:spec_ops NatMonoid.NatMonoid__Spec)
+        (model:spec_model NatMonoid.NatMonoid__Spec ops) :
+  spec_model NatMonoid_Import.NatMonoid_Import__Spec
+             (natmonoid_natmonoid_import_ops_f ops).
+repeat (let t := fresh t in
+        let pf := fresh pf in
+        destruct ops as [t pf ops]).
+repeat (let ax := fresh ax in destruct model as [ ax model ]).
+unfold conjoin_axioms in model.
+split; [ | split ].
+apply ax.
+apply ax0.
+unfold conjoin_axioms. intros.
+apply model.
+Qed.
+
+Definition natmonoid_natmonoid_import :
+  Interpretation NatMonoid.NatMonoid__Spec NatMonoid_Import.NatMonoid_Import__Spec :=
+  mkInterp natmonoid_natmonoid_import_ops_f natmonoid_natmonoid_import_model_f.
+
+End natmonoid_natmonoid_import_section.
+
+(*
 Program Instance natmonoid_natmonoid__instance
          `{Spec:NatMonoid_Import} :
   NatMonoid.NatMonoid (T__param:=T__var)
                       (m_zero__param:=m_zero__var)
                       (m_plus__param:=m_plus__var).
+*)
 
 (*
 Instance natmonoid_natmonoid__instance

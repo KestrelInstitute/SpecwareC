@@ -100,7 +100,7 @@ Inductive Spec : Type :=
 (* The inductive case adds an op named f with zero or more definitions to the
 rest of the spec, that can depend on any f equal to all the definitions *)
 | Spec_Cons (f:Field) (T : Type) (oppred: OpPred T)
-              (rest : forall t, oppred t -> Spec) : Spec
+            (rest : forall t, oppred t -> Spec) : Spec
 .
 
 (* Make the field argument be parsed by Coq as a string *)
@@ -343,7 +343,7 @@ Definition interp_cons_r f T (oppred: OpPred T)
 (*** Example Interpretations ***)
 
 (* Interpret T as nat and n as n for spec_example_3 into spec_example_2 *)
-Program Definition interp_example_3_2__models :
+Program Definition interp_example_3_2 :
   Interpretation spec_example_3 spec_example_2 :=
   (fun (model2:spec_model spec_example_2) =>
      match model2 with

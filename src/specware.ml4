@@ -593,7 +593,7 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
              Left (f, (tp, ((tp, oppred), ((ops', axioms), ()))))
           | ([], axioms) -> Right (Left (axioms, ()))),
         quaternary_ctor
-          specware_mod "Spec_ConsOp"
+          specware_mod "Spec_Cons"
           (hnf_descr id_descr) (fun _ -> Descr_Constr)
           (fun f_sum _ ->
            let f = match f_sum with Left f -> f | Right f -> f in
@@ -623,7 +623,7 @@ let spec_descr : (spec_fields_constr, spec_fields) constr_descr =
                  | _ -> rest_body_constr in
                hnf_constr rest_body_constr'),
               (fun rest_expr ->
-               (* Make a lambda expression for the rest argument of Spec_ConsOp.
+               (* Make a lambda expression for the rest argument of Spec_Cons.
                The expressions class_expr and pred_expr are applications of
                f__class and f__pred, respectively, to all of their implicit
                arguments corresponding to fields in the current spec. *)
@@ -679,7 +679,7 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
                        pp_constr constr in
 
   (* Helper definitions *)
-  let consop_constructor = mk_constructor loc specware_mod "Spec_ConsOp" in
+  let consop_constructor = mk_constructor loc specware_mod "Spec_Cons" in
   let axioms_constructor = mk_constructor loc specware_mod "Spec_Axioms" in
   (* Helper: unfold constants in constr using const_map, which either maps to a
   variable id in scope or to None, meaning the constant should be unfolded *)
@@ -715,7 +715,7 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
   in
   let const_map_add_multi ids const_map =
     List.fold_right const_map_add ids const_map in
-  (* Helper: unfold a rest function, the 4th argument of Spec_ConsOp, depending
+  (* Helper: unfold a rest function, the 4th argument of Spec_Cons, depending
   on the form of the oppred *)
   let rec unfold_rest_fun const_map rem_ops' op_id oppred rest_f =
     let (f__proof__param,f__proof__param_tp,f__param,f__param_tp,body) =
@@ -887,33 +887,28 @@ let destruct_refinementof constr =
 (* A description of the spec_ops S type for any given spec S. *)
 let spec_ops_descr ?(env_opt=None) ?(evdref_opt=None) ()
     : ((Constr.t * Constr.t) list,
-       (constr_expr * constr_expr) list) constr_descr =
+       (constr_expr op * constr_expr * constr_expr) list) constr_descr =
   Descr_Rec
     (fun spec_ops_descr ->
      Descr_Iso
        ("spec_ops",
         (function
-          | Left (_, (_, (x1, (Left (_, (_, (x2, (x3, ())))), ())))) -> (x1,x2)::x3
-          | Left (_, (_, (x1, (Right emp, ())))) -> emp.elim_empty
+          | Left (_, (_, (_, (x1, (x2, (x3, ())))))) -> (x1,x2)::x3
           | Right (Left ()) -> []
           | Right (Right emp) -> emp.elim_empty),
         (function
           | [] -> Right (Left ())
-          | (op,op_pf)::rest ->
-             Left ((), ((), (op, (Left ((), ((), (op_pf, (rest, ())))), ()))))),
-        quaternary_ctor
-          ["Coq"; "Init"; "Specif"] "existT"
+          | ((op_id,op_tp,oppred), op_expr, op_pf)::rest ->
+             Left ((), (build_constr_expr (oppred_descr op_id) (op_tp,oppred),
+                        ((), (op_expr, (op_pf, (rest, ()))))))),
+        senary_ctor
+          specware_mod "opCons"
           (hole_descr Descr_Constr)
-          (fun _ -> hole_descr Descr_Constr)
-          (fun _ _ -> Descr_Constr)
-          (fun _ _ _ ->
-           quaternary_ctor
-             ["Coq"; "Init"; "Specif"] "existT"
-             (hole_descr Descr_Constr)
-             (fun _ -> hole_descr Descr_Constr)
-             (fun _ _ -> Descr_Constr)
-             (fun _ _ _ -> hnf_descr ~env_opt ~evdref_opt spec_ops_descr)
-             Descr_Fail)
+          (fun _ -> Descr_Constr)
+          (fun _ _ -> hole_descr Descr_Constr)
+          (fun _ _ _ -> Descr_Constr)
+          (fun _ _ _ _ -> Descr_Constr)
+          (fun _ _ _ _ _ -> hnf_descr ~env_opt ~evdref_opt spec_ops_descr)
           (nullary_ctor
              ["Coq"; "Init"; "Datatypes"] "tt"
              Descr_Fail)))
@@ -921,13 +916,15 @@ let spec_ops_descr ?(env_opt=None) ?(evdref_opt=None) ()
 (* Take a list of ops for a spec S and build a constr_expr of type spec_ops S.
 NOTE: expects ops to be in non-reversed order. *)
 let make_ops_constr_expr loc ops =
-  build_constr_expr (spec_ops_descr ())
-                    (List.map (fun (op_id,_,oppred) ->
-                               (mk_var (loc, field_param_id op_id),
-                                match oppred with
-                                | Pred_Trivial -> mk_reference ["Coq"; "Init"; "Logic"] "I"
-                                | _ -> mk_var (loc, field_proof_param_id op_id)))
-                              ops)
+  build_constr_expr
+    (spec_ops_descr ())
+    (List.map (fun op ->
+               let (op_id,_,oppred) = op in
+               (op, mk_var (loc, field_param_id op_id),
+                match oppred with
+                | Pred_Trivial -> mk_reference ["Coq"; "Init"; "Logic"] "I"
+                | _ -> mk_var (loc, field_proof_param_id op_id)))
+              ops)
 
 (*
 let make_ops_constr_expr loc ops =
@@ -1343,8 +1340,8 @@ let start_interpretation lid dom codom opt_interp_map =
   | None -> start_definition ~hook lid [] interp_tp
   | Some interp_map ->
      let ops_id = Id.of_string "ops" in
-     let existT_ref =
-       Qualid (loc, mk_qualid ["Coq"; "Init"; "Specif"] "existT") in
+     let opCons_ref =
+       Qualid (loc, mk_qualid specware_mod "opCons") in
      let tt_ref =
        Qualid (loc, mk_qualid ["Coq"; "Init"; "Datatypes"] "tt") in
      (* Build a pattern to match nested dependent pairs for codom_spec's ops;
@@ -1356,15 +1353,10 @@ let start_interpretation lid dom codom opt_interp_map =
           let (op_id, op_tp, oppred) = op in
           let field_id =
             if oppred_is_eq oppred then field_var_id op_id else op_id in
-          (CPatCstr (loc, existT_ref, [],
-                     [CPatAtom (loc, None);
-                      CPatAtom (loc, Some (Ident (loc, field_id)));
-                      CPatCstr
-                        (loc, existT_ref, [],
-                         [CPatAtom (loc, None);
-                          CPatAtom (loc, Some (Ident (loc,
-                                                      field_proof_id op_id)));
-                          pat])]),
+          (CPatCstr (loc, opCons_ref, [],
+                     [CPatAtom (loc, Some (Ident (loc, field_id)));
+                      CPatAtom (loc, Some (Ident (loc, field_proof_id op_id)));
+                      pat]),
            match oppred with
            | Pred_Eq eq_expr ->
               (fun expr ->
@@ -1378,13 +1370,10 @@ let start_interpretation lid dom codom opt_interp_map =
           List.fold_left
             (fun expr op ->
              let (op_id, _, _) = op in
-             mkAppC (mkRefC existT_ref,
-                     [mk_hole loc;
-                      apply_interp_map loc interp_map op_id;
-                      mkAppC (mkRefC existT_ref,
-                              [mk_hole loc;
-                               mk_named_hole loc (field_proof_id op_id);
-                               expr])]))
+             mkAppC (mkRefC opCons_ref,
+                     [apply_interp_map loc interp_map op_id;
+                      mk_named_hole loc (field_proof_id op_id);
+                      expr]))
             (mk_reference ["Coq"; "Init"; "Datatypes"] "tt")
             dom_spec.spec_ops
      in
@@ -1675,7 +1664,7 @@ let import_refinement_constr_expr loc constr_expr =
                            [mkAppC (mk_specware_ref "ref_spec",
                                     [mk_hole loc;
                                      mk_var (loc, spec_import_id imp_num)])]))))
-            (lambda_ops loc ops_expr (make_ops_constr_expr loc ops)) in
+            (lambda_ops loc ops_expr (make_ops_constr_expr loc ops_expr)) in
   (* Build the expr (spec_ops__import<i> op1__param op1__proof__param ...) *)
   let spec_ops_expr =
     mkAppC (mk_var (loc, spec_import_ops_id imp_num),

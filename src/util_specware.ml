@@ -1055,6 +1055,30 @@ let quinary_ctor =
                              fun _ -> ArrayDescr_Nil))))),
               descr_rest)
 
+let senary_ctor =
+  fun dir name descr_a descr_b descr_c descr_d descr_e descr_f descr_rest ->
+  Descr_Ctor (mk_constructor dummy_loc dir name,
+              ArrayDescr_Cons
+                (descr_a,
+                 fun a ->
+                 ArrayDescr_Cons
+                   (descr_b a,
+                    fun b ->
+                    ArrayDescr_Cons
+                      (descr_c a b,
+                       fun c ->
+                       ArrayDescr_Cons
+                         (descr_d a b c,
+                          fun d ->
+                          ArrayDescr_Cons
+                            (descr_e a b c d,
+                             fun e ->
+                             ArrayDescr_Cons
+                               (descr_f a b c d e,
+                                fun _ ->
+                                ArrayDescr_Nil)))))),
+              descr_rest)
+
 (* Description that always reduced a constr to hnf *)
 let hnf_descr ?(env_opt=None) ?(evdref_opt=None)
               (descr: ('t,'f) constr_descr) : ('t,'f) constr_descr =
