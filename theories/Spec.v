@@ -599,10 +599,10 @@ Bind Scope spec_translation_elem_scope with SpecTranslationElem.
 Delimit Scope spec_translation_elem_scope with spec_translation_elem.
 
 (* We use double curly brackets to write spec translations *)
-Notation "'{' elem1 , .. , elemn '}'" :=
+Notation "'{*' elem1 , .. , elemn '*}'" :=
   (mkSpecTranslation (cons elem1%spec_translation_elem .. (cons elemn%spec_translation_elem nil) ..))
   (at level 0) : spec_translation_scope.
-Notation "'{' '}'" :=
+Notation "'{*' '*}'" :=
   (mkSpecTranslation nil)
   (at level 0) : spec_translation_scope.
 
