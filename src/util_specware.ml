@@ -318,6 +318,14 @@ let mk_constructor loc dir name =
   | _ -> user_err_loc (dummy_loc, "_",
                        str ("Not a constructor: " ^ string_of_qualid qualid))
 
+(* Look up a defined inductive type by path list and string name *)
+let mk_inductive dir name =
+  let qualid = mk_qualid dir name in
+  match Nametab.locate qualid with
+  | IndRef ind -> ind
+  | _ -> user_err_loc (dummy_loc, "_",
+                       str ("Not an inductive type: " ^ string_of_qualid qualid))
+
 (* Look up an identifier in the current module and make it fully qualified *)
 let qualify_identifier id =
   let _ = debug_printf 2 "@[qualify_identifier: %s@]\n" (Id.to_string id) in
@@ -706,6 +714,12 @@ let constr_is_constant const constr =
 let constr_is_constructor ctor constr =
   match Term.kind_of_term constr with
   | Term.Construct (c, _) -> eq_constructor c ctor
+  | _ -> false
+
+(* Test if constr is an inductive type equal to ind *)
+let constr_is_inductive ind constr =
+  match Term.kind_of_term constr with
+  | Term.Ind (i, _) -> Names.eq_ind ind i
   | _ -> false
 
 (* Build the expression t1 = t2 *)

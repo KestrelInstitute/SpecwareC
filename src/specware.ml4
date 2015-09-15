@@ -75,19 +75,19 @@ let field_axelem_id f = add_suffix f "axiom"
 (* The name of the Spec representation of a spec named s_id *)
 let spec_repr_id s_id = add_suffix s_id "Spec"
 
-(* The name of the parameteric ops constructor for a spec named s_id *)
-let spec_ops_id s_id = add_suffix s_id "ops"
+(* The name of the parameteric model constructor for a spec named s_id *)
+let spec_model_id s_id = add_suffix s_id "model"
 
 (* The name of the IsoToSpec proof for a spec named s_id *)
 let spec_iso_id s_id = add_suffix s_id "Iso"
 
-(* Get the Id for the interppretation for import number i *)
+(* Get the Id for the interpretation for import number i *)
 let spec_import_id i =
   add_suffix (Id.of_string "spec") ("import" ^ string_of_int i)
 
-(* Get the Id for the interppretation for import number i *)
-let spec_import_ops_id i =
-  add_suffix (Id.of_string "spec_ops") ("import" ^ string_of_int i)
+(* Get the Id for the spec_model for import number i *)
+let spec_import_model_id i =
+  add_suffix (Id.of_string "spec_model") ("import" ^ string_of_int i)
 
 (* Get the Id for the interppretation for import number i *)
 let spec_import_model_id i =
@@ -171,8 +171,8 @@ let spec_iso_qualid locref =
 let spec_iso_ref loc locref =
   Qualid (loc, spec_iso_qualid locref)
 
-let spec_ops_ref loc locref =
-  Qualid (loc, qualid_cons locref (spec_ops_id (spec_locref_basename locref)))
+let spec_model_ref loc locref =
+  Qualid (loc, qualid_cons locref (spec_model_id (spec_locref_basename locref)))
 
 (* A global reference to a spec is a global reference to the spec's
    module *)
@@ -881,26 +881,27 @@ let destruct_refinementof constr =
 
 
 (***
- *** Inductive Descriptions of Ops and Models
+ *** Inductive Descriptions of Models
  ***)
 
-(* A description of the spec_ops S type for any given spec S. *)
-let spec_ops_descr ?(env_opt=None) ?(evdref_opt=None) ()
-    : ((Constr.t * Constr.t) list,
-       (constr_expr op * constr_expr * constr_expr) list) constr_descr =
+(* A description of the spec_model S type for arbitrary spec S. *)
+let spec_model_descr ?(env_opt=None) ?(evdref_opt=None) ()
+    : ((Constr.t * Constr.t) list * Constr.t,
+       (constr_expr op * constr_expr * constr_expr) list
+       * constr_expr) constr_descr =
   Descr_Rec
-    (fun spec_ops_descr ->
+    (fun spec_model_descr ->
      Descr_Iso
-       ("spec_ops",
+       ("spec_model",
         (function
-          | Left (_, (_, (_, (x1, (x2, (x3, ())))))) -> (x1,x2)::x3
-          | Right (Left ()) -> []
-          | Right (Right emp) -> emp.elim_empty),
+          | Left (_, (_, (_, (x1, (x2, (x3, ())))))) ->
+             ((x1,x2)::(fst x3), snd x3)
+          | Right x -> ([], x)),
         (function
-          | [] -> Right (Left ())
-          | ((op_id,op_tp,oppred), op_expr, op_pf)::rest ->
+          | ([], x) -> Right x
+          | (((op_id,op_tp,oppred), op_expr, op_pf)::rest, x) ->
              Left ((), (build_constr_expr (oppred_descr op_id) (op_tp,oppred),
-                        ((), (op_expr, (op_pf, (rest, ()))))))),
+                        ((), (op_expr, (op_pf, ((rest, x), ()))))))),
         senary_ctor
           specware_mod "opCons"
           (hole_descr Descr_Constr)
@@ -908,47 +909,31 @@ let spec_ops_descr ?(env_opt=None) ?(evdref_opt=None) ()
           (fun _ _ -> hole_descr Descr_Constr)
           (fun _ _ _ -> Descr_Constr)
           (fun _ _ _ _ -> Descr_Constr)
-          (fun _ _ _ _ _ -> hnf_descr ~env_opt ~evdref_opt spec_ops_descr)
-          (nullary_ctor
-             ["Coq"; "Init"; "Datatypes"] "tt"
-             Descr_Fail)))
+          (fun _ _ _ _ _ -> hnf_descr ~env_opt ~evdref_opt spec_model_descr)
+          Descr_Constr))
 
-(* Take a list of ops for a spec S and build a constr_expr of type spec_ops S.
-NOTE: expects ops to be in non-reversed order. *)
-let make_ops_constr_expr loc ops =
+(* Take a list of ops and axiom names for some unspecified spec S and build a
+constr_expr of type spec_model S using f__param and f__proof__param free
+variables. NOTE: expects ops and axioms to be in non-reversed order. *)
+let make_model_constr_expr loc ops ax_ids =
+  let rec ax_helper ax_ids =
+    match ax_ids with
+    | [] -> mk_reference ["Coq"; "Init"; "Logic"] "I"
+    | [ax_id] -> mk_var (loc, field_param_id ax_id)
+    | ax_id::ax_ids' ->
+       mkAppC (mk_reference ["Coq"; "Init"; "Logic"] "conj",
+               [mk_var (loc, field_param_id ax_id); ax_helper ax_ids'])
+  in
   build_constr_expr
-    (spec_ops_descr ())
+    (spec_model_descr ())
     (List.map (fun op ->
                let (op_id,_,oppred) = op in
                (op, mk_var (loc, field_param_id op_id),
                 match oppred with
                 | Pred_Trivial -> mk_reference ["Coq"; "Init"; "Logic"] "I"
                 | _ -> mk_var (loc, field_proof_param_id op_id)))
-              ops)
-
-(*
-let make_ops_constr_expr loc ops =
-  (List.fold_right
-     (fun (op_id, op_tp, pred_opt) rest_expr ->
-      mkAppC (mk_specware_ref "ops_cons",
-              [mk_var (loc, field_param_id op_id);
-               (match pred_opt with
-                | Some _ -> mk_var (loc, field_proof_id op_id)
-                | None ->
-                   mkCastC (mk_reference ["Coq"; "Init"; "Logic"] "I",
-                            CastConv
-                              (mkAppC
-                                 (mk_specware_ref "sats_op_pred",
-                                  [mk_reference datatypes_mod "None";
-                                   mk_hole loc]))));
-               rest_expr]))
-     ops
-     (mkCastC (mk_reference datatypes_mod "tt",
-               CastConv
-                 (mkAppC (mk_specware_ref "spec_ops",
-                          [mkAppC (mk_specware_ref "Spec_Axioms",
-                                   [mk_hole loc])])))))
- *)
+              ops,
+     ax_helper ax_ids)
 
 
 (* This describes a spec_model, which is a right-nested series of conj's, or the
@@ -1176,7 +1161,10 @@ let rec translate_field xlate f =
  *** Interpretations
  ***)
 
-let add_instance_for_interp loc id params dom_globref interp codom_ops codom_model =
+(* FIXME HERE NOW: this no longer takes codom_ops! *)
+let add_instance_for_interp loc id params dom_globref interp codom_model =
+  raise loc (Failure "add_instance_for_interp")
+(*
   (* Build a Coq environment with the params *)
   let env = Global.env () in
   let evd = Evd.from_env env in
@@ -1264,6 +1252,7 @@ let add_instance_for_interp loc id params dom_globref interp codom_ops codom_mod
   in
 
   op_constrs
+ *)
 
 (* Mappings from names in a domain spec to names or terms in a codomain spec *)
 type interp_map_elem =
@@ -1288,6 +1277,8 @@ let rec apply_interp_map top_loc interp_map f =
 (* Start an interactive proof of an interpretation named lid from dom to codom,
 optionally supplying an interp_map for the ops *)
 let start_interpretation lid dom codom opt_interp_map =
+  raise dummy_loc (Failure "start_interpretation") (* FIXME HERE NOW *)
+  (*
   let loc = located_loc lid in
   let interp_name = located_elem lid in
   let dom_locref = spec_locref_of_ref dom in
@@ -1409,7 +1400,7 @@ let start_interpretation lid dom codom opt_interp_map =
                                 (mk_specware_ref "spec_ops",
                                  [mkRefC (spec_repr_ref (loc, dom_locref))])))]));
             mk_named_hole loc (Id.of_string "model_f")]))
-
+   *)
 
 (* Start an interactive definition of an instance id__instance from the
 typeclass of codom to that of dom, and then generate an interpretation id from
@@ -1647,30 +1638,12 @@ let import_refinement_constr_expr loc constr_expr =
 
   (* Add a definition spec__import<i> := constr_expr *)
   let _ = add_definition (loc, spec_import_id imp_num) [] None constr_expr in
-  (* Add spec_ops__import<i> : spec_ops (ref_spec _ spec__import<i>) := ... *)
+  (* Add spec_model__import<i> : spec_model (ref_spec _ spec__import<i>) := ... *)
   let op_param_ids = (concat_map op_param_ids ops) in
   let ops_expr =
     List.map (map_op (Constrextern.extern_constr true env evd)) ops in
   let op_param_vars = mk_vars loc op_param_ids in
   let op_param_set = Id.Set.of_list op_param_ids in
-  let _ = add_definition
-            (loc, spec_import_ops_id imp_num)
-            []
-            (Some
-               (forall_ops
-                  loc
-                  ops_expr
-                  (mkAppC (mk_specware_ref "spec_ops",
-                           [mkAppC (mk_specware_ref "ref_spec",
-                                    [mk_hole loc;
-                                     mk_var (loc, spec_import_id imp_num)])]))))
-            (lambda_ops loc ops_expr (make_ops_constr_expr loc ops_expr)) in
-  (* Build the expr (spec_ops__import<i> op1__param op1__proof__param ...) *)
-  let spec_ops_expr =
-    mkAppC (mk_var (loc, spec_import_ops_id imp_num),
-            op_param_vars) in
-  (* Add spec_model__import<i> : spec_model spec_ops__import<i>
-                                      (ref_spec _ spec__import<i>) := ... *)
   let axiom_params =
     List.map (fun (ax_id, ax_tp) ->
               mk_explicit_assum
@@ -1689,8 +1662,7 @@ let import_refinement_constr_expr loc constr_expr =
                         (mk_specware_ref "spec_model",
                          [mkAppC (mk_specware_ref "ref_spec",
                                   [mk_hole loc;
-                                   mk_var (loc, spec_import_id imp_num)]);
-                          spec_ops_expr])))))
+                                   mk_var (loc, spec_import_id imp_num)])])))))
             (lambda_ops loc ops_expr
                         (mkCLambdaN loc axiom_params
                                     (make_model_constr_expr loc axioms))) in
@@ -1803,8 +1775,6 @@ let import_refinement_constr_expr loc constr_expr =
             *)
            (* Interpretation: spec__import<i>__interp<j> *)
            (mk_var (loc, spec_import_interp_id imp_num j))
-           (* The ops of the co-domain spec *)
-           spec_ops_expr
            (* The model of the co-domain spec *)
            spec_model_expr
        in
@@ -1969,6 +1939,8 @@ let complete_spec loc =
   (* Build the spec representation spec__Spec *)
   let _ = add_definition_constr (spec_repr_id spec.spec_name) None
                                 (build_spec_repr loc spec) in
+  (* FIXME HERE NOW: add back the Iso proof!! *)
+  (*
   (* Build spec__ops {op_params} : spec_ops spec__Spec *)
   let _ = add_definition
             (loc, spec_ops_id spec.spec_name)
@@ -1995,6 +1967,7 @@ let complete_spec loc =
                loc
                (mk_qualid specware_mod "prove_spec_models_iso"))
   in
+   *)
 
   (* Add all hints in the import list to the current module *)
   (* let _ = List.iter (add_import_group_hints loc) spec.spec_imports in *)
@@ -2242,19 +2215,112 @@ TACTIC EXTEND intro_string_tac
               (dummy_loc,
                Tacexpr.TacIntroMove (Some (Id.of_string str), MoveLast)))
        ]
-
 END
 
-(* FIXME: why does this need an argument in order to work...? *)
+(* Tactic to make an evar given a string name and then pass the resulting evar
+as a constr to tactic k (which is essentially a continuation). In order to get
+this to work right, needs to be a fully applied tactic, and we just replace the
+last argument with the evar. *)
+TACTIC EXTEND raw_evar_tac
+  | [ "raw_evar" constr(nm) constr(tp) tactic(k) ]
+    -> [ Proofview.Goal.enter
+           (fun gl_nonnorm ->
+            reporting_exceptions
+              (fun () ->
+               (* Get the current proof state *)
+               let gl = Proofview.Goal.assume gl_nonnorm in
+               let env = Proofview.Goal.env gl in
+               let evdref = ref (Proofview.Goal.sigma gl) in
+
+               (* Normalize nm and destruct it to get a string name *)
+               let str = destruct_constr
+                           string_descr
+                           (hnf_constr ~env_opt:(Some env)
+                                       ~evdref_opt:(Some evdref) nm) in
+
+               (* Build the new evar_map with the requested evar *)
+               let (evd',evar_constr) =
+                 Evarutil.new_evar env !evdref
+                                   ~src:(Loc.ghost,Evar_kinds.GoalEvar)
+                                   ~naming:(IntroIdentifier (Id.of_string str))
+                                   tp
+               in
+               let evar_glob_expr =
+                 Detyping.detype false [] env evd' evar_constr in
+
+               (* Build the tactic expr for k applied to the new evar *)
+               let k_app =
+                 match k with
+                 | Tacexpr.TacArg (loc, arg) ->
+                    (match arg with
+                     | Tacexpr.TacCall (loc2, k_f, args) ->
+                        (match List.rev args with
+                         | _::args'_rev ->
+                            let new_args =
+                              List.rev (Tacexpr.ConstrMayEval
+                                          (ConstrTerm (evar_glob_expr, None))
+                                        ::args'_rev) in
+                            Tacexpr.TacArg
+                              (loc, Tacexpr.TacCall (loc2, k_f, new_args)))
+                     | Tacexpr.TacDynamic _ -> raise dummy_loc (Failure "TacDynamic")
+                     | _ -> raise dummy_loc (Failure "raw_evar (2)"))
+                 | _ -> raise dummy_loc (Failure "raw_evar (1)")
+               in
+
+               (* Install the new evar map and then call k *)
+               Proofview.tclTHEN
+                 (Proofview.V82.tactic (Refiner.tclEVARS evd'))
+                 (Tacinterp.eval_tactic k_app)
+       ))]
+END
+
+         (* FIXME: why does this need an argument in order to work...? *)
 TACTIC EXTEND pushout_tactics
   | [ "pushout_tactic" constr(s) ]
     -> [ Proofview.Goal.nf_enter
            (fun gl ->
-            let env = Proofview.Goal.env gl in
-            let sigma = Proofview.Goal.sigma gl in
-            let concl = Proofview.Goal.concl gl in
-            (* FIXME HERE NOW: do this!! *)
-            Proofview.tclUNIT ()
-       )]
+            reporting_exceptions
+              (fun () ->
+               (* Get the current proof state *)
+               let env = Proofview.Goal.env gl in
+               let evd = Proofview.Goal.sigma gl in
+               let evdref = ref evd in
+               let concl = Proofview.Goal.concl gl in
+
+               (* Make sure we have Pushout as the goal, and extract the two
+               functions we are trying to unify and their co-domains *)
+               let (dom_constr, codom_constr1, codom_constr2,
+                    f_constr1, f_constr2) =
+                 match Term.kind_of_term concl with
+                 | Term.App (head, [| dom_constr; codom_constr1; codom_constr2;
+                                      f_constr1; f_constr2 |])
+                      when constr_is_inductive
+                             (mk_inductive specware_mod "Pushout") head ->
+                    (dom_constr, codom_constr1, codom_constr2,
+                     f_constr1, f_constr2)
+                 | _ ->
+                    (* FIXME: is this the right way to fail...? *)
+                    raise
+                      dummy_loc
+                      (Refiner.FailError
+                         (0, lazy (str "pushout_tactic applied to a non-Pushout goal")))
+               in
+               (* let (dom_ops,dom_axioms) = destruct_constr spec_descr dom_constr in *)
+               let (codom1_ops,codom1_axioms) =
+                 destruct_constr
+                   spec_descr
+                   (hnf_constr ~env_opt:(Some env) ~evdref_opt:(Some evdref)
+                               codom_constr1) in
+               let (codom2_ops,codom2_axioms) =
+                 destruct_constr
+                   spec_descr
+                   (hnf_constr ~env_opt:(Some env) ~evdref_opt:(Some evdref)
+                               codom_constr2) in
+
+               
+
+               (* FIXME HERE NOW: do this!! *)
+               Proofview.tclUNIT ()
+           ))]
 
 END
