@@ -2218,9 +2218,7 @@ TACTIC EXTEND intro_string_tac
 END
 
 (* Tactic to make an evar given a string name and then pass the resulting evar
-as a constr to tactic k (which is essentially a continuation). In order to get
-this to work right, needs to be a fully applied tactic, and we just replace the
-last argument with the evar. *)
+as a constr to tactic k (which is essentially a continuation). *)
 TACTIC EXTEND raw_evar_tac
   | [ "raw_evar" constr(nm) constr(tp) tactic(k) ]
     -> [ Proofview.Goal.enter
@@ -2248,29 +2246,36 @@ TACTIC EXTEND raw_evar_tac
                let evar_glob_expr =
                  Detyping.detype false [] env evd' evar_constr in
 
-               (* Build the tactic expr for k applied to the new evar *)
-               let k_app =
-                 match k with
-                 | Tacexpr.TacArg (loc, arg) ->
-                    (match arg with
-                     | Tacexpr.TacCall (loc2, k_f, args) ->
-                        (match List.rev args with
-                         | _::args'_rev ->
-                            let new_args =
-                              List.rev (Tacexpr.ConstrMayEval
-                                          (ConstrTerm (evar_glob_expr, None))
-                                        ::args'_rev) in
-                            Tacexpr.TacArg
-                              (loc, Tacexpr.TacCall (loc2, k_f, new_args)))
-                     | Tacexpr.TacDynamic _ -> raise dummy_loc (Failure "TacDynamic")
-                     | _ -> raise dummy_loc (Failure "raw_evar (2)"))
-                 | _ -> raise dummy_loc (Failure "raw_evar (1)")
+               (* Build the tactic expr (f x) for free variables f and x *)
+               let tac_expr =
+                 Tacexpr.TacArg
+                   (dummy_loc,
+                    Tacexpr.TacCall
+                      (dummy_loc, ArgVar (dummy_loc, Id.of_string "f"),
+                       [Tacexpr.Reference (ArgVar (dummy_loc, Id.of_string "x"))]))
                in
 
-               (* Install the new evar map and then call k *)
+               (* Build the tactic environment [f |-> k, x |-> evar_constr] *)
+               let istfun k_val =
+                 {Tacinterp.default_ist () with
+                   lfun = Id.Map.add
+                            (Id.of_string "f") k_val
+                            (Id.Map.add (Id.of_string "x")
+                                        (Tacinterp.Value.of_constr evar_constr)
+                                        Id.Map.empty)}
+               in
+
+               (* Now we do all the monadic actions *)
                Proofview.tclTHEN
+                 (* First set the new evar_map evd' to install the new evar *)
                  (Proofview.V82.tactic (Refiner.tclEVARS evd'))
-                 (Tacinterp.eval_tactic k_app)
+                 (* Next, evaluate k to a tactic value *)
+                 (Tacinterp.val_interp
+                    (Tacinterp.default_ist ())
+                    k
+                    (fun k_val ->
+                     (* Now, finally, eval tac_expr, which applies k_val *)
+                     Tacinterp.eval_tactic_ist (istfun k_val) tac_expr))
        ))]
 END
 
