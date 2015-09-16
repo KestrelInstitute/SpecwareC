@@ -5,34 +5,34 @@ Require Import Specware.SpecwareC.
 (* Base spec contains two natural numbers, n and m *)
 Definition base : Spec :=
   Spec_Cons
-    "n" nat Pred_Trivial
-    (fun n n__proof =>
+    "n" nat
+    (fun n =>
        Spec_Cons
-         "m" nat Pred_Trivial
-         (fun m m__proof => Spec_Axioms nil)).
+         "m" nat
+         (fun m => Spec_Axioms nil)).
 
 (* spec1 contains just the natural nmber n *)
 Definition spec1 : Spec :=
-  Spec_Cons "n" nat Pred_Trivial (fun n n__proof => Spec_Axioms nil).
+  Spec_Cons "n" nat (fun n => Spec_Axioms nil).
 
 (* Interpretation that sets m to be 2 *)
 Definition interp1 : Interpretation base spec1 :=
   fun model =>
     match model with
-      | opCons n n__proof I =>
-        opCons n n__proof (opCons (oppred:=Pred_Trivial) 2 I I)
+      | existT _ n I =>
+        existT _ n (existT _ 2 I)
     end.
 
 (* spec2 contains just the natural nmber m *)
 Definition spec2 : Spec :=
-  Spec_Cons "m" nat Pred_Trivial (fun m m__proof => Spec_Axioms nil).
+  Spec_Cons "m" nat (fun m => Spec_Axioms nil).
 
 (* Interpretation that sets n to be 1 *)
 Definition interp2 : Interpretation base spec2 :=
   fun model =>
     match model with
-      | opCons m m__proof I =>
-        opCons (oppred:=Pred_Trivial) 1 I (opCons m m__proof I)
+      | existT _ m I =>
+        existT _ 1 (existT _ m I)
     end.
 
 (* Now: find a pushout of interp1 and interp2 *)
@@ -41,15 +41,15 @@ Definition pushout12__destruct : Pushout interp1 interp2.
             _ _ _ interp1 interp2 ?[__spec]
             (interp_compose
                (?[destruct__helper] : Interpretation ?__spec ?__spec)
-               (fun model => (opCons ?[n] ?[n__proof] I) : spec_model spec1)
+               (fun model => (existT _ ?[n] I) : spec_model spec1)
                )
             (interp_compose
                ?destruct__helper
-               (fun model => (opCons ?[m] ?[m__proof] I) : spec_model spec2)
+               (fun model => (existT _ ?[m] I) : spec_model spec2)
                )).
   intro model.
-  unify (interp1 (opCons ?n ?n__proof I))
-        (interp2 (opCons ?m ?m__proof I)).
+  unify (interp1 (existT _ ?n I))
+        (interp2 (existT _ ?m I)).
   instantiate (s4:=Spec_Axioms nil).
   instantiate (destruct__helper:=(fun model =>
                                     match model with
@@ -81,21 +81,15 @@ Ltac build_spec_model_evars n :=
       (*
       evar (ax:P);
       apply (conj ?ax); build_spec_model_evars *)
-    | |- spec_model (Spec_Cons ?f ?T ?oppred ?rest_f) =>
-      change (OpCons T oppred (fun t pf => spec_model (rest_f t pf)));
+    | |- spec_model (Spec_Cons ?f ?T ?rest_f) =>
+      change (@sigT T (fun t => spec_model (rest_f t)));
       raw_evar
         f T
-        (fun evar1 =>
-           raw_evar (append f "__proof")
-                    (sats_op_pred oppred evar1)
-                    (fun evar2 =>
-                       set_evar_property sort_hint evar1 n;
-                       set_evar_property spec_axiom_p evar1 false;
-                       set_evar_property sort_hint evar2 (n+1);
-                       set_evar_property spec_axiom_p evar2 false;
-                       apply (opCons evar1 evar2);
-                       build_spec_model_evars (n+2)))
-      (* eapply (opCons ?[?t] ?[?pf]); build_spec_model_evars *)
+        (fun evar =>
+           set_evar_property sort_hint evar n;
+           set_evar_property spec_axiom_p evar false;
+           apply (existT _ evar);
+           build_spec_model_evars (n+1))
     | |- spec_model ?s =>
       let s_hnf := (eval hnf in s) in
       progress (change (spec_model s_hnf)); build_spec_model_evars n
@@ -107,11 +101,10 @@ Ltac unify_models model1 model2 :=
   let model1_hnf := (eval hnf in model1) in
   let model2_hnf := (eval hnf in model2) in
   lazymatch model1_hnf with
-    | opCons ?t1 ?pf1 ?model1' =>
+    | existT _ ?t1 ?model1' =>
       lazymatch model2_hnf with
-        | opCons ?t2 ?pf2 ?model2' =>
-          unify t1 t2; unify pf1 pf2;
-          unify_models model1' model2'
+        | existT _ ?t2 ?model2' =>
+          unify t1 t2; unify_models model1' model2'
       end
     | _ => unify model1_hnf model2_hnf
   end.
@@ -153,64 +146,69 @@ Require Import Coq.Program.Wf.
 
 Definition dnc_spec1 : Spec :=
   Spec_Cons
-    "D" Type Pred_Trivial
-    (fun D _ =>
+    "D" Type
+    (fun D =>
        Spec_Cons
-         "R" Type Pred_Trivial
-         (fun R _ =>
+         "R" Type
+         (fun R =>
             Spec_Cons
-              "IO" (D -> R -> Prop) Pred_Trivial
-              (fun IO _ => 
+              "IO" (D -> R -> Prop)
+              (fun IO => 
                  Spec_Cons
-                   "solve" (D -> R) Pred_Trivial
-                   (fun solve _ =>
+                   "solve" (D -> R)
+                   (fun solve =>
                       Spec_Axioms [specAxiom "solve_correct"
                                              (forall d, IO d (solve d))])))).
 
 
 Definition dnc_spec2 : Spec :=
   Spec_Cons
-    "D" Type Pred_Trivial
-    (fun D _ =>
+    "D" Type
+    (fun D =>
        Spec_Cons
-         "R" Type Pred_Trivial
-         (fun R _ =>
+         "R" Type
+         (fun R =>
             Spec_Cons
-              "IO" (D -> R -> Prop) Pred_Trivial
-              (fun IO _ =>
+              "IO" (D -> R -> Prop)
+              (fun IO =>
                  Spec_Cons
-                   "smaller" (D -> D -> Prop) (Pred_Fun (fun x => well_founded x))
-                   (fun smaller smaller__proof =>
+                   "smaller" (D -> D -> Prop)
+                   (fun smaller =>
                       Spec_Cons
-                        "primitive" (D -> bool) Pred_Trivial
-                        (fun primitive _ =>
+                        "smaller__proof" (well_founded smaller)
+                        (fun smaller__proof =>
                            Spec_Cons
-                             "direct_solve" (D -> R) Pred_Trivial
-                             (fun direct_solve _ =>
+                             "primitive" (D -> bool)
+                             (fun primitive =>
                                 Spec_Cons
-                                  "decompose" (D -> D * D)
-                                  (Pred_Fun (fun decompose =>
-                                               (forall d,
-                                                  primitive d = false ->
-                                                  smaller (fst (decompose d)) d /\
-                                                  smaller (snd (decompose d)) d)))
-                                  (fun decompose decompose__proof =>
+                                  "direct_solve" (D -> R)
+                                  (fun direct_solve =>
                                      Spec_Cons
-                                       "compose" (R -> R -> R) Pred_Trivial
-                                       (fun compose _ =>
-                                          Spec_Axioms
-                                            [ specAxiom
-                                                "direct_solve_correct"
-                                                (forall d, primitive d = true ->
-                                                           IO d (direct_solve d));
-                                              specAxiom
-                                                "solve_soundness"
-                                                (forall d z1 z2,
-                                                   IO (fst (decompose d)) z1 ->
-                                                   IO (snd (decompose d)) z2 ->
-                                                   IO d (compose z1 z2))
-                                            ]
-    )))))))).
+                                       "decompose" (D -> D * D)
+                                       (fun decompose =>
+                                          Spec_Cons
+                                            "decompose__proof"
+                                            (forall d,
+                                               primitive d = false ->
+                                               smaller (fst (decompose d)) d /\
+                                               smaller (snd (decompose d)) d)
+                                            (fun decompose__proof =>
+                                               Spec_Cons
+                                                 "compose" (R -> R -> R)
+                                                 (fun compose =>
+                                                    Spec_Axioms
+                                                      [ specAxiom
+                                                          "direct_solve_correct"
+                                                          (forall d, primitive d = true ->
+                                                                     IO d (direct_solve d));
+                                                        specAxiom
+                                                          "solve_soundness"
+                                                          (forall d z1 z2,
+                                                             IO (fst (decompose d)) z1 ->
+                                                             IO (snd (decompose d)) z2 ->
+                                                             IO d (compose z1 z2))
+                                                      ]
+         )))))))))).
 
 Definition bool_dec (b1 b2:bool) : {b1=b2} + {b1<>b2}.
   decide equality.
@@ -313,47 +311,49 @@ Defined.
 Program Definition dnc_interp : Interpretation dnc_spec1 dnc_spec2 :=
   fun model =>
     match model with
-      | opCons
-          D D__proof
-          (opCons
-             R R__proof
-             (opCons
-                IO IO__proof
-                (opCons
-                   smaller smaller__proof
-                   (opCons
-                      primitive primitive__proof
-                      (opCons
-                         direct_solve direct_solve__proof
-                         (opCons
-                            decompose decompose__proof
-                            (opCons
-                               compose compose__proof
-                               (conj direct_solve_correct solve_soundness))))))))
+      | existT
+          _ D
+          (existT
+             _ R
+             (existT
+                _ IO
+                (existT
+                   _ smaller
+                   (existT
+                      _ smaller__proof
+                      (existT
+                         _ primitive
+                         (existT
+                            _ direct_solve
+                            (existT
+                               _ decompose
+                               (existT
+                                  _ decompose__proof
+                                  (existT
+                                     _ compose
+                                     (conj direct_solve_correct solve_soundness))))))))))
         =>
-        opCons
-          (oppred:=Pred_Trivial) D D__proof
-          (opCons
-             (oppred:=Pred_Trivial) R R__proof
-             (opCons
-                (oppred:=Pred_Trivial) IO IO__proof
-                (opCons
-                   (oppred:=Pred_Trivial)
-                   (fun d =>
-                      solve_def D R smaller primitive direct_solve
-                                (fun d =>
-                                   (match decompose d as res return
-                                          (primitive d = false ->
-                                           smaller (fst res) d /\ smaller (snd res) d) ->
-                                          {d1:D & {d2:D & _}}
-                                    with
-                                      | pair d1 d2 =>
-                                        fun pf =>
-                                          existT _ d1 (existT _ d2 pf)
-                                    end)
-                                     (decompose__proof d))
-                                compose d (smaller__proof d))
-                   I
+        existT
+          _ D
+          (existT
+             _ R
+             (existT
+                _ IO
+                (existT
+                   _ (fun d =>
+                        solve_def D R smaller primitive direct_solve
+                                  (fun d =>
+                                     (match decompose d as res return
+                                            (primitive d = false ->
+                                             smaller (fst res) d /\ smaller (snd res) d) ->
+                                            {d1:D & {d2:D & _}}
+                                      with
+                                        | pair d1 d2 =>
+                                          fun pf =>
+                                            existT _ d1 (existT _ d2 pf)
+                                      end)
+                                       (decompose__proof d))
+                                  compose d (smaller__proof d))
                    _
           )))
     end.
@@ -361,7 +361,7 @@ Next Obligation.
   apply solve_def_correct; assumption.
 Defined.
 
-
+Print dnc_interp.
 
 Fixpoint sorted (l: list nat) : Prop :=
   match l with
@@ -379,30 +379,36 @@ Definition permOf (l1 l2: list nat) : Prop :=
 
 Definition sorting_spec : Spec :=
   Spec_Cons
-    "sort" (list nat -> list nat) Pred_Trivial
-    (fun sort _ =>
+    "sort" (list nat -> list nat)
+    (fun sort =>
        Spec_Axioms [specAxiom "sort_correct"
                               (forall l, sorted (sort l) /\ permOf l (sort l))]).
 
 Definition dnc_sorting_interp : Interpretation dnc_spec1 sorting_spec :=
   fun model =>
     match model with
-      | opCons sort sort__proof sort_correct =>
-        opCons
-          (oppred:=Pred_Trivial) (list nat : Type) I
-          (opCons
-             (oppred:=Pred_Trivial) (list nat : Type) I
-             (opCons
-                (oppred:=Pred_Trivial) (fun lin lout => sorted lout /\ permOf lin lout) I
-                (opCons
-                   (oppred:=Pred_Trivial) sort sort__proof
+      | existT _ sort sort_correct =>
+        existT
+          _ (list nat : Type)
+          (existT
+             _ (list nat : Type)
+             (existT
+                _ (fun lin lout => sorted lout /\ permOf lin lout)
+                (existT
+                   _ sort
                    sort_correct)))
     end.
+
+
+
 
 
 Definition pushout_dnc_sorting : Pushout dnc_sorting_interp dnc_interp.
   pushout_tac.
   Show Existentials.
+  Check [existT id _ ?smaller; existT id _ ?smaller__proof;
+         existT id _ ?primitive; existT id _ ?primitive__proof;
+        ].
 
   lazymatch goal with
     | |- @Pushout ?spec ?spec1 ?spec2 ?interp1 ?interp2 =>
