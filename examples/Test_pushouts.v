@@ -68,15 +68,15 @@ Ltac build_spec_model_evars n :=
     | |- conjoin_axioms (cons (specAxiom ?ax_id ?P) nil) =>
       raw_evar ax_id P
                (fun evar =>
-                  set_evar_property spec_field_order evar n;
-                  set_evar_property spec_field_axiom_p evar true;
+                  set_evar_property sort_hint evar n;
+                  set_evar_property spec_axiom_p evar true;
                   exact evar)
     | |- conjoin_axioms (cons (specAxiom ?ax_id ?P) ?rest) =>
       change (P /\ conjoin_axioms rest);
       raw_evar ax_id P
                (fun evar =>
-                  set_evar_property spec_field_order evar n;
-                  set_evar_property spec_field_axiom_p evar true;
+                  set_evar_property sort_hint evar n;
+                  set_evar_property spec_axiom_p evar true;
                   apply (conj evar); build_spec_model_evars (n+1))
       (*
       evar (ax:P);
@@ -89,10 +89,10 @@ Ltac build_spec_model_evars n :=
            raw_evar (append f "__proof")
                     (sats_op_pred oppred evar1)
                     (fun evar2 =>
-                       set_evar_property spec_field_order evar1 n;
-                       set_evar_property spec_field_axiom_p evar1 false;
-                       set_evar_property spec_field_order evar2 (n+1);
-                       set_evar_property spec_field_axiom_p evar2 false;
+                       set_evar_property sort_hint evar1 n;
+                       set_evar_property spec_axiom_p evar1 false;
+                       set_evar_property sort_hint evar2 (n+1);
+                       set_evar_property spec_axiom_p evar2 false;
                        apply (opCons evar1 evar2);
                        build_spec_model_evars (n+2)))
       (* eapply (opCons ?[?t] ?[?pf]); build_spec_model_evars *)

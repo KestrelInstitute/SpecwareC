@@ -2332,17 +2332,17 @@ let set_evar_property_tac evar_constr field descr v_constr =
     ))
 
 (* Fields for setting with set_evar_property *)
-let evar_property_spec_field_order : int Evd.Store.field = Evd.Store.field ()
-let evar_property_spec_field_axiom_p : bool Evd.Store.field = Evd.Store.field ()
+let evar_property_sort_hint : int Evd.Store.field = Evd.Store.field ()
+let evar_property_spec_axiom_p : bool Evd.Store.field = Evd.Store.field ()
 
-TACTIC EXTEND set_evar_property_field_order
-  | [ "set_evar_property" "spec_field_order" constr(evar) constr(i) ]
-    -> [ set_evar_property_tac evar evar_property_spec_field_order
+TACTIC EXTEND set_evar_property_sort_hint
+  | [ "set_evar_property" "sort_hint" constr(evar) constr(i) ]
+    -> [ set_evar_property_tac evar evar_property_sort_hint
                                nat_descr i ]
 END
 TACTIC EXTEND set_evar_property_axiom_p
-  | [ "set_evar_property" "spec_field_axiom_p" constr(evar) constr(b) ]
-    -> [ set_evar_property_tac evar evar_property_spec_field_axiom_p
+  | [ "set_evar_property" "spec_axiom_p" constr(evar) constr(b) ]
+    -> [ set_evar_property_tac evar evar_property_spec_axiom_p
                                bool_descr b ]
 END
 
