@@ -134,6 +134,59 @@ Definition pushout12 : Pushout interp1 interp2.
 Defined.
 
 
+(*** New idea: use record types! ***)
+
+Module rec_base.
+Record rec_base : Type := { n:nat; m:nat }.
+End rec_base.
+
+Module rec_1.
+Record rec_1 : Type := { n:nat }.
+End rec_1.
+
+Module rec_2.
+Record rec_2 : Type := { m:nat }.
+End rec_2.
+
+Definition rec_interp1 (model: rec_1.rec_1) : rec_base.rec_base :=
+  match model with
+    | {| rec_1.n := n |} => {| rec_base.n := n; rec_base.m := 2 |}
+  end.
+
+Definition rec_interp2 (model: rec_2.rec_2) : rec_base.rec_base :=
+  match model with
+    | {| rec_2.m := m |} => {| rec_base.n := 1; rec_base.m := m |}
+  end.
+
+Record RPushout {R R1 R2} (i1: R1 -> R) (i2: R2 -> R) : Type :=
+  {R' : Type;
+   i1' : R' -> R1;
+   i2' : R' -> R2;
+   rpushout_pf : forall model', i1 (i1' model') = i2 (i2' model') }.
+
+Module rpushout12.
+Definition rpushout12__Pushout : RPushout rec_interp1 rec_interp2.
+  (raw_evar
+     "__R"%string Type
+     (fun evar =>
+        refine (Build_RPushout _ _ _ rec_interp1 rec_interp2 ?__R _ _ _)
+      ;
+      [ intro model;
+        raw_evar "n"%string nat (fun evar => apply (rec_1.Build_rec_1 evar))
+      | intro model;
+        raw_evar "m"%string nat (fun evar => apply (rec_2.Build_rec_2 evar))
+      | intro model;
+        lazymatch goal with
+          | |- ?m1 = ?m2 =>
+            unify m1 m2
+        end ])).
+  Record rpushout12__Record : Type := { }.
+  instantiate (__R:=rpushout12__Record).
+  apply eq_refl.
+Defined.
+End rpushout12.
+
+
 
 (* More complex example: the pushout of divide-and-conquer and sorting *)
 
