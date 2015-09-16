@@ -2217,6 +2217,36 @@ TACTIC EXTEND intro_string_tac
        ]
 END
 
+(* Call a tactic expression, which must evaluate to a tactic function, passing
+it an tactic value *)
+let tac_call tac_f tac_arg =
+  (* First, build the tactic expr (f x) for free variables f and x *)
+  let tac_expr =
+    Tacexpr.TacArg
+      (dummy_loc,
+       Tacexpr.TacCall
+         (dummy_loc, ArgVar (dummy_loc, Id.of_string "f"),
+          [Tacexpr.Reference (ArgVar (dummy_loc, Id.of_string "x"))]))
+  in
+
+  (* Next, evaluate tac_f to a tactic value *)
+  (Tacinterp.val_interp
+     (Tacinterp.default_ist ())
+     tac_f
+     (fun f_val ->
+      (* Now build the tactic environment [f |-> f_val, x |-> tac_arg] *)
+      let ist =
+        {Tacinterp.default_ist () with
+          Tacinterp.lfun =
+            Id.Map.add
+              (Id.of_string "f") f_val
+              (Id.Map.add (Id.of_string "x") tac_arg Id.Map.empty)}
+      in
+
+      (* Now, finally, eval tac_expr with tactic environment ist *)
+      Tacinterp.eval_tactic_ist ist tac_expr))
+
+
 (* Tactic to make an evar given a string name and then pass the resulting evar
 as a constr to tactic k (which is essentially a continuation). *)
 TACTIC EXTEND raw_evar_tac
@@ -2255,43 +2285,62 @@ TACTIC EXTEND raw_evar_tac
                in
                let (evd',evar_constr) = make_evar None in
 
-               (* Build the tactic expr (f x) for free variables f and x *)
-               let tac_expr =
-                 Tacexpr.TacArg
-                   (dummy_loc,
-                    Tacexpr.TacCall
-                      (dummy_loc, ArgVar (dummy_loc, Id.of_string "f"),
-                       [Tacexpr.Reference (ArgVar (dummy_loc, Id.of_string "x"))]))
-               in
-
-               (* Build the tactic environment [f |-> k, x |-> evar_constr] *)
-               let istfun k_val =
-                 {Tacinterp.default_ist () with
-                   Tacinterp.lfun =
-                     Id.Map.add
-                       (Id.of_string "f") k_val
-                       (Id.Map.add (Id.of_string "x")
-                                   (Tacinterp.Value.of_constr evar_constr)
-                                   Id.Map.empty)}
-               in
-
                (* Now we do all the monadic actions *)
                Proofview.tclTHEN
                  (* First set the new evar_map evd' to install the new evar *)
                  (Proofview.V82.tactic (Refiner.tclEVARS evd'))
-                 (* Next, evaluate k to a tactic value *)
-                 (Tacinterp.val_interp
-                    (Tacinterp.default_ist ())
-                    k
-                    (fun k_val ->
-                     (* Now, finally, eval tac_expr, which applies k_val *)
-                     Tacinterp.eval_tactic_ist (istfun k_val) tac_expr))
+                 (* Now call k, passing in evar_constr *)
+                 (tac_call k (Tacinterp.Value.of_constr evar_constr))
        ))]
 END
 
 
-(* Tactics to tag an evar with extra information, extracted out of a constr *)
-let set_evar_property_tac evar_constr field descr v_constr =
+(* Tactic function get extra information for an evar and pass that info to
+tactic k, the continuation *)
+let get_evar_property evar_constr field_name field descr k =
+  Proofview.Goal.enter
+    (fun gl_nonnorm ->
+     reporting_exceptions
+       (fun () ->
+        (* Get the current proof state *)
+        let gl = Proofview.Goal.assume gl_nonnorm in
+        let env = Proofview.Goal.env gl in
+        let evd = Proofview.Goal.sigma gl in
+
+        (* Get the evar we care about *)
+        let evar =
+          match Term.kind_of_term evar_constr with
+          | Term.Evar (evar, _) -> evar
+          | _ -> user_err_loc (dummy_loc, "_",
+                               str ("Not an evar: ")
+                               ++ Printer.pr_constr evar_constr)
+        in
+
+        (* Extract the field value from the evar *)
+        let v =
+          match Evd.Store.get (Evd.find evd evar).Evd.evar_extra field with
+          | Some v -> v
+          | None ->
+             user_err_loc (dummy_loc, "_",
+                           str "Evar "
+                           ++ Printer.pr_constr evar_constr
+                           ++ str (" does not have property " ^ field_name))
+        in
+
+        (* Now build a constr_expr for v, and interp it to a constr *)
+        let v_expr = build_constr_expr descr v in
+        let (v_constr,uctx) = Constrintern.interp_constr env evd v_expr in
+
+        (* Now we do all the monadic actions *)
+        Proofview.tclTHEN
+          (* First merge in any universe constraints from interpreting v_expr *)
+          (Proofview.V82.tactic
+             (Refiner.tclEVARS (Evd.merge_universe_context evd uctx)))
+          (* Now call k, passing in v_constr *)
+          (tac_call k (Tacinterp.Value.of_constr v_constr))))
+
+(* Tactic function to tag an evar with extra information from a constr *)
+let set_evar_property evar_constr field descr v_constr =
   Proofview.Goal.enter
     (fun gl_nonnorm ->
      reporting_exceptions
@@ -2307,7 +2356,7 @@ let set_evar_property_tac evar_constr field descr v_constr =
           match Term.kind_of_term evar_constr with
           | Term.Evar (evar, _) -> evar
           | _ -> user_err_loc (dummy_loc, "_",
-                               str ("Not an evar: ")
+                               str "Not an evar: "
                                ++ Printer.pr_constr evar_constr)
         in
 
@@ -2331,19 +2380,23 @@ let set_evar_property_tac evar_constr field descr v_constr =
         (Proofview.V82.tactic (Refiner.tclEVARS evd'))
     ))
 
+(* FIXME: generalize evar properties *)
+
 (* Fields for setting with set_evar_property *)
 let evar_property_sort_hint : int Evd.Store.field = Evd.Store.field ()
 let evar_property_spec_axiom_p : bool Evd.Store.field = Evd.Store.field ()
 
-TACTIC EXTEND set_evar_property_sort_hint
+TACTIC EXTEND evar_property_sort_hint
   | [ "set_evar_property" "sort_hint" constr(evar) constr(i) ]
-    -> [ set_evar_property_tac evar evar_property_sort_hint
-                               nat_descr i ]
+    -> [ set_evar_property evar evar_property_sort_hint nat_descr i ]
+  | [ "get_evar_property" "sort_hint" constr(evar) tactic(k) ]
+    -> [ get_evar_property evar "sort_hint" evar_property_sort_hint nat_descr k ]
 END
-TACTIC EXTEND set_evar_property_axiom_p
+TACTIC EXTEND evar_property_axiom_p
   | [ "set_evar_property" "spec_axiom_p" constr(evar) constr(b) ]
-    -> [ set_evar_property_tac evar evar_property_spec_axiom_p
-                               bool_descr b ]
+    -> [ set_evar_property evar evar_property_spec_axiom_p bool_descr b ]
+  | [ "get_evar_property" "spec_axiom_p" constr(evar) tactic(k) ]
+    -> [ get_evar_property evar "spec_axiom_p" evar_property_spec_axiom_p bool_descr k ]
 END
 
 
