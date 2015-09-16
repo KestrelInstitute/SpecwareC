@@ -2231,20 +2231,29 @@ TACTIC EXTEND raw_evar_tac
                let evdref = ref (Proofview.Goal.sigma gl) in
 
                (* Normalize nm and destruct it to get a string name *)
-               let str = destruct_constr
-                           string_descr
-                           (hnf_constr ~env_opt:(Some env)
-                                       ~evdref_opt:(Some evdref) nm) in
+               let evar_str = destruct_constr
+                                string_descr
+                                (hnf_constr ~env_opt:(Some env)
+                                            ~evdref_opt:(Some evdref) nm) in
 
                (* Build the new evar_map with the requested evar *)
-               let (evd',evar_constr) =
-                 Evarutil.new_evar env !evdref
-                                   ~src:(Loc.ghost,Evar_kinds.GoalEvar)
-                                   ~naming:(IntroIdentifier (Id.of_string str))
-                                   tp
+               let rec make_evar opt_n =
+                 let (evar_id, next_n) =
+                   match opt_n with
+                   | None -> (Id.of_string evar_str, 0)
+                   | Some n ->
+                      (Id.of_string (evar_str ^ string_of_int n), n+1)
+                 in
+                 try
+                   let _ = Evd.evar_key evar_id !evdref in
+                   make_evar (Some next_n)
+                 with Not_found ->
+                   Evarutil.new_evar env !evdref
+                                     ~src:(Loc.ghost,Evar_kinds.GoalEvar)
+                                     ~naming:(IntroIdentifier evar_id)
+                                     tp
                in
-               let evar_glob_expr =
-                 Detyping.detype false [] env evd' evar_constr in
+               let (evd',evar_constr) = make_evar None in
 
                (* Build the tactic expr (f x) for free variables f and x *)
                let tac_expr =
@@ -2258,11 +2267,12 @@ TACTIC EXTEND raw_evar_tac
                (* Build the tactic environment [f |-> k, x |-> evar_constr] *)
                let istfun k_val =
                  {Tacinterp.default_ist () with
-                   lfun = Id.Map.add
-                            (Id.of_string "f") k_val
-                            (Id.Map.add (Id.of_string "x")
-                                        (Tacinterp.Value.of_constr evar_constr)
-                                        Id.Map.empty)}
+                   Tacinterp.lfun =
+                     Id.Map.add
+                       (Id.of_string "f") k_val
+                       (Id.Map.add (Id.of_string "x")
+                                   (Tacinterp.Value.of_constr evar_constr)
+                                   Id.Map.empty)}
                in
 
                (* Now we do all the monadic actions *)
@@ -2279,7 +2289,81 @@ TACTIC EXTEND raw_evar_tac
        ))]
 END
 
-         (* FIXME: why does this need an argument in order to work...? *)
+
+(* Tactics to tag an evar with extra information, extracted out of a constr *)
+let set_evar_property_tac evar_constr field descr v_constr =
+  Proofview.Goal.enter
+    (fun gl_nonnorm ->
+     reporting_exceptions
+       (fun () ->
+        (* Get the current proof state *)
+        let gl = Proofview.Goal.assume gl_nonnorm in
+        let env = Proofview.Goal.env gl in
+        let evd = Proofview.Goal.sigma gl in
+        let evdref = ref evd in
+
+        (* Get the evar we care about *)
+        let evar =
+          match Term.kind_of_term evar_constr with
+          | Term.Evar (evar, _) -> evar
+          | _ -> user_err_loc (dummy_loc, "_",
+                               str ("Not an evar: ")
+                               ++ Printer.pr_constr evar_constr)
+        in
+
+        (* Extract the value *)
+        let v =
+          destruct_constr descr (hnf_constr ~env_opt:(Some env)
+                                            ~evdref_opt:(Some evdref)
+                                            v_constr) in
+
+        (* Now update the evar's store in evd *)
+        let evd' = Evd.raw_map
+                     (fun evar' info ->
+                      if Evar.equal evar evar' then
+                        { info with
+                          Evd.evar_extra =
+                            Evd.Store.set info.Evd.evar_extra field v }
+                      else info)
+                     !evdref in
+
+        (* Finally, install the new updated evar map *)
+        (Proofview.V82.tactic (Refiner.tclEVARS evd'))
+    ))
+
+(* Fields for setting with set_evar_property *)
+let evar_property_spec_field_order : int Evd.Store.field = Evd.Store.field ()
+let evar_property_spec_field_axiom_p : bool Evd.Store.field = Evd.Store.field ()
+
+TACTIC EXTEND set_evar_property_field_order
+  | [ "set_evar_property" "spec_field_order" constr(evar) constr(i) ]
+    -> [ set_evar_property_tac evar evar_property_spec_field_order
+                               nat_descr i ]
+END
+TACTIC EXTEND set_evar_property_axiom_p
+  | [ "set_evar_property" "spec_field_axiom_p" constr(evar) constr(b) ]
+    -> [ set_evar_property_tac evar evar_property_spec_field_axiom_p
+                               bool_descr b ]
+END
+
+
+TACTIC EXTEND instantiate_spec_tac
+  | [ "instantiate_spec" ident(evar_id) ]
+    -> [ Proofview.Goal.enter
+           (fun gl_nonnorm ->
+            reporting_exceptions
+              (fun () ->
+               (* Get the current proof state *)
+               let gl = Proofview.Goal.assume gl_nonnorm in
+               let env = Proofview.Goal.env gl in
+               let evd = Proofview.Goal.sigma gl in
+
+               (* FIXME HERE NOW *)
+               Proofview.tclUNIT ()
+       ))]
+END
+
+(* FIXME: why does this need an argument in order to work...? *)
 TACTIC EXTEND pushout_tactics
   | [ "pushout_tactic" constr(s) ]
     -> [ Proofview.Goal.nf_enter

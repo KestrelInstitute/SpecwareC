@@ -59,25 +59,25 @@ Definition pushout12__destruct : Pushout interp1 interp2.
 Defined.
 
 
-Ltac build_spec_model_evars :=
+Ltac build_spec_model_evars n :=
   lazymatch goal with
-    | |- spec_model (Spec_Axioms nil) =>
-      apply I
+    | |- spec_model (Spec_Axioms ?axioms) =>
+      change (conjoin_axioms axioms); build_spec_model_evars n
     | |- conjoin_axioms nil =>
       apply I
-    | |- spec_model (Spec_Axioms (cons (specAxiom ?ax_id ?P) nil)) =>
-      raw_evar ax_id P (fun evar => exact evar)
     | |- conjoin_axioms (cons (specAxiom ?ax_id ?P) nil) =>
-      raw_evar ax_id P (fun evar => exact evar)
-    | |- spec_model (Spec_Axioms (cons (specAxiom ?ax_id ?P) ?rest)) =>
-      change (P /\ conjoin_axioms rest);
-      raw_evar ax_id P (fun evar => apply (conj evar); build_spec_model_evars)
-      (*
-      evar (ax:P);
-      apply (conj ?ax); build_spec_model_evars *)
+      raw_evar ax_id P
+               (fun evar =>
+                  set_evar_property spec_field_order evar n;
+                  set_evar_property spec_field_axiom_p evar true;
+                  exact evar)
     | |- conjoin_axioms (cons (specAxiom ?ax_id ?P) ?rest) =>
       change (P /\ conjoin_axioms rest);
-      raw_evar ax_id P (fun evar => apply (conj evar); build_spec_model_evars)
+      raw_evar ax_id P
+               (fun evar =>
+                  set_evar_property spec_field_order evar n;
+                  set_evar_property spec_field_axiom_p evar true;
+                  apply (conj evar); build_spec_model_evars (n+1))
       (*
       evar (ax:P);
       apply (conj ?ax); build_spec_model_evars *)
@@ -86,14 +86,34 @@ Ltac build_spec_model_evars :=
       raw_evar
         f T
         (fun evar1 =>
-           raw_evar (append f "__proof") (sats_op_pred oppred evar1)
+           raw_evar (append f "__proof")
+                    (sats_op_pred oppred evar1)
                     (fun evar2 =>
+                       set_evar_property spec_field_order evar1 n;
+                       set_evar_property spec_field_axiom_p evar1 false;
+                       set_evar_property spec_field_order evar2 (n+1);
+                       set_evar_property spec_field_axiom_p evar2 false;
                        apply (opCons evar1 evar2);
-                       build_spec_model_evars))
+                       build_spec_model_evars (n+2)))
       (* eapply (opCons ?[?t] ?[?pf]); build_spec_model_evars *)
     | |- spec_model ?s =>
       let s_hnf := (eval hnf in s) in
-      progress (change (spec_model s_hnf)); build_spec_model_evars
+      progress (change (spec_model s_hnf)); build_spec_model_evars n
+  end.
+
+(* We need our own "smart" version of the unify tactic, because Coq's built-in
+one does not always seem to work correctly... *)
+Ltac unify_models model1 model2 :=
+  let model1_hnf := (eval hnf in model1) in
+  let model2_hnf := (eval hnf in model2) in
+  lazymatch model1_hnf with
+    | opCons ?t1 ?pf1 ?model1' =>
+      lazymatch model2_hnf with
+        | opCons ?t2 ?pf2 ?model2' =>
+          unify t1 t2; unify pf1 pf2;
+          unify_models model1' model2'
+      end
+    | _ => unify model1_hnf model2_hnf
   end.
 
 Ltac pushout_tac :=
@@ -103,12 +123,12 @@ Ltac pushout_tac :=
          "__spec"%string Spec
          (fun evar =>
             refine (Build_Pushout _ _ _ interp1 interp2 ?__spec _ _ _)));
-      [ intro model; build_spec_model_evars
-      | intro model; build_spec_model_evars
+      [ intro model; build_spec_model_evars 0
+      | intro model; build_spec_model_evars 0
       | intro model;
         lazymatch goal with
           | |- ?m1 = ?m2 =>
-            unify m1 m2
+            unify_models m1 m2
             (* instantiate_spec ?__spec; apply eq_refl *)
         end ]
   end.
@@ -294,29 +314,29 @@ Program Definition dnc_interp : Interpretation dnc_spec1 dnc_spec2 :=
   fun model =>
     match model with
       | opCons
-          D _
+          D D__proof
           (opCons
-             R _
+             R R__proof
              (opCons
-                IO _
+                IO IO__proof
                 (opCons
                    smaller smaller__proof
                    (opCons
-                      primitive _
+                      primitive primitive__proof
                       (opCons
-                         direct_solve _
+                         direct_solve direct_solve__proof
                          (opCons
                             decompose decompose__proof
                             (opCons
-                               compose _
+                               compose compose__proof
                                (conj direct_solve_correct solve_soundness))))))))
         =>
         opCons
-          (oppred:=Pred_Trivial) D I
+          (oppred:=Pred_Trivial) D D__proof
           (opCons
-             (oppred:=Pred_Trivial) R I
+             (oppred:=Pred_Trivial) R R__proof
              (opCons
-                (oppred:=Pred_Trivial) IO I
+                (oppred:=Pred_Trivial) IO IO__proof
                 (opCons
                    (oppred:=Pred_Trivial)
                    (fun d =>
@@ -367,7 +387,7 @@ Definition sorting_spec : Spec :=
 Definition dnc_sorting_interp : Interpretation dnc_spec1 sorting_spec :=
   fun model =>
     match model with
-      | opCons sort _ sort_correct =>
+      | opCons sort sort__proof sort_correct =>
         opCons
           (oppred:=Pred_Trivial) (list nat : Type) I
           (opCons
@@ -375,7 +395,7 @@ Definition dnc_sorting_interp : Interpretation dnc_spec1 sorting_spec :=
              (opCons
                 (oppred:=Pred_Trivial) (fun lin lout => sorted lout /\ permOf lin lout) I
                 (opCons
-                   (oppred:=Pred_Trivial) sort I
+                   (oppred:=Pred_Trivial) sort sort__proof
                    sort_correct)))
     end.
 

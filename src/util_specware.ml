@@ -1125,6 +1125,23 @@ let bool_descr : (bool,bool) constr_descr =
              (nullary_ctor datatypes_mod "true"
                            (nullary_ctor datatypes_mod "false" Descr_Fail)))
 
+(* Description of the Coq Nat type *)
+let nat_descr : (int,int) constr_descr =
+  Descr_Rec
+    (fun nat_descr ->
+     Descr_Iso ("nat",
+                (function
+                  | Left (x, ()) -> x+1
+                  | Right (Left ()) -> 0
+                  | Right (Right emp) -> emp.elim_empty),
+                (fun n ->
+                 if n < 0 then
+                   raise dummy_loc (Failure "nat_descr: negative integer")
+                 else if n > 0 then Left (n - 1, ())
+                 else Right (Left ())),
+                (unary_ctor datatypes_mod "S" (hnf_descr nat_descr)
+                            (nullary_ctor datatypes_mod "O" Descr_Fail))))
+
 (* Description of the Coq pair type *)
 let pair_descr (descr1 : ('t1,'f1) constr_descr)
                (descr2 : ('t2,'f2) constr_descr) :
