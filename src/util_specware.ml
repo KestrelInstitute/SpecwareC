@@ -181,7 +181,7 @@ struct
 module EvarTopoSort = Make_StableTopoSort (Evar)
 
 let evar_topo_sort (key : 'a -> Evar.t) (deps : Evar.Set.t Evar.Map.t)
-                   (l : Evar.t list) : Evar.t list =
+                   (l : 'a list) : 'a list =
   EvarTopoSort.stable_topo_sort key deps l
 
 
