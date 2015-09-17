@@ -180,7 +180,34 @@ Definition rpushout12__Pushout : RPushout rec_interp1 rec_interp2.
           | |- ?m1 = ?m2 =>
             unify m1 m2
         end ])).
+  (* instantiate_record_type ?__R. *)
+  Record rpushout12__Record : Type := { }.
+  instantiate (__R:=rpushout12__Record).
+  apply eq_refl.
+Defined.
+End rpushout12.
+
+
+Module rpushout_1_id.
+Definition rpushout_1_id__Pushout : RPushout rec_interp1 id.
+  (raw_evar
+     "__R"%string Type
+     (fun evar =>
+        refine (Build_RPushout _ _ _ rec_interp1 id ?__R _ _ _)
+      ;
+      [ intro model;
+        raw_evar "n"%string nat (fun evar => apply (rec_1.Build_rec_1 evar))
+      | intro model;
+        raw_evar "m"%string nat (fun evar => apply (rec_base.Build_rec_base evar))
+      | intro model;
+        lazymatch goal with
+          | |- ?m1 = ?m2 =>
+            unify m1 m2
+        end ])).
+  Show Existentials.
   instantiate_record_type ?__R.
+  Record rpushout12__Record : Type := { }.
+  instantiate (__R:=rpushout12__Record).
   apply eq_refl.
 Defined.
 End rpushout12.

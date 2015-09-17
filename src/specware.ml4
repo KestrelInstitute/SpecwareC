@@ -2501,16 +2501,18 @@ TACTIC EXTEND instantiate_record_type_tac
                    ([],[]) field_evars_sorted in
 
                (* Create the record type *)
-               let (evd, l) = Evd.new_univ_level_variable Evd.univ_rigid evd in
-               let rectp_type =
-                 Term.mkSort (Sorts.sort_of_univ (Univ.Universe.make l)) in
+               let (evd, rectp_sort) =
+                 Evd.new_sort_variable Evd.univ_flexible_alg evd in
+               (* FIXME HERE NOW: normalize rectp_sort, looking at
+               typecheck_params_and_fields in Record.ml *)
                let rectp_ind =
                  Record.declare_structure
                    BiFinite true (Evd.universe_context evd) rectp_id
-                   (Nameops.add_prefix "Build_" rectp_id) [] [] rectp_type
-                   false [] rectp_fields false
+                   (Nameops.add_prefix "Build_" rectp_id) [] []
+                   (Term.mkSort rectp_sort) false [] rectp_fields false
                    (List.map (fun _ -> false) rectp_fields) evd
                in
+
 
                (* Define rectp_evar to be the new record type *)
                let evd = Evd.define rectp_evar (Term.mkInd rectp_ind) evd in
