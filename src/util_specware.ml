@@ -72,7 +72,9 @@ let concat_map f l =
 (* Stable topological sort: sort l so that every element x comes after its
    dependencies, the dependencies of its dependencies, etc., favoring the
    existing ordering of l where possible. The dependencies of a node are given
-   by the deps Map, which maps each x to a Set of its dependencies. *)
+   by the deps Map, which maps the "key" of each element of the input list to a
+   Set of the keys of its dependencies. The key of a list element is given by
+   the key function, which must be unique in the list. *)
 module type Sortable =
   sig
     type t
@@ -82,49 +84,60 @@ module type Sortable =
 
 module type StableTopoSort =
   sig
-    type t
-    module Set : Set.S with type elt = t
-    module Map : Map.S with type key = t
-    exception TopoCircularity of t
-    val stable_topo_sort : Set.t Map.t -> t list -> t list
+    type key
+    module Set : Set.S with type elt = key
+    module Map : Map.S with type key = key
+    exception TopoCircularity of key
+    val stable_topo_sort : ('a -> key) -> Set.t Map.t -> 'a list -> 'a list
   end
 
 module Make_StableTopoSort (M:Sortable)
-       : StableTopoSort with type t = M.t
+       : StableTopoSort with type key = M.t
                          and module Set := M.Set
                          and module Map := M.Map =
-  struct
-    type t = M.t
-    module Set = M.Set
-    module Map = M.Map
+struct
+  type key = M.t
+  module Set = M.Set
+  module Map = M.Map
 
-    (* An element of the list to be sorted, bundled with a reference to its set
-    of remaining dependencies that are not already sorted *)
-    type elem_with_deps = {ewd_elem: t;
-                           ewd_deps: Set.t ref}
+  (* An element of the list to be sorted, bundled with its key and a reference
+     to its set of remaining dependencies that are not already sorted *)
+  type 'a elem_with_deps = {ewd_elem: 'a;
+                            ewd_key: key;
+                            ewd_deps: Set.t ref}
 
-    (* Topo sort failed because of a circularity *)
-    exception TopoCircularity of t
+  (* Topo sort failed because of a circularity *)
+    exception TopoCircularity of key
 
-    let stable_topo_sort deps l =
+    let stable_topo_sort key deps l =
       (* First, annotate each element of l with a mutable set of its
       dependencies; also initialize rev_deps_map (discussed below) *)
       let (l_annot, rev_deps_map) =
         List.fold_right
           (fun x (la, m) ->
-           ({ewd_elem = x; ewd_deps = ref (Map.find x deps)}::la,
-            Map.add x (ref []) m))
+           let k = key x in
+           ({ewd_elem = x; ewd_key = k;
+             ewd_deps = ref (Map.find k deps)}::la,
+            Map.add k (ref []) m))
           l ([], Map.empty) in
 
       (* Next, build up the reverse dependencies map, that maps each element of
-      l to a list of the mutable sets in l_annot that refer to it *)
+      l to a list of the mutable sets in l_annot that refer to it. This also, as
+      a side effect, removes any dependencies that are not in rev_deps_map,
+      which means they are not in the original list. *)
       let _ =
         List.iter
           (fun x ->
-           Set.iter
-             (fun dep -> let rev_deps = Map.find dep rev_deps_map in
-                         rev_deps := x.ewd_deps :: !rev_deps)
-             !(x.ewd_deps))
+           x.ewd_deps :=
+             Set.fold
+               (fun dep s ->
+                try
+                  let rev_deps = Map.find dep rev_deps_map in
+                  let _ = rev_deps := x.ewd_deps :: !rev_deps in
+                  s
+                with Not_found ->
+                  Set.remove dep s)
+               !(x.ewd_deps) !(x.ewd_deps))
           l_annot
       in
 
@@ -137,8 +150,8 @@ module Make_StableTopoSort (M:Sortable)
         | x::la' ->
            if Set.is_empty !(x.ewd_deps) then
              let _ = List.iter (fun dep_set ->
-                                dep_set := Set.remove x.ewd_elem !dep_set)
-                               !(Map.find x.ewd_elem rev_deps_map) in
+                                dep_set := Set.remove x.ewd_key !dep_set)
+                               !(Map.find x.ewd_key rev_deps_map) in
              (x, la')
            else
              let (x_ret, la_ret) = select_next_elem err_thunk la' in
@@ -156,7 +169,7 @@ module Make_StableTopoSort (M:Sortable)
         | hd::_ ->
            let (next_elem, la') =
              select_next_elem
-               (fun () -> raise dummy_loc (TopoCircularity hd.ewd_elem)) la
+               (fun () -> raise dummy_loc (TopoCircularity hd.ewd_key)) la
            in
            next_elem.ewd_elem :: main_loop la'
       in
@@ -167,8 +180,9 @@ module Make_StableTopoSort (M:Sortable)
 
 module EvarTopoSort = Make_StableTopoSort (Evar)
 
-let evar_topo_sort (deps : Evar.Set.t Evar.Map.t) (l : Evar.t list) : Evar.t list =
-  EvarTopoSort.stable_topo_sort deps l
+let evar_topo_sort (key : 'a -> Evar.t) (deps : Evar.Set.t Evar.Map.t)
+                   (l : Evar.t list) : Evar.t list =
+  EvarTopoSort.stable_topo_sort key deps l
 
 
 (***
