@@ -68,49 +68,91 @@ let rev_filter_map f l =
 let concat_map f l =
   List.concat (List.map f l)
 
-(* Topo sort failed because of a circularity *)
-exception TopoCircularity of int
 
-(* Stable topological sort: sort l so that every element x comes after (or
-   before, if reverse_p is set) its dependencies, favoring the existing ordering
-   of l where possible. The dependencies of x are all nodes y whose key, given
-   by the key function, is key_eq to a key in (deps x). *)
-(* FIXME: use sets for deps instead of lists *)
-let rec stable_topo_sort ?(reverse_p=false) loc key key_eq deps l =
-  let arr = Array.of_list l in
-  let arr_deps = Array.make (List.length l) [] in
-  let visited = Array.make (List.length l) false in
-  let rec get_node_by_key_help k j =
-    if j >= Array.length arr then None
-    else if key_eq k (key arr.(j)) then Some j
-    else get_node_by_key_help k (j+1) in
-  let get_node_by_key k = get_node_by_key_help k 0 in
-  (* Perform a DFS to build the transitive closure of deps *)
-  let rec build_node_deps path_to_i i =
-    if visited.(i) then
-      arr_deps.(i)
-    else if List.mem i path_to_i then
-      raise loc (TopoCircularity i)
-    else
-      let i_immed_deps = filter_map get_node_by_key (deps arr.(i)) in
-      let i_deps = concat_map (build_node_deps (i::path_to_i)) i_immed_deps in
-      visited.(i) <- true;
-      arr_deps.(i) <- i_deps;
-      i::i_deps
-  in
-  let _ = for i = 0 to Array.length arr_deps - 1 do
-            ignore (build_node_deps [] i)
-          done in
-  let index_arr = Array.init (List.length l) (fun i -> i) in
-  let _ = Array.stable_sort
-            (fun i j ->
-             if List.mem j arr_deps.(i) then
-               (if reverse_p then 1 else -1)
-             else if List.mem i arr_deps.(j) then
-               (if reverse_p then -1 else 1)
-             else j-i)
-            index_arr in
-  Array.to_list (Array.map (fun i -> arr.(i)) index_arr)
+(* Stable topological sort: sort l so that every element x comes after its
+   dependencies, the dependencies of its dependencies, etc., favoring the
+   existing ordering of l where possible. The dependencies of a node are given
+   by the deps function, which returns a Set. *)
+module type StableTopoSort =
+  sig
+    module Set : Set.S
+    exception TopoCircularity of Set.elt
+    val stable_topo_sort : (Set.elt -> Set.t) -> Set.elt list -> Set.elt list
+  end
+
+module Make_StableTopoSort (M:Map.OrderedType) : StableTopoSort =
+  struct
+    module Set = Set.Make(M)
+    module Map = Map.Make(M)
+
+    (* An element of the list to be sorted, bundled with a reference to its set
+    of remaining dependencies that are not already sorted *)
+    type elem_with_deps = {ewd_elem: Set.elt;
+                           ewd_deps: Set.t ref}
+
+    (* Topo sort failed because of a circularity *)
+    exception TopoCircularity of Set.elt
+
+    let stable_topo_sort deps l =
+      (* First, annotate each element of l with a mutable set of its
+      dependencies; also initialize rev_deps_map (discussed below) *)
+      let (l_annot, rev_deps_map) =
+        List.fold_right
+          (fun x (la, m) ->
+           ({ewd_elem = x; ewd_deps = ref (deps x)}::la,
+            Map.add x (ref []) m))
+          l ([], Map.empty) in
+
+      (* Next, build up the reverse dependencies map, that maps each element of
+      l to a list of the mutable sets in l_annot that refer to it *)
+      let _ =
+        List.iter
+          (fun x ->
+           Set.iter
+             (fun dep -> let rev_deps = Map.find dep rev_deps_map in
+                         rev_deps := x.ewd_deps :: !rev_deps)
+             !(x.ewd_deps))
+          l_annot
+      in
+
+      (* This function selects the first element of an annotated list that has
+      no more dependencies, and removes it from the list, also removing it from
+      all the dependency sets that refer to it. If there is no such element,
+      then there is a circularity, and call err_thunk. *)
+      let rec select_next_elem err_thunk la =
+        match la with
+        | x::la' ->
+           if Set.is_empty !(x.ewd_deps) then
+             let _ = List.iter (fun dep_set ->
+                                dep_set := Set.remove x.ewd_elem !dep_set)
+                               !(Map.find x.ewd_elem rev_deps_map) in
+             (x, la')
+           else
+             let (x_ret, la_ret) = select_next_elem err_thunk la' in
+             (x_ret, x::la_ret)
+        | [] -> err_thunk ()
+      in
+
+      (* The main loop, which repeatedly selects the next element and recurses
+      on the remaining list. Note that if no element can be selected then each
+      of the remaining elements are involved in circularities, so we just choose
+      to report the first of the remaining elements. *)
+      let rec main_loop la =
+        match la with
+        | [] -> []
+        | hd::_ ->
+           let (next_elem, la') =
+             select_next_elem
+               (fun () -> raise dummy_loc (TopoCircularity hd.ewd_elem)) la
+           in
+           next_elem.ewd_elem :: main_loop la'
+      in
+
+      (* Finally, call the main loop *)
+      main_loop l_annot
+  end
+
+module EvarTopoSort = Make_StableTopoSort (Evar)
 
 
 (***
