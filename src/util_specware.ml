@@ -72,26 +72,39 @@ let concat_map f l =
 (* Stable topological sort: sort l so that every element x comes after its
    dependencies, the dependencies of its dependencies, etc., favoring the
    existing ordering of l where possible. The dependencies of a node are given
-   by the deps function, which returns a Set. *)
-module type StableTopoSort =
+   by the deps Map, which maps each x to a Set of its dependencies. *)
+module type Sortable =
   sig
-    module Set : Set.S
-    exception TopoCircularity of Set.elt
-    val stable_topo_sort : (Set.elt -> Set.t) -> Set.elt list -> Set.elt list
+    type t
+    module Set : Set.S with type elt = t
+    module Map : Map.S with type key = t
   end
 
-module Make_StableTopoSort (M:Map.OrderedType) : StableTopoSort =
+module type StableTopoSort =
+  sig
+    type t
+    module Set : Set.S with type elt = t
+    module Map : Map.S with type key = t
+    exception TopoCircularity of t
+    val stable_topo_sort : Set.t Map.t -> t list -> t list
+  end
+
+module Make_StableTopoSort (M:Sortable)
+       : StableTopoSort with type t = M.t
+                         and module Set := M.Set
+                         and module Map := M.Map =
   struct
-    module Set = Set.Make(M)
-    module Map = Map.Make(M)
+    type t = M.t
+    module Set = M.Set
+    module Map = M.Map
 
     (* An element of the list to be sorted, bundled with a reference to its set
     of remaining dependencies that are not already sorted *)
-    type elem_with_deps = {ewd_elem: Set.elt;
+    type elem_with_deps = {ewd_elem: t;
                            ewd_deps: Set.t ref}
 
     (* Topo sort failed because of a circularity *)
-    exception TopoCircularity of Set.elt
+    exception TopoCircularity of t
 
     let stable_topo_sort deps l =
       (* First, annotate each element of l with a mutable set of its
@@ -99,7 +112,7 @@ module Make_StableTopoSort (M:Map.OrderedType) : StableTopoSort =
       let (l_annot, rev_deps_map) =
         List.fold_right
           (fun x (la, m) ->
-           ({ewd_elem = x; ewd_deps = ref (deps x)}::la,
+           ({ewd_elem = x; ewd_deps = ref (Map.find x deps)}::la,
             Map.add x (ref []) m))
           l ([], Map.empty) in
 
@@ -153,6 +166,9 @@ module Make_StableTopoSort (M:Map.OrderedType) : StableTopoSort =
   end
 
 module EvarTopoSort = Make_StableTopoSort (Evar)
+
+let evar_topo_sort (deps : Evar.Set.t Evar.Map.t) (l : Evar.t list) : Evar.t list =
+  EvarTopoSort.stable_topo_sort deps l
 
 
 (***
