@@ -180,8 +180,7 @@ Definition rpushout12__Pushout : RPushout rec_interp1 rec_interp2.
           | |- ?m1 = ?m2 =>
             unify m1 m2
         end ])).
-  Record rpushout12__Record : Type := { }.
-  instantiate (__R:=rpushout12__Record).
+  instantiate_record_type ?__R.
   apply eq_refl.
 Defined.
 End rpushout12.

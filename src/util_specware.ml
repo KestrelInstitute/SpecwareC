@@ -68,6 +68,15 @@ let rev_filter_map f l =
 let concat_map f l =
   List.concat (List.map f l)
 
+(* Find the first index of a list that satisfies f, or raise Not_found *)
+let index_of f l =
+  let rec helper i l =
+    match l with
+    | [] -> raise dummy_loc Not_found
+    | x::_ when f x -> i
+    | _::l' -> helper (i+1) l'
+  in
+  helper 0 l
 
 (* Stable topological sort: sort l so that every element x comes after its
    dependencies, the dependencies of its dependencies, etc., favoring the
@@ -262,8 +271,7 @@ let has_suffix id suffix =
     suffix = String.sub str (str_len - suffix_len) suffix_len
 
 (* Append a suffix to an Id, with "__" in between *)
-let add_suffix id suffix =
-  Id.of_string (Id.to_string id ^ "__" ^ suffix)
+let add_suffix id suffix = Nameops.add_suffix id suffix
 
 (* Append a suffix to an lident, with "__" in between *)
 let add_suffix_l lid suffix =

@@ -2400,8 +2400,8 @@ TACTIC EXTEND evar_property_axiom_p
 END
 
 
-TACTIC EXTEND instantiate_spec_tac
-  | [ "instantiate_spec" ident(evar_id) ]
+TACTIC EXTEND instantiate_record_type_tac
+  | [ "instantiate_record_type" constr(evar_constr) ]
     -> [ Proofview.Goal.enter
            (fun gl_nonnorm ->
             reporting_exceptions
@@ -2411,8 +2411,121 @@ TACTIC EXTEND instantiate_spec_tac
                let env = Proofview.Goal.env gl in
                let evd = Proofview.Goal.sigma gl in
 
-               (* FIXME HERE NOW *)
-               Proofview.tclUNIT ()
+               (* Extract the evar we care about from evar_constr *)
+               let rectp_evar =
+                 match Term.kind_of_term evar_constr with
+                 | Term.Evar (evar, _) -> evar
+                 | _ -> user_err_loc (dummy_loc, "_",
+                                      str "Not an evar: "
+                                      ++ Printer.pr_constr evar_constr)
+               in
+               let rectp_info = Evd.find evd rectp_evar in
+               let rectp_id = Evd.evar_ident rectp_evar evd in
+
+               (* Check that rectp_evar has an empty context *)
+               let _ =
+                 match Evd.evar_context rectp_info with
+                 | [] -> ()
+                 | _ -> user_err_loc
+                          (dummy_loc, "_",
+                           str "instantiate_record_type: evar has non-empty context: "
+                           ++ Printer.pr_constr evar_constr)
+               in
+
+               (* Find all the evars with a single hypothesis of type rectp_evar
+               that do not contain rectp_evar in the conclusion type *)
+               (* FIXME HERE: split into propositional and non-propositional,
+               and add the propositional ones last; also need to change the topo
+               sort so it eagerly removes all dependencies of the head node,
+               instead of lazily waiting until the head node can be removed, so
+               that ops don't get moved past all axioms before the one axiom it
+               depends on... Maybe do a lazy reverse sort? *)
+               let field_evars : (Evar.t * Evd.evar_info * Id.t) list =
+                 Evd.fold_undefined
+                   (fun evar info l ->
+                    if match Evd.evar_context info with
+                       | [_, None, hyp_tp] ->
+                          (match Term.kind_of_term hyp_tp with
+                           | Term.Evar (ev,_) ->
+                              Evar.equal ev rectp_evar &&
+                                not (Evar.Set.mem
+                                       rectp_evar (Evd.evars_of_term
+                                                     (Evd.evar_concl info)))
+                           | _ -> false)
+                       | _ -> false
+                    then
+                      (evar, info, Evd.evar_ident evar evd)::l
+                    else l)
+                   evd []
+               in
+
+               (* Sort field_evars, making sure all of the evars occurring in
+               another evar's type come before it *)
+               let field_evars_sorted =
+                 evar_topo_sort
+                   (fun (evar,_,_) -> evar)
+                   (List.fold_left
+                      (fun deps (evar,info,_) ->
+                       Evar.Map.add
+                         evar
+                         (Evd.evars_of_term (Evd.evar_concl info)) deps)
+                      Evar.Map.empty field_evars)
+                   field_evars
+               in
+
+               (* Helper to replace evars with local variables *)
+               let rec replace_evars_with_rels evars lifting constr =
+                 match Term.kind_of_term constr with
+                 | Term.Evar (ev,args) ->
+                    (try
+                        let evar_num = index_of (Evar.equal ev) evars in
+                        let _ = if Array.length args != 1 then
+                                  raise dummy_loc
+                                        (Failure "instantiate_record_type") in
+                        Term.mkRel (lifting + evar_num)
+                      with Not_found -> constr)
+                 | _ ->
+                    Term.map_constr_with_binders (fun x -> x+1)
+                                                 (replace_evars_with_rels evars)
+                                                 lifting constr
+               in
+
+               (* Build the field list for the new record type; we use fold_left
+               here to reverse the list, since rel_contexts are backwards *)
+               let (rectp_fields,_) =
+                 List.fold_left
+                   (fun (fields,evars) (evar,info,id) ->
+                    ((Name id, None, replace_evars_with_rels
+                                       evars 0 (Evd.evar_concl info)) ::fields,
+                     evar::evars))
+                   ([],[]) field_evars_sorted in
+
+               (* Create the record type *)
+               let (evd, l) = Evd.new_univ_level_variable Evd.univ_rigid evd in
+               let rectp_type =
+                 Term.mkSort (Sorts.sort_of_univ (Univ.Universe.make l)) in
+               let rectp_ind =
+                 Record.declare_structure
+                   BiFinite true (Evd.universe_context evd) rectp_id
+                   (Nameops.add_prefix "Build_" rectp_id) [] [] rectp_type
+                   false [] rectp_fields false
+                   (List.map (fun _ -> false) rectp_fields) evd
+               in
+
+               (* Define rectp_evar to be the new record type *)
+               let evd = Evd.define rectp_evar (Term.mkInd rectp_ind) evd in
+               (* Define each evar to be its associated projection function *)
+               let evd =
+                 List.fold_left
+                   (fun evd (evar,info,id) ->
+                    (* FIXME: maybe use Recordops.lookup_projects here? *)
+                    let proj_const =
+                      Nametab.locate_constant (qualid_of_ident id) in
+                    Evd.define evar (Term.mkConst proj_const) evd)
+                   evd field_evars_sorted in
+
+               (* Finally, install the new updated evar map *)
+               (Proofview.V82.tactic (Refiner.tclEVARS evd))
        ))]
 END
 
