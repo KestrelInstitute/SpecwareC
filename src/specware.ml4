@@ -2440,22 +2440,22 @@ TACTIC EXTEND instantiate_record_type_tac
                instead of lazily waiting until the head node can be removed, so
                that ops don't get moved past all axioms before the one axiom it
                depends on... Maybe do a lazy reverse sort? *)
-               let field_evars : (Evar.t * Evd.evar_info * Id.t) list =
+               let field_evars : (Evar.t * Evd.evar_info * Id.t * Id.t) list =
                  Evd.fold_undefined
                    (fun evar info l ->
-                    if match Evd.evar_context info with
-                       | [_, None, hyp_tp] ->
-                          (match Term.kind_of_term hyp_tp with
-                           | Term.Evar (ev,_) ->
-                              Evar.equal ev rectp_evar &&
+                    match Evd.evar_context info with
+                    | [hyp_id, None, hyp_tp] ->
+                       (match Term.kind_of_term hyp_tp with
+                        | Term.Evar (ev,_) ->
+                           if Evar.equal ev rectp_evar &&
                                 not (Evar.Set.mem
                                        rectp_evar (Evd.evars_of_term
                                                      (Evd.evar_concl info)))
-                           | _ -> false)
-                       | _ -> false
-                    then
-                      (evar, info, Evd.evar_ident evar evd)::l
-                    else l)
+                           then
+                             (evar, info, Evd.evar_ident evar evd, hyp_id)::l
+                           else l
+                           | _ -> l)
+                       | _ -> l)
                    evd []
                in
 
@@ -2463,9 +2463,9 @@ TACTIC EXTEND instantiate_record_type_tac
                another evar's type come before it *)
                let field_evars_sorted =
                  evar_topo_sort
-                   (fun (evar,_,_) -> evar)
+                   (fun (evar,_,_,_) -> evar)
                    (List.fold_left
-                      (fun deps (evar,info,_) ->
+                      (fun deps (evar,info,_,_) ->
                        Evar.Map.add
                          evar
                          (Evd.evars_of_term (Evd.evar_concl info)) deps)
@@ -2473,7 +2473,8 @@ TACTIC EXTEND instantiate_record_type_tac
                    field_evars
                in
 
-               (* Helper to replace evars with local variables *)
+               (* Helper to replace evars with local variables, in the types of
+               evars when building the record type *)
                let rec replace_evars_with_rels evars lifting constr =
                  match Term.kind_of_term constr with
                  | Term.Evar (ev,args) ->
@@ -2494,36 +2495,45 @@ TACTIC EXTEND instantiate_record_type_tac
                here to reverse the list, since rel_contexts are backwards *)
                let (rectp_fields,_) =
                  List.fold_left
-                   (fun (fields,evars) (evar,info,id) ->
+                   (fun (fields,evars) (evar,info,id,_) ->
                     ((Name id, None, replace_evars_with_rels
                                        evars 0 (Evd.evar_concl info)) ::fields,
                      evar::evars))
                    ([],[]) field_evars_sorted in
 
-               (* Create the record type *)
-               let (evd, rectp_sort) =
-                 Evd.new_sort_variable Evd.univ_flexible_alg evd in
-               (* FIXME HERE NOW: normalize rectp_sort, looking at
-               typecheck_params_and_fields in Record.ml *)
+               (* Compute the type of the new record type by taking the supremum
+               of the types of all the fields, starting at Set *)
+               let rectp_univ =
+                 List.fold_left (fun univ (_,_,field_tp) ->
+                                 let s = Retyping.get_sort_of env evd field_tp in
+                                 Univ.sup (Term.univ_of_sort s) univ)
+                                Univ.type0_univ rectp_fields in
+               let rectp_type = Term.mkSort (Term.sort_of_univ rectp_univ) in
+
+               (* Now create the record type *)
                let rectp_ind =
                  Record.declare_structure
-                   BiFinite true (Evd.universe_context evd) rectp_id
+                   BiFinite false (Evd.universe_context evd) rectp_id
                    (Nameops.add_prefix "Build_" rectp_id) [] []
-                   (Term.mkSort rectp_sort) false [] rectp_fields false
+                   rectp_type false (List.map (fun _ -> []) rectp_fields)
+                   rectp_fields false
                    (List.map (fun _ -> false) rectp_fields) evd
                in
-
 
                (* Define rectp_evar to be the new record type *)
                let evd = Evd.define rectp_evar (Term.mkInd rectp_ind) evd in
                (* Define each evar to be its associated projection function *)
                let evd =
                  List.fold_left
-                   (fun evd (evar,info,id) ->
+                   (fun evd (evar,info,id,hyp_id) ->
                     (* FIXME: maybe use Recordops.lookup_projects here? *)
                     let proj_const =
                       Nametab.locate_constant (qualid_of_ident id) in
-                    Evd.define evar (Term.mkConst proj_const) evd)
+                    Evd.define evar
+                               (Term.mkApp
+                                  (Term.mkConst proj_const,
+                                   [| Term.mkVar hyp_id |]))
+                               evd)
                    evd field_evars_sorted in
 
                (* Finally, install the new updated evar map *)
