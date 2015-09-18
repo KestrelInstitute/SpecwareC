@@ -530,7 +530,7 @@ let add_program_definition ?(hook = (fun _ _ -> ())) ?tactic
          f ()),
         (fun x y -> let _ = end_section () in hook x y))
   in
-  let obls = Array.map (fun ((id, tp, k, status, set, tac_opt) as obl) ->
+  let obls = Array.map (fun (id, tp, k, status, set, tac_opt) ->
                         (id, tp, k, status, set,
                          Option.append tac_interp_opt tac_opt))
                        obls in
