@@ -2288,7 +2288,7 @@ TACTIC EXTEND raw_evar_tac
                (* Now we do all the monadic actions *)
                Proofview.tclTHEN
                  (* First set the new evar_map evd' to install the new evar *)
-                 (Proofview.V82.tactic (Refiner.tclEVARS evd'))
+                 (Proofview.Unsafe.tclEVARS evd')
                  (* Now call k, passing in evar_constr *)
                  (tac_call k (Tacinterp.Value.of_constr evar_constr))
        ))]
@@ -2334,8 +2334,7 @@ let get_evar_property evar_constr field_name field descr k =
         (* Now we do all the monadic actions *)
         Proofview.tclTHEN
           (* First merge in any universe constraints from interpreting v_expr *)
-          (Proofview.V82.tactic
-             (Refiner.tclEVARS (Evd.merge_universe_context evd uctx)))
+          (Proofview.Unsafe.tclEVARS (Evd.merge_universe_context evd uctx))
           (* Now call k, passing in v_constr *)
           (tac_call k (Tacinterp.Value.of_constr v_constr))))
 
@@ -2377,7 +2376,7 @@ let set_evar_property evar_constr field descr v_constr =
                      !evdref in
 
         (* Finally, install the new updated evar map *)
-        (Proofview.V82.tactic (Refiner.tclEVARS evd'))
+        (Proofview.Unsafe.tclEVARS evd')
     ))
 
 (* FIXME: generalize evar properties *)
@@ -2537,7 +2536,7 @@ TACTIC EXTEND instantiate_record_type_tac
                    evd field_evars_sorted in
 
                (* Finally, install the new updated evar map *)
-               (Proofview.V82.tactic (Refiner.tclEVARS evd))
+               (Proofview.Unsafe.tclEVARS evd)
        ))]
 END
 
