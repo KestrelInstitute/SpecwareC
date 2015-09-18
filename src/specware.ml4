@@ -2398,6 +2398,17 @@ TACTIC EXTEND evar_property_axiom_p
     -> [ get_evar_property evar "spec_axiom_p" evar_property_spec_axiom_p bool_descr k ]
 END
 
+TACTIC EXTEND my_instantiate_tac
+  | [ "my_instantiate" "(" ident(evar_id) ":=" constr(evar_def) ")" ]
+    -> [ Proofview.Goal.enter
+           (fun gl_nonnorm ->
+            let gl = Proofview.Goal.assume gl_nonnorm in
+            let env = Proofview.Goal.env gl in
+            let evd = Proofview.Goal.sigma gl in
+            let evar = Evd.evar_key evar_id evd in
+            let evd = Evd.define evar evar_def evd in
+            Proofview.Unsafe.tclEVARS evd)]
+END
 
 TACTIC EXTEND instantiate_record_type_tac
   | [ "instantiate_record_type" constr(evar_constr) ]
@@ -2413,7 +2424,10 @@ TACTIC EXTEND instantiate_record_type_tac
                (* Extract the evar we care about from evar_constr *)
                let rectp_evar =
                  match Term.kind_of_term evar_constr with
-                 | Term.Evar (evar, _) -> evar
+                 | Term.Evar (evar, [| |]) -> evar
+                 | Term.Evar (evar, args) ->
+                    user_err_loc (dummy_loc, "_",
+                                  str "Evar must have empty context")
                  | _ -> user_err_loc (dummy_loc, "_",
                                       str "Not an evar: "
                                       ++ Printer.pr_constr evar_constr)
@@ -2500,16 +2514,37 @@ TACTIC EXTEND instantiate_record_type_tac
                      evar::evars))
                    ([],[]) field_evars_sorted in
 
-               (* Compute the type of the new record type by taking the supremum
-               of the types of all the fields, starting at Set *)
-               let rectp_univ =
+               (* Create a universe variable for the new record type, requiring
+               it to be greater than or equal to the universes of all the fields
+               and less than or equal to the universe of rectp_evar *)
+               let rectp_univ_lb =
                  List.fold_left (fun univ (_,_,field_tp) ->
                                  let s = Retyping.get_sort_of env evd field_tp in
                                  Univ.sup (Term.univ_of_sort s) univ)
                                 Univ.type0_univ rectp_fields in
-               let rectp_type = Term.mkSort (Term.sort_of_univ rectp_univ) in
+               (*
+               let (evd, rectp_univ) =
+                 Evd.new_univ_variable Evd.univ_flexible_alg evd in
+               let rectp_sort = Term.sort_of_univ rectp_univ in
+               let evd = Evd.set_leq_sort env evd
+                                          (Term.sort_of_univ rectp_univ_lb)
+                                          rectp_sort in
+               let evd =
+                 Evd.set_leq_sort
+                   env evd rectp_sort
+                   (Term.destSort
+                      (Evd.existential_type evd (rectp_evar, [| |]))) in *)
+               let rectp_sort =
+                 Term.destSort (Evd.existential_type evd (rectp_evar, [| |])) in
+               let evd = Evd.set_leq_sort env evd
+                                          (Term.sort_of_univ rectp_univ_lb)
+                                          rectp_sort in
+               let evd, nf = Evarutil.nf_evars_and_universes evd in
+               let rectp_type = nf (Term.mkSort rectp_sort) in
+               let rectp_fields =
+                 List.map (fun (nm, d, tp) -> (nm, d, nf tp)) rectp_fields in
 
-               (* Now create the record type *)
+               (* Create the record type *)
                let rectp_ind =
                  Record.declare_structure
                    BiFinite false (Evd.universe_context evd) rectp_id
@@ -2539,6 +2574,15 @@ TACTIC EXTEND instantiate_record_type_tac
                (Proofview.Unsafe.tclEVARS evd)
        ))]
 END
+
+
+(* A debug-mode version of Defined *)
+VERNAC COMMAND EXTEND Defined_debug
+  | [ "Defined_Debug" ]
+    => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
+    -> [ Lemmas.save_proof (Proved (false,None)) ]
+END
+
 
 (* FIXME: why does this need an argument in order to work...? *)
 TACTIC EXTEND pushout_tactics
