@@ -2406,8 +2406,15 @@ TACTIC EXTEND my_instantiate_tac
             let env = Proofview.Goal.env gl in
             let evd = Proofview.Goal.sigma gl in
             let evar = Evd.evar_key evar_id evd in
-            let evd = Evd.define evar evar_def evd in
-            Proofview.Unsafe.tclEVARS evd)]
+
+            (* let evd = Evd.define evar evar_def evd in
+            Proofview.Unsafe.tclEVARS evd *)
+
+            Evar_tactics.instantiate_tac_by_name
+              evar_id
+              (Tacinterp.default_ist (),
+               Detyping.detype true [] env evd evar_def)
+       )]
 END
 
 TACTIC EXTEND instantiate_record_type_tac
@@ -2522,23 +2529,27 @@ TACTIC EXTEND instantiate_record_type_tac
                                  let s = Retyping.get_sort_of env evd field_tp in
                                  Univ.sup (Term.univ_of_sort s) univ)
                                 Univ.type0_univ rectp_fields in
-               (*
+
                let (evd, rectp_univ) =
                  Evd.new_univ_variable Evd.univ_flexible_alg evd in
                let rectp_sort = Term.sort_of_univ rectp_univ in
                let evd = Evd.set_leq_sort env evd
                                           (Term.sort_of_univ rectp_univ_lb)
                                           rectp_sort in
+               (*
                let evd =
                  Evd.set_leq_sort
                    env evd rectp_sort
                    (Term.destSort
                       (Evd.existential_type evd (rectp_evar, [| |]))) in *)
+
+               (*
                let rectp_sort =
                  Term.destSort (Evd.existential_type evd (rectp_evar, [| |])) in
                let evd = Evd.set_leq_sort env evd
                                           (Term.sort_of_univ rectp_univ_lb)
-                                          rectp_sort in
+                                          rectp_sort in *)
+
                let evd, nf = Evarutil.nf_evars_and_universes evd in
                let rectp_type = nf (Term.mkSort rectp_sort) in
                let rectp_fields =
@@ -2554,24 +2565,34 @@ TACTIC EXTEND instantiate_record_type_tac
                    (List.map (fun _ -> false) rectp_fields) evd
                in
 
-               (* Define rectp_evar to be the new record type *)
-               let evd = Evd.define rectp_evar (Term.mkInd rectp_ind) evd in
-               (* Define each evar to be its associated projection function *)
-               let evd =
-                 List.fold_left
-                   (fun evd (evar,info,id,hyp_id) ->
-                    (* FIXME: maybe use Recordops.lookup_projects here? *)
-                    let proj_const =
-                      Nametab.locate_constant (qualid_of_ident id) in
-                    Evd.define evar
-                               (Term.mkApp
-                                  (Term.mkConst proj_const,
-                                   [| Term.mkVar hyp_id |]))
-                               evd)
-                   evd field_evars_sorted in
-
-               (* Finally, install the new updated evar map *)
-               (Proofview.Unsafe.tclEVARS evd)
+               (* Now we finished with all the monadic actions *)
+               Proofview.tclTHEN
+                 (* Install the new updated evar map *)
+                 (Proofview.Unsafe.tclEVARS evd)
+                 (* Define rectp_evar to be the new record type, and all the
+                 field evars to be the projections *)
+                 (List.fold_left
+                    (fun m (evar_id, evar_def) ->
+                     Proofview.tclTHEN
+                       m
+                       (Evar_tactics.instantiate_tac_by_name
+                          evar_id
+                          (Tacinterp.default_ist (), evar_def)))
+                    (Proofview.tclUNIT ())
+                    ((rectp_id,
+                      (Glob_term.GRef (dummy_loc, IndRef rectp_ind, None)))
+                     ::(List.map
+                          (fun (_, _, id, hyp_id) ->
+                           (* FIXME: maybe use Recordops.lookup_projects? *)
+                           let proj_const =
+                             Nametab.locate_constant (qualid_of_ident id) in
+                           (id,
+                            Glob_term.GApp
+                              (dummy_loc,
+                               Glob_term.GRef (dummy_loc,
+                                               ConstRef proj_const, None),
+                               [Glob_term.GVar (dummy_loc, hyp_id)])))
+                          field_evars_sorted)))
        ))]
 END
 

@@ -209,14 +209,16 @@ Definition rpushout_1_id__Pushout : RPushout rec_interp1 id.
   Show Existentials.
   Show Universes.
   (* instantiate_record_type ?__R. *)
-  Record __R : Set := { m:nat }.
-  instantiate (__R:=__R). instantiate (m:=m model).
+  Record __R := { m:nat }.
+  Show Universes.
+  my_instantiate (__R:=__R). instantiate (m:=m model).
   Show Universes.
   apply eq_refl.
   Show Universes.
-(* Defined_Debug. *)
-Defined.
+Defined_Debug.
+(* Defined. *)
 
+Print __R.
 Print rpushout_1_id__Pushout.
 Check (let x := _ in let y := (rpushout_1_id__Pushout:x) in x).
 Check RPushout.
