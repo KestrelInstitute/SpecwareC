@@ -180,11 +180,19 @@ Definition rpushout12__Pushout : RPushout rec_interp1 rec_interp2.
           | |- ?m1 = ?m2 =>
             unify m1 m2
         end ])).
-  (* instantiate_record_type ?__R. *)
+  instantiate_record_type ?__R.
+  (* Record __R : Set := { }. *)
+  Print __R.
+  instantiate (__R:=__R).
+  (*
   Record rpushout12__Record : Type := { }.
-  instantiate (__R:=rpushout12__Record).
+  instantiate (__R:=rpushout12__Record). *)
   apply eq_refl.
-Defined.
+  Show Proof.
+Defined_Debug.
+(* Defined. *)
+Print rpushout12__Pushout.
+
 End rpushout12.
 
 
@@ -208,13 +216,11 @@ Definition rpushout_1_id__Pushout : RPushout rec_interp1 id.
         end ])).
   Show Existentials.
   Show Universes.
-  (* instantiate_record_type ?__R. *)
+  instantiate_record_type ?__R.
+  (*
   Record __R := { m:nat }.
-  Show Universes.
-  my_instantiate (__R:=__R). instantiate (m:=m model).
-  Show Universes.
+  my_instantiate (__R:=__R). instantiate (m:=m model). *)
   apply eq_refl.
-  Show Universes.
 Defined_Debug.
 (* Defined. *)
 

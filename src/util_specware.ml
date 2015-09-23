@@ -586,6 +586,17 @@ let add_definition_constr id type_opt (body, uctx) =
     id (Local, false, Definition) def_entry []
     (Lemmas.mk_hook (fun _ x -> x))
 
+(* Add a record definition using constrs *)
+let add_record_type_constr evd id sort params fields =
+  Record.declare_structure
+    BiFinite false (Evd.universe_context evd) id
+    (Nameops.add_prefix "Build_" id)
+    (List.map (fun (id,_) ->
+               (ExplByName id, (false, false, false))) params)
+    (List.map (fun (_,tp) -> tp) params)
+    sort false (List.map (fun _ -> []) fields)
+    fields false
+    (List.map (fun _ -> false) fields) evd
 
 (* Add a type-class to the current Coq image, where is_op_class says
    whether to add an operational type-class in Type (if true) or a

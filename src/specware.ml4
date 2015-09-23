@@ -2557,12 +2557,26 @@ TACTIC EXTEND instantiate_record_type_tac
 
                (* Create the record type *)
                let rectp_ind =
-                 Record.declare_structure
-                   BiFinite false (Evd.universe_context evd) rectp_id
-                   (Nameops.add_prefix "Build_" rectp_id) [] []
-                   rectp_type false (List.map (fun _ -> []) rectp_fields)
-                   rectp_fields false
-                   (List.map (fun _ -> false) rectp_fields) evd
+                 (* FIXME: this seems to lead to some kind of error... *)
+                 (*
+                 add_record_type_constr evd rectp_id rectp_type [] rectp_fields
+                  *)
+                 match Record.definition_structure
+                         (Record, false, BiFinite, (false, (dummy_loc, rectp_id)),
+                          [],
+                          (List.map
+                             (fun (nm, _, tp_expr) ->
+                              let tp =
+                                Constrextern.extern_constr true env evd tp_expr
+                              in
+                              (((None,
+                                 (AssumExpr ((dummy_loc, nm), tp))), None), []))
+                             rectp_fields),
+                          (Nameops.add_prefix "Build_" rectp_id),
+                          (Some type_expr)) with
+                 | IndRef i -> i
+                 | _ ->
+                    anomaly (str "Non-inductive returned by Record.definition_structure")
                in
 
                (* Now we finished with all the monadic actions *)
@@ -2571,6 +2585,7 @@ TACTIC EXTEND instantiate_record_type_tac
                  (Proofview.Unsafe.tclEVARS evd)
                  (* Define rectp_evar to be the new record type, and all the
                  field evars to be the projections *)
+                 (*
                  (List.fold_left
                     (fun m (evar_id, evar_def) ->
                      Proofview.tclTHEN
@@ -2592,7 +2607,8 @@ TACTIC EXTEND instantiate_record_type_tac
                                Glob_term.GRef (dummy_loc,
                                                ConstRef proj_const, None),
                                [Glob_term.GVar (dummy_loc, hyp_id)])))
-                          field_evars_sorted)))
+                          field_evars_sorted))) *)
+                 (Proofview.tclUNIT ())
        ))]
 END
 
@@ -2601,7 +2617,10 @@ END
 VERNAC COMMAND EXTEND Defined_debug
   | [ "Defined_Debug" ]
     => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
-    -> [ Lemmas.save_proof (Proved (false,None)) ]
+    -> [ (* let proof =
+           Proof_global.close_proof ~keep_body_ucst_sepatate:false (fun x -> x)
+         in *)
+         Lemmas.save_proof (* ~proof *) (Proved (false, None)) ]
 END
 
 
