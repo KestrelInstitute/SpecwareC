@@ -113,73 +113,141 @@ Fixpoint SpecCtor (R:Type) (spec:Spec) : Type :=
       forall x, SpecCtor R (rest x)
   end.
 
-Inductive SpecAxiomsModel : list SpecAxiom -> Type :=
-| SpecAxiomsModel_Nil : SpecAxiomsModel nil
-| SpecAxiomsModel_Cons f (P:Prop) axioms (pf:P) :
-    SpecAxiomsModel axioms ->
-    SpecAxiomsModel (specAxiom f P :: axioms)
-.
+(* Helper for conjoining all the axioms in an axiom list *)
+Fixpoint conjoin_axioms (axioms : list SpecAxiom) : Prop :=
+  match axioms with
+    | [] => True
+    (* | [specAxiom _ P] => P *)
+    | (specAxiom _ P) :: axioms' => P /\ conjoin_axioms axioms'
+  end.
 
-Inductive SpecModel : Spec -> Type :=
-| SpecModel_Axioms axioms :
-    SpecAxiomsModel axioms -> SpecModel (Spec_Axioms axioms)
-| SpecModel_Cons f T rest (t:T) :
-    SpecModel (rest t) ->
-    SpecModel (Spec_Cons f T rest)
-.
+(* Build the type of the models of spec as a nested dependent pair *)
+Fixpoint spec_model spec : Type :=
+  match spec with
+    | Spec_Axioms axioms => conjoin_axioms axioms
+    | Spec_Cons f T rest =>
+      { t:T & spec_model (rest t) }
+  end.
 
-Fixpoint axioms_model_proj_type axioms (model: SpecAxiomsModel axioms) :
-  nat -> Type :=
-  match model with
-    | SpecAxiomsModel_Nil => fun _ => True
-    | SpecAxiomsModel_Cons f P axioms' pf model' =>
+Fixpoint axioms_model_proj_type (axioms: list SpecAxiom) : nat -> Prop :=
+  match axioms with
+    | [] => fun _ => True
+    | axiom::axioms' =>
       fun n =>
         match n with
-          | 0 => P
-          | S n' =>
-            axioms_model_proj_type axioms' model' n'
+          | 0 => let (f,P) := axiom in P
+          | S n' => axioms_model_proj_type axioms' n'
         end
   end.
 
-Fixpoint axioms_model_proj axioms (model: SpecAxiomsModel axioms) :
-  forall n, axioms_model_proj_type axioms model n :=
-  match model in SpecAxiomsModel axioms
-        return forall n, axioms_model_proj_type axioms model n with
-    | SpecAxiomsModel_Nil => fun _ => I
-    | SpecAxiomsModel_Cons f P axioms' pf model' =>
-      fun n =>
-        match n return axioms_model_proj_type _ (SpecAxiomsModel_Cons _ _ _ _ _) n with
-          | 0 => pf
+Fixpoint axioms_model_proj axioms :
+  conjoin_axioms axioms -> forall n, axioms_model_proj_type axioms n :=
+  match axioms return conjoin_axioms axioms ->
+                      forall n, axioms_model_proj_type axioms n with
+    | [] => fun _ _ => I
+    | axiom::axioms' =>
+      let (f,P) return conjoin_axioms (axiom :: axioms') ->
+                       forall n, axioms_model_proj_type (axiom::axioms') n := axiom in
+      fun model n =>
+        match n return axioms_model_proj_type (specAxiom _ _::axioms') n with
+          | 0 => proj1 model
+          | S n' => axioms_model_proj axioms' (proj2 model) n'
+        end
+  end.
+
+Fixpoint model_proj_type spec :
+  spec_model spec -> nat -> Type :=
+  match spec return spec_model spec -> nat -> Type with
+    | Spec_Axioms axioms =>
+      fun model => axioms_model_proj_type axioms
+    | Spec_Cons f T rest =>
+      fun model n =>
+        match n with
+          | 0 => T
           | S n' =>
+            model_proj_type (rest (projT1 model)) (projT2 model) n'
+        end
+  end.
+
+Fixpoint model_proj spec :
+  forall model n, model_proj_type spec model n :=
+  match spec return forall model n, model_proj_type spec model n with
+    | Spec_Axioms axioms =>
+      axioms_model_proj axioms
+    | Spec_Cons f T rest =>
+      fun model n =>
+        match n with
+          | 0 => projT1 model
+          | S n' =>
+            model_proj (rest (projT1 model)) (projT2 model) n'
+        end
+  end.
+
+
+(*
+Fixpoint axioms_model_proj_type (axioms: list SpecAxiom) : nat -> Type :=
+  match axioms with
+    | [] => fun _ => True
+    | axiom::axioms' =>
+      fun n =>
+        match n with
+          | 0 => let (f,P) := axiom in P
+          | S n' => axioms_model_proj_type axioms' n'
+        end
+  end.
+
+Fixpoint axioms_model_proj axioms :
+  conjoin_axioms axioms -> forall n, axioms_model_proj_type axioms n :=
+  match axioms return conjoin_axioms axioms ->
+                      forall n, axioms_model_proj_type axioms n with
+    | [] => fun _ _ => I
+    | axiom::axioms' =>
+      let (f,P) return conjoin_axioms (axiom :: axioms') ->
+                       forall n, axioms_model_proj_type (axiom::axioms') n := axiom in
+      fun model n =>
+        match n return axioms_model_proj_type (specAxiom _ _::axioms') n with
+          | 0 => let (pf1,_) := model in pf1
+          | S n' =>
+            let (_,model') := model in
             axioms_model_proj axioms' model' n'
         end
   end.
 
-Fixpoint model_proj_type spec (model: SpecModel spec) :
-  nat -> Type :=
-  match model with
-    | SpecModel_Axioms axioms model' =>
-      axioms_model_proj_type axioms model'
-    | SpecModel_Cons f T rest t model' =>
-      fun n =>
+Fixpoint model_proj_type spec :
+  spec_model spec -> nat -> Type :=
+  match spec return spec_model spec -> nat -> Type with
+    | Spec_Axioms axioms =>
+      fun model => axioms_model_proj_type axioms
+    | Spec_Cons f T rest =>
+      fun model n =>
         match n with
           | 0 => T
-          | S n' => model_proj_type (rest t) model' n'
+          | S n' =>
+            model_proj_type (rest (let (t,_) := model in t))
+                            (let (t,model') return spec_model (rest (let (t,_) := model in t))
+                                 := model in model')
+                            n'
         end
   end.
 
-Fixpoint model_proj spec (model: SpecModel spec) :
-  forall n, model_proj_type spec model n :=
-  match model in SpecModel spec
-        return forall n, model_proj_type spec model n with
-    | SpecModel_Axioms axioms model' => axioms_model_proj axioms model'
-    | SpecModel_Cons f T rest t model' =>
-      fun n =>
-        match n return model_proj_type _ (SpecModel_Cons _ _ _ _ _) n with
-          | 0 => t
-          | S n' => model_proj (rest t) model' n'
+Fixpoint model_proj spec :
+  forall model n, model_proj_type spec model n :=
+  match spec return forall model n, model_proj_type spec model n with
+    | Spec_Axioms axioms =>
+      axioms_model_proj axioms
+    | Spec_Cons f T rest =>
+      fun model n =>
+        match n with
+          | 0 => let (t,_) := model in t
+          | S n' =>
+            model_proj (rest (let (t,_) := model in t))
+                       (let (t,model') return spec_model (rest (let (t,_) := model in t))
+                            := model in model')
+                       n'
         end
   end.
+*)
+
 
 (* Examples of specs *)
 
@@ -220,37 +288,22 @@ Definition MonoidEx_ctor : SpecCtor MonoidEx_Record MonoidEx_Spec :=
   fun T zero plus pf1 pf2 pf3 =>
     Build_MonoidEx_Record T zero plus (Build_MonoidEx _ _ _ pf1 pf2 pf3).
 
-Definition MonoidEx_model : MonoidEx_Record -> SpecModel MonoidEx_Spec :=
+Definition MonoidEx_model : MonoidEx_Record -> spec_model MonoidEx_Spec :=
   fun r =>
-    SpecModel_Cons
-      _ _ _ (MEx_T r)
-      (SpecModel_Cons
-         _ _ _
-         (MEx_zero r)
-         (SpecModel_Cons
-            _ _ _
-            (MEx_plus r)
-            (SpecModel_Axioms
-               _
-               (SpecAxiomsModel_Cons
-                  _ _ _
-                  (MEx_zero_left (MonoidEx:=MEx_proofs r))
-                  (SpecAxiomsModel_Cons
-                     _ _ _
-                     (MEx_zero_right (MonoidEx:=MEx_proofs r))
-                     (SpecAxiomsModel_Cons
-                        _ _ _
-                        (MEx_plus_assoc (MonoidEx:=MEx_proofs r))
-                        SpecAxiomsModel_Nil)))))).
+    existT
+      _ (MEx_T r)
+      (existT
+         _ (MEx_zero r)
+         (existT
+            _ (MEx_plus r)
+            (conj
+               (MEx_zero_left (MonoidEx:=MEx_proofs r))
+               (conj
+                  (MEx_zero_right (MonoidEx:=MEx_proofs r))
+                  (conj
+                     (MEx_plus_assoc (MonoidEx:=MEx_proofs r))
+                     I))))).
 
-(* NOTE: model_proj yields exactly the relevant record projections *)
-(*
-Eval compute in (fun r => model_proj _ (MonoidEx_model r) 2).
-Eval compute in MEx_plus.
-
-Eval compute in (fun r => model_proj _ (MonoidEx_model r) 5).
-Eval compute in (fun r => MEx_plus_assoc (MonoidEx:=MEx_proofs r)).
-*)
 
 
 (*** Refinement Based on GeneralModels ***)
@@ -261,11 +314,16 @@ spec, but the full strength of isomorphisms is not really needed. *)
 Record GeneralModelOf (spec:Spec) : Type :=
   { genmod_type : Type;
     genmod_ctor : SpecCtor genmod_type spec;
-    genmod_model : genmod_type -> SpecModel spec }.
+    genmod_model : genmod_type -> spec_model spec }.
+
+(* A general model with an instance of the general model's type *)
+Record GeneralModelWithInst (spec:Spec) : Type :=
+  { gmwi_gm : GeneralModelOf spec;
+    gmwi_inst : genmod_type spec gmwi_gm }.
 
 (* Build the nth projection function for a general model *)
-Definition genmod_proj spec (genmod: GeneralModelOf spec) n :=
-  fun r => model_proj spec (genmod_model spec genmod r) n.
+Definition gmwi_proj spec (gmwi: GeneralModelWithInst spec) n :=
+  model_proj spec (genmod_model spec (gmwi_gm spec gmwi) (gmwi_inst spec gmwi)) n.
 
 (* A general spec is a spec plus a general model of it *)
 Record GeneralSpec : Type :=
@@ -281,7 +339,7 @@ Definition GMInterpretation gspec1 gspec2 : Type :=
 model of the result spec *)
 Record GMRefinement gspec : Type :=
   { gmref_spec : Spec;
-    gmref_interp : GeneralModelOf gmref_spec ->
+    gmref_interp : GeneralModelWithInst gmref_spec ->
                    genmod_type _ (genspec_model gspec) }.
 
 (* A general model pushout is a pair of related GMRefinements that unify *)
@@ -289,11 +347,38 @@ Record GMPushout {gspec gspec1 gspec2}
        (i1: GMInterpretation gspec gspec1)
        (i2: GMInterpretation gspec gspec2) : Type :=
   {gmpo_spec: Spec;
-   gmpo_interp1: GeneralModelOf gmpo_spec ->
+   gmpo_interp1: GeneralModelWithInst gmpo_spec ->
                  genmod_type _ (genspec_model gspec1);
-   gmpo_interp2: GeneralModelOf gmpo_spec ->
+   gmpo_interp2: GeneralModelWithInst gmpo_spec ->
                  genmod_type _ (genspec_model gspec2);
    gmpo_equal: forall gm, i1 (gmpo_interp1 gm) = i2 (gmpo_interp2 gm) }.
+
+
+
+(* Tests that model_proj has the right type *)
+(*
+Eval compute in (fun R (mod: R -> spec_model MonoidEx_Spec) (r:R) => model_proj_type _ (mod r) 2).
+Eval compute in (fun R (mod: R -> spec_model MonoidEx_Spec) (r:R) => model_proj _ (mod r) 2).
+
+Eval compute in (fun R (mod: R -> spec_model MonoidEx_Spec) (r:R) => model_proj_type _ (mod r) 5).
+Eval compute in (fun R (mod: R -> spec_model MonoidEx_Spec) (r:R) => model_proj _ (mod r) 5).
+
+Check (fun R (mod: R -> spec_model MonoidEx_Spec) (r:R) =>
+         (model_proj _ (mod r) 2)
+           (model_proj _ (mod r) 1)
+           (model_proj _ (mod r) 1)).
+*)
+
+(* NOTE: when the model is ground, we get exactly the record projections! *)
+(*
+Eval compute in (fun r => model_proj _ (MonoidEx_model r) 2).
+Eval compute in MEx_plus.
+
+Eval compute in (fun r => model_proj _ (MonoidEx_model r) 5).
+Eval compute in (fun r => model_proj_type _ (MonoidEx_model r) 5).
+Eval compute in (fun r => MEx_plus_assoc (MonoidEx:=MEx_proofs r)).
+*)
+
 
 
 
@@ -305,12 +390,14 @@ Record GMPushout {gspec gspec1 gspec2}
 (*** Models ***)
 
 (* Helper for conjoining all the axioms in an axiom list *)
+(*
 Fixpoint conjoin_axioms (axioms : list SpecAxiom) : Prop :=
   match axioms with
     | [] => True
     | [specAxiom _ P] => P
     | (specAxiom _ P) :: axioms' => P /\ conjoin_axioms axioms'
   end.
+*)
 
 (* Helper for proving conjoin_axioms applied to a cons *)
 Lemma conjoin_axioms_cons f (P:Prop) axioms :
@@ -325,12 +412,14 @@ Lemma conjoin_axioms_destruct f (P:Prop) axioms :
 Qed.
 
 (* Build the type of the models of spec as a nested dependent pair *)
+(*
 Fixpoint spec_model spec : Type :=
   match spec with
     | Spec_Axioms axioms => conjoin_axioms axioms
     | Spec_Cons f T rest =>
       { t:T & spec_model (rest t) }
   end.
+*)
 
 (* Project the first op of a spec *)
 Definition model_head {f T rest}
@@ -483,7 +572,8 @@ Definition spec_example_model_natmonoid
                 (existT
                    _ m_plus__proof
                    (conj m_zero_left__param
-                         (conj m_zero_right__param m_plus_assoc__param))))))).
+                         (conj m_zero_right__param
+                               (conj m_plus_assoc__param I)))))))).
 
 
 (*** Interpretations ***)
