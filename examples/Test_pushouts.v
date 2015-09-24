@@ -181,12 +181,13 @@ Definition rpushout12__Pushout : RPushout rec_interp1 rec_interp2.
             unify m1 m2
         end ])).
   (* Unshelve. Focus 2. instantiate_record_type ?__R. *)
-  Instantiate Record Type __R.
+  (* Instantiate Record Type __R. *)
   (* Record __R : Type := { }. *)
+  MyRecordType __R.
   Set Print Universes.
-  Print __R.
+  (* Print __R. *)
   Show Universes.
-  instantiate (__R:=__R).
+  instantiate (__R:=True).
   (*
   Record rpushout12__Record : Type := { }.
   instantiate (__R:=rpushout12__Record). *)

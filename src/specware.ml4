@@ -2681,6 +2681,26 @@ VERNAC COMMAND EXTEND Instantiate_record_type_vernac
            )]
 END
 
+VERNAC COMMAND EXTEND Dummy_record_type_vernac
+  | [ "MyRecordType" var(lid) ]
+    => [ (Vernacexpr.VtSideff [snd lid], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () ->
+            let (loc,id) = lid in
+            let (evd,env) = Lemmas.get_current_context () in
+            let evar =
+              try Evd.evar_key id evd
+              with Not_found -> raise loc (Failure "MyRecordType") in
+
+            interp
+              (loc,
+               VernacInductive (false, BiFinite,
+                                [((false, (loc, id)), [],
+                                  Some type_expr,
+                                  Record, RecordDecl (None, [])),
+                                 []])))]
+END
+
 
 (* Set a debug terminator *)
 VERNAC COMMAND EXTEND Debug_terminator
@@ -2705,7 +2725,7 @@ END
 (* A debug-mode version of Defined *)
 VERNAC COMMAND EXTEND Defined_debug
   | [ "Defined_Debug" ]
-    => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
+    => [ (Vernacexpr.VtQed Vernacexpr.VtKeep, Vernacexpr.VtLater) ]
     -> [ (* let proof =
            Proof_global.close_proof ~keep_body_ucst_sepatate:false (fun x -> x)
          in *)
