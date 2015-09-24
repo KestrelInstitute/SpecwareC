@@ -180,21 +180,25 @@ Definition rpushout12__Pushout : RPushout rec_interp1 rec_interp2.
           | |- ?m1 = ?m2 =>
             unify m1 m2
         end ])).
-  instantiate_record_type ?__R.
-  (* Record __R : Set := { }. *)
+  (* Unshelve. Focus 2. instantiate_record_type ?__R. *)
+  Instantiate Record Type __R.
+  (* Record __R : Type := { }. *)
+  Set Print Universes.
   Print __R.
+  Show Universes.
   instantiate (__R:=__R).
   (*
   Record rpushout12__Record : Type := { }.
   instantiate (__R:=rpushout12__Record). *)
   apply eq_refl.
-  Show Proof.
-Defined_Debug.
-(* Defined. *)
-Print rpushout12__Pushout.
+Defined.
 
+Print __R.
 End rpushout12.
 
+Print rpushout12.rpushout12__Pushout.
+
+(*
 
 Set Printing Universes.
 
@@ -588,3 +592,4 @@ Definition pushout_dnc_sorting : Pushout dnc_sorting_interp dnc_interp.
 
   pushout_tac.
 
+*)
