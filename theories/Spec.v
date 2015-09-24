@@ -85,6 +85,19 @@ Definition def {T x} (t:T) (t__pf: t = x) : T := x.
 
 (*** Relationships with Record Types ***)
 
+Inductive LeftProduct : Type -> Type :=
+| LeftProduct_Nil : LeftProduct unit
+| LeftProduct_Cons T (rest: LeftProduct T) (U : T -> Type) :
+    LeftProduct {x:T & U x}
+.
+
+(*
+Fixpoint forall_lp {T} (lp: LeftProduct T) U : Type :=
+  match lp with
+    | LeftProduct_Nil => U
+    | LeftProduct_Cons T1 rest T2
+*)
+
 Fixpoint SpecAxiomsCtor (R:Type) (axioms:list SpecAxiom) : Type :=
   match axioms with
     | [] => R
@@ -100,6 +113,140 @@ Fixpoint SpecCtor (R:Type) (spec:Spec) : Type :=
       forall x, SpecCtor R (rest x)
   end.
 
+Inductive SpecAxiomsModel : list SpecAxiom -> Type :=
+| SpecAxiomsModel_Nil : SpecAxiomsModel nil
+| SpecAxiomsModel_Cons f (P:Prop) axioms (pf:P) :
+    SpecAxiomsModel axioms ->
+    SpecAxiomsModel (specAxiom f P :: axioms)
+.
+
+Inductive SpecModel : Spec -> Type :=
+| SpecModel_Axioms axioms :
+    SpecAxiomsModel axioms -> SpecModel (Spec_Axioms axioms)
+| SpecModel_Cons f T rest (t:T) :
+    SpecModel (rest t) ->
+    SpecModel (Spec_Cons f T rest)
+.
+
+Fixpoint axioms_model_proj_type axioms (model: SpecAxiomsModel axioms) :
+  nat -> Type :=
+  match model with
+    | SpecAxiomsModel_Nil => fun _ => True
+    | SpecAxiomsModel_Cons f P axioms' pf model' =>
+      fun n =>
+        match n with
+          | 0 => P
+          | S n' =>
+            axioms_model_proj_type axioms' model' n'
+        end
+  end.
+
+Fixpoint axioms_model_proj axioms (model: SpecAxiomsModel axioms) :
+  forall n, axioms_model_proj_type axioms model n :=
+  match model in SpecAxiomsModel axioms
+        return forall n, axioms_model_proj_type axioms model n with
+    | SpecAxiomsModel_Nil => fun _ => I
+    | SpecAxiomsModel_Cons f P axioms' pf model' =>
+      fun n =>
+        match n return axioms_model_proj_type _ (SpecAxiomsModel_Cons _ _ _ _ _) n with
+          | 0 => pf
+          | S n' =>
+            axioms_model_proj axioms' model' n'
+        end
+  end.
+
+Fixpoint model_proj_type spec (model: SpecModel spec) :
+  nat -> Type :=
+  match model with
+    | SpecModel_Axioms axioms model' =>
+      axioms_model_proj_type axioms model'
+    | SpecModel_Cons f T rest t model' =>
+      fun n =>
+        match n with
+          | 0 => T
+          | S n' => model_proj_type (rest t) model' n'
+        end
+  end.
+
+Fixpoint model_proj spec (model: SpecModel spec) :
+  forall n, model_proj_type spec model n :=
+  match model in SpecModel spec
+        return forall n, model_proj_type spec model n with
+    | SpecModel_Axioms axioms model' => axioms_model_proj axioms model'
+    | SpecModel_Cons f T rest t model' =>
+      fun n =>
+        match n return model_proj_type _ (SpecModel_Cons _ _ _ _ _) n with
+          | 0 => t
+          | S n' => model_proj (rest t) model' n'
+        end
+  end.
+
+Class MonoidEx (MEx_T: Set) (MEx_zero: MEx_T)
+      (MEx_plus: MEx_T -> MEx_T -> MEx_T) : Prop :=
+  {MEx_zero_left : (forall x, MEx_plus MEx_zero x = x);
+   MEx_zero_right : (forall x, MEx_plus x MEx_zero = x);
+   MEx_plus_assoc : (forall x y z, MEx_plus x (MEx_plus y z) = MEx_plus (MEx_plus x y) z) }.
+
+Record MonoidEx_Record : Type :=
+  { MEx_T: Set; MEx_zero: MEx_T; MEx_plus: MEx_T -> MEx_T -> MEx_T;
+    MEx_proofs : MonoidEx MEx_T MEx_zero MEx_plus }.
+
+Definition MonoidEx_Spec : Spec :=
+  Spec_Cons
+    "MEx_T" Set
+    (fun MEx_T =>
+       Spec_Cons
+         "MEx_zero" MEx_T
+         (fun MEx_zero =>
+            Spec_Cons
+              "MEx_plus" (MEx_T -> MEx_T -> MEx_T)
+              (fun MEx_plus =>
+                 Spec_Axioms
+                   [specAxiom "MEx_zero_left"
+                              (forall x, MEx_plus MEx_zero x = x);
+                     specAxiom "MEx_zero_right"
+                               (forall x, MEx_plus x MEx_zero = x);
+                     specAxiom "MEx_plus_assoc"
+                               (forall x y z, MEx_plus x (MEx_plus y z)
+                                              = MEx_plus (MEx_plus x y) z)]))).
+
+Definition MonoidEx_ctor : SpecCtor MonoidEx_Record MonoidEx_Spec :=
+  fun T zero plus pf1 pf2 pf3 =>
+    Build_MonoidEx_Record T zero plus (Build_MonoidEx _ _ _ pf1 pf2 pf3).
+
+Definition MonoidEx_model : MonoidEx_Record -> SpecModel MonoidEx_Spec :=
+  fun r =>
+    SpecModel_Cons
+      _ _ _ (MEx_T r)
+      (SpecModel_Cons
+         _ _ _
+         (MEx_zero r)
+         (SpecModel_Cons
+            _ _ _
+            (MEx_plus r)
+            (SpecModel_Axioms
+               _
+               (SpecAxiomsModel_Cons
+                  _ _ _
+                  (MEx_zero_left (MonoidEx:=MEx_proofs r))
+                  (SpecAxiomsModel_Cons
+                     _ _ _
+                     (MEx_zero_right (MonoidEx:=MEx_proofs r))
+                     (SpecAxiomsModel_Cons
+                        _ _ _
+                        (MEx_plus_assoc (MonoidEx:=MEx_proofs r))
+                        SpecAxiomsModel_Nil)))))).
+
+(* NOTE: model_proj yields exactly the relevant record projections *)
+(*
+Eval compute in (fun r => model_proj _ (MonoidEx_model r) 2).
+Eval compute in MEx_plus.
+
+Eval compute in (fun r => model_proj _ (MonoidEx_model r) 5).
+Eval compute in (fun r => MEx_plus_assoc (MonoidEx:=MEx_proofs r)).
+*)
+
+
 (* The type of projections of R indexed by some earlier projections *)
 Inductive SpecProjs (R params:Type) (projs : R -> params) : (params -> Spec) -> Type :=
 | Projs_Nil : SpecProjs R params projs (fun _ => Spec_Axioms nil)
@@ -111,7 +258,7 @@ Inductive SpecProjs (R params:Type) (projs : R -> params) : (params -> Spec) -> 
              (proj: forall r, T (projs r)) :
     SpecProjs R {p:params & T p}
               (fun r => existT _ (projs r) (proj r))
-              (fun p => rest (projT1 p) (projT2 p)) ->
+              (fun p => let (p1,p2) := p in rest p1 p2) ->
     SpecProjs R params projs (fun p => Spec_Cons f (T p) (rest p))
 .
 
@@ -156,16 +303,18 @@ Fixpoint nth_spec_proj {R params projs spec}
 
 (* Examples *)
 
-Record R1 : Type := { R1_n:nat; R1_m:nat; R1_lt_n_m:R1_n < R1_m }.
+Record R1 : Type := { R1_n:nat; R1_m:nat; R1_lt_n_m:R1_n < R1_m; R1_lt_0_n:0 < R1_n }.
 
 Definition R1_Spec :=
   Spec_Cons "n" nat
             (fun n =>
                Spec_Cons "m" nat
-                         (fun m => Spec_Axioms [specAxiom "lt_n_m" (n < m)])).
+                         (fun m => Spec_Axioms [specAxiom "lt_n_m" (n < m);
+                                                 specAxiom "lt_0_n" (0 < n)])).
 
 Definition R1_ctor : SpecCtor R1 R1_Spec := Build_R1.
 
+(*
 Definition R1_projs : SpecProjsTop R1 R1_Spec :=
   Projs_Cons
     _ _ _ _ _ _
@@ -173,7 +322,12 @@ Definition R1_projs : SpecProjsTop R1 R1_Spec :=
     (Projs_Cons
        _ _ _ _ _ _
        R1_m
-       (Projs_ConsAx _ _ _ _ _ _ R1_lt_n_m (Projs_Nil _ _ _))).
+       (Projs_ConsAx
+          _ _ _ _ _ _ R1_lt_n_m
+          (Projs_ConsAx
+             _ {x1:{_:unit & nat} & nat} _ _ _ _ R1_lt_0_n
+             (Projs_Nil _ _ _)))).
+*)
 
 Class R2_class (R2_n R2_m : nat) : Prop :=
   {R2_lt_n_m: R2_n < R2_m;
@@ -192,8 +346,7 @@ Definition R2_Spec :=
 Definition R2_ctor : SpecCtor R2 R2_Spec :=
   fun n m pf1 pf2 => Build_R2 n m (Build_R2_class n m pf1 pf2).
 
-Set Printing All.
-
+(*
 Definition R2_projs : SpecProjsTop R2 R2_Spec :=
   Projs_Cons
     _ _ _ _ _ _
@@ -203,13 +356,135 @@ Definition R2_projs : SpecProjsTop R2 R2_Spec :=
        R2_m
        (Projs_ConsAx
           _ _ _ _ _ _
-          (fun r => @R2_lt_n_m (R2_n r) (R2_m r) (R2_proofs r))
+          (fun r => R2_lt_n_m (R2_class:=R2_proofs r))
           (Projs_ConsAx
              _ {x1:{_:unit & nat} & nat} _ _ _ _
-             (fun r => @R2_lt_0_n (R2_n r) (R2_m r) (R2_proofs r))
+             (fun r => R2_lt_0_n (R2_class:=R2_proofs r))
              (Projs_Nil _ _ _)))).
+*)
 
+(*
+Class MonoidEx (MEx_T: Set) (MEx_zero: MEx_T)
+      (MEx_plus: MEx_T -> MEx_T -> MEx_T) : Prop :=
+  {MEx_zero_left : (forall x, MEx_plus MEx_zero x = x);
+   MEx_zero_right : (forall x, MEx_plus x MEx_zero = x);
+   MEx_plus_assoc : (forall x y z, MEx_plus x (MEx_plus y z) = MEx_plus (MEx_plus x y) z) }.
 
+Record MonoidEx_Record : Type :=
+  { MEx_T: Set; MEx_zero: MEx_T; MEx_plus: MEx_T -> MEx_T -> MEx_T;
+    MEx_proofs : MonoidEx MEx_T MEx_zero MEx_plus }.
+
+Definition MonoidEx_Spec : Spec :=
+  Spec_Cons
+    "MEx_T" Set
+    (fun MEx_T =>
+       Spec_Cons
+         "MEx_zero" MEx_T
+         (fun MEx_zero =>
+            Spec_Cons
+              "MEx_plus" (MEx_T -> MEx_T -> MEx_T)
+              (fun MEx_plus =>
+                 Spec_Axioms
+                   [specAxiom "MEx_zero_left"
+                              (forall x, MEx_plus MEx_zero x = x);
+                     specAxiom "MEx_zero_right"
+                               (forall x, MEx_plus x MEx_zero = x);
+                     specAxiom "MEx_plus_assoc"
+                               (forall x y z, MEx_plus x (MEx_plus y z)
+                                              = MEx_plus (MEx_plus x y) z)]))).
+
+Definition MonoidEx_ctor : SpecCtor MonoidEx_Record MonoidEx_Spec :=
+  fun T zero plus pf1 pf2 pf3 =>
+    Build_MonoidEx_Record T zero plus (Build_MonoidEx _ _ _ pf1 pf2 pf3).
+*)
+
+(*
+Definition MonoidEx_projs : SpecProjsTop MonoidEx_Record MonoidEx_Spec :=
+  Projs_Cons
+    _ _ _ _ _ _
+    MEx_T
+    (Projs_Cons
+       _ _ _ _ _ _
+       MEx_zero
+       (Projs_Cons
+          _ _
+          (fun (r:MonoidEx_Record) =>
+             existT _ (existT _  (existT _ tt (MEx_T r)) (MEx_zero r)) (MEx_plus r))
+          _ _ _
+          MEx_plus
+          (Projs_ConsAx
+             _ _ _ _ _ _
+             (fun r => MEx_zero_left (MonoidEx:=MEx_proofs r))
+             (Projs_ConsAx
+                _ _ _ _ _ _
+                (fun r => MEx_zero_right (MonoidEx:=MEx_proofs r))
+                (Projs_ConsAx
+                   _ _ _ _ _ _
+                   (fun r => MEx_plus_assoc (MonoidEx:=MEx_proofs r))
+                   (Projs_Nil
+                      _
+                      {x1:{x2:{_:unit & Set} & projT2 x2}
+                            & (projT2 (projT1 x1)) -> (projT2 (projT1 x1)) -> (projT2 (projT1 x1))}
+                      (fun (r:MonoidEx_Record) =>
+                         existT _ (existT _  (existT _ tt (MEx_T r)) (MEx_zero r)) (MEx_plus r)))))))).
+*)
+
+Record MonoidEx_Record' : Type :=
+  { MEx_T': Set; MEx_zero': MEx_T'; MEx_plus': MEx_T' -> MEx_T' -> MEx_T';
+    MEx_zero_left' : (forall x, MEx_plus' MEx_zero' x = x);
+    MEx_zero_right' : (forall x, MEx_plus' x MEx_zero' = x);
+    MEx_plus_assoc' : (forall x y z, MEx_plus' x (MEx_plus' y z) = MEx_plus' (MEx_plus' x y) z) }.
+
+Definition MonoidEx_Spec' : Spec :=
+  Spec_Cons
+    "MEx_T" Set
+    (fun MEx_T =>
+       Spec_Cons
+         "MEx_zero" MEx_T
+         (fun MEx_zero =>
+            Spec_Cons
+              "MEx_plus" (MEx_T -> MEx_T -> MEx_T)
+              (fun MEx_plus =>
+                 Spec_Cons
+                   "MEx_zero_left"
+                   (forall x, MEx_plus MEx_zero x = x)
+                   (fun _ =>
+                      Spec_Cons
+                        "MEx_zero_right"
+                        (forall x, MEx_plus x MEx_zero = x)
+                        (fun _ =>
+                           Spec_Cons
+                             "MEx_plus_assoc"
+                             (forall x y z, MEx_plus x (MEx_plus y z)
+                                            = MEx_plus (MEx_plus x y) z)
+                             (fun _ => Spec_Axioms nil)))))).
+
+Definition MonoidEx_ctor' : SpecCtor MonoidEx_Record' MonoidEx_Spec' :=
+  Build_MonoidEx_Record'.
+
+(*
+Definition MonoidEx_projs' : SpecProjsTop MonoidEx_Record' MonoidEx_Spec' :=
+  Projs_Cons
+    _ _ _ _ _ _
+    MEx_T'
+    (Projs_Cons
+       _ {_:unit & Set} _ _ _ _
+       MEx_zero'
+       (Projs_Cons
+          _ _ _ _ _ _
+          MEx_plus'
+          (Projs_Cons
+             _ _ _ _ _ _
+             MEx_zero_left'
+             (Projs_Cons
+                _ _ _ _ _ _
+                MEx_zero_right'
+                (Projs_Cons
+                   _ _ _ _ _ _
+                   MEx_plus_assoc'
+                   (Projs_Nil
+                      _ _ _)))))).
+*)
 
 (*** Models ***)
 
