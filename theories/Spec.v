@@ -296,6 +296,12 @@ Record GMPushout {gspec gspec1 gspec2}
    gmpo_equal: forall gm, i1 (gmpo_interp1 gm) = i2 (gmpo_interp2 gm) }.
 
 
+
+
+
+(*** FIXME HERE: old stuff below! ***)
+
+
 (*** Models ***)
 
 (* Helper for conjoining all the axioms in an axiom list *)
