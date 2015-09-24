@@ -78,6 +78,24 @@ let index_of f l =
   in
   helper 0 l
 
+(* Split a list l into prefix @ suffix where suffix is maximal with respect to
+satisfying the given predicate *)
+let split_list_suffix_pred pred l =
+  (* Helper returns None if the whole list satisfies the predicate, otherwise
+  returns Some (prefix,suffix) *)
+  let rec helper l =
+    match l with
+    | [] -> None
+    | x::l' ->
+       (match helper l' with
+        | None when pred x -> None
+        | None -> Some ([x], l')
+        | Some (prefix, suffix) -> Some (x::prefix, suffix))
+  in
+  match helper l with
+  | None -> ([], l)
+  | Some ret -> ret
+
 (* Stable topological sort: sort l so that every element x comes after its
    dependencies, the dependencies of its dependencies, etc., favoring the
    existing ordering of l where possible. The dependencies of a node are given
