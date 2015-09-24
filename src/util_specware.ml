@@ -83,7 +83,13 @@ let index_of f l =
    existing ordering of l where possible. The dependencies of a node are given
    by the deps Map, which maps the "key" of each element of the input list to a
    Set of the keys of its dependencies. The key of a list element is given by
-   the key function, which must be unique in the list. *)
+   the key function, which must be unique in the list.
+
+   The eager flag controls how the existing ordering of l is used. If set, the
+   sorting will eagerly try to put the first element of l as early as possible,
+   moving only those elements that must come before it earlier in the list.
+   Otherwise, the lazy strategy is used, which effectively moves each element
+   backwards in the list past its dependencies and possibly other elements. *)
 module type Sortable =
   sig
     type t
@@ -97,7 +103,8 @@ module type StableTopoSort =
     module Set : Set.S with type elt = key
     module Map : Map.S with type key = key
     exception TopoCircularity of key
-    val stable_topo_sort : ('a -> key) -> Set.t Map.t -> 'a list -> 'a list
+    val stable_topo_sort : ?eager:bool -> ('a -> key) -> Set.t Map.t ->
+                           'a list -> 'a list
   end
 
 module Make_StableTopoSort (M:Sortable)
@@ -118,7 +125,7 @@ struct
   (* Topo sort failed because of a circularity *)
     exception TopoCircularity of key
 
-    let stable_topo_sort key deps l =
+    let stable_topo_sort_main key deps l =
       (* First, annotate each element of l with a mutable set of its
       dependencies; also initialize rev_deps_map (discussed below) *)
       let (l_annot, rev_deps_map) =
@@ -126,7 +133,8 @@ struct
           (fun x (la, m) ->
            let k = key x in
            ({ewd_elem = x; ewd_key = k;
-             ewd_deps = ref (Map.find k deps)}::la,
+             ewd_deps = ref (try Map.find k deps
+                             with Not_found -> Set.empty)}::la,
             Map.add k (ref []) m))
           l ([], Map.empty) in
 
@@ -185,6 +193,25 @@ struct
 
       (* Finally, call the main loop *)
       main_loop l_annot
+
+    let stable_topo_sort ?(eager=false) key deps l =
+      if eager then
+        (* To eagerly sort, we lazily sort in reverse *)
+        let inv_deps =
+          Map.fold
+            (fun key depset inv_deps ->
+             Set.fold (fun depkey inv_deps ->
+                       let prevset =
+                         try Map.find depkey inv_deps
+                         with Not_found -> Set.empty in
+                       Map.add depkey (Set.add key prevset) inv_deps)
+                      depset inv_deps)
+            deps Map.empty
+        in
+        List.rev (stable_topo_sort_main key inv_deps (List.rev l))
+      else
+        stable_topo_sort_main key deps l
+
   end
 
 module EvarTopoSort = Make_StableTopoSort (Evar)
