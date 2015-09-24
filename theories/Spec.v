@@ -192,6 +192,8 @@ Definition R2_Spec :=
 Definition R2_ctor : SpecCtor R2 R2_Spec :=
   fun n m pf1 pf2 => Build_R2 n m (Build_R2_class n m pf1 pf2).
 
+Set Printing All.
+
 Definition R2_projs : SpecProjsTop R2 R2_Spec :=
   Projs_Cons
     _ _ _ _ _ _
@@ -203,7 +205,7 @@ Definition R2_projs : SpecProjsTop R2 R2_Spec :=
           _ _ _ _ _ _
           (fun r => @R2_lt_n_m (R2_n r) (R2_m r) (R2_proofs r))
           (Projs_ConsAx
-             _ _ _ _ _ _
+             _ {x1:{_:unit & nat} & nat} _ _ _ _
              (fun r => @R2_lt_0_n (R2_n r) (R2_m r) (R2_proofs r))
              (Projs_Nil _ _ _)))).
 
