@@ -83,6 +83,132 @@ Arguments Spec_Cons f%string T rest.
 Definition def {T x} (t:T) (t__pf: t = x) : T := x.
 
 
+(*** Relationships with Record Types ***)
+
+Fixpoint SpecAxiomsCtor (R:Type) (axioms:list SpecAxiom) : Type :=
+  match axioms with
+    | [] => R
+    | (specAxiom _ P)::axioms' =>
+      P -> SpecAxiomsCtor R axioms'
+  end.
+
+(* The type of a constructor of R using spec *)
+Fixpoint SpecCtor (R:Type) (spec:Spec) : Type :=
+  match spec with
+    | Spec_Axioms axioms => SpecAxiomsCtor R axioms
+    | Spec_Cons f T rest =>
+      forall x, SpecCtor R (rest x)
+  end.
+
+(* The type of projections of R indexed by some earlier projections *)
+Inductive SpecProjs (R params:Type) (projs : R -> params) : (params -> Spec) -> Type :=
+| Projs_Nil : SpecProjs R params projs (fun _ => Spec_Axioms nil)
+| Projs_ConsAx f (P: params -> Prop) axioms (proj_pf: forall r, P (projs r)) :
+    SpecProjs R params projs (fun p => Spec_Axioms (axioms p)) ->
+    SpecProjs R params projs
+              (fun p => Spec_Axioms (cons (specAxiom f (P p)) (axioms p)))
+| Projs_Cons f T (rest: forall p:params, T p -> Spec)
+             (proj: forall r, T (projs r)) :
+    SpecProjs R {p:params & T p}
+              (fun r => existT _ (projs r) (proj r))
+              (fun p => rest (projT1 p) (projT2 p)) ->
+    SpecProjs R params projs (fun p => Spec_Cons f (T p) (rest p))
+.
+
+Definition SpecProjsTop R spec :=
+  SpecProjs R unit (fun _ => tt) (fun _ => spec).
+
+Fixpoint nth_spec_proj_type {R params projs spec}
+         (sprojs: SpecProjs R params projs spec) n (r:R) : Type :=
+  match sprojs with
+    | Projs_Nil _ _ _ => unit
+    | Projs_ConsAx _ _ _ f P axioms proj_pf projs_rest =>
+      match n with
+        | 0 => P (projs r)
+        | S n' => nth_spec_proj_type projs_rest n' r
+      end
+    | Projs_Cons _ _ _ f T rest proj projs_rest =>
+      match n with
+        | 0 => T (projs r)
+        | S n' => nth_spec_proj_type projs_rest n' r
+      end
+  end.
+
+Fixpoint nth_spec_proj {R params projs spec}
+         (sprojs: SpecProjs R params projs spec) :
+  forall n r, nth_spec_proj_type sprojs n r :=
+  match sprojs return forall n r, nth_spec_proj_type sprojs n r with
+    | Projs_Nil _ _ _ => fun _ _ => tt
+    | Projs_ConsAx _ _ _ f P axioms proj_pf projs_rest =>
+      fun n =>
+        match n return forall r, nth_spec_proj_type (Projs_ConsAx _ _ _ _ _ _ _ _) n r with
+          | 0 => proj_pf
+          | S n' => nth_spec_proj projs_rest n'
+        end
+    | Projs_Cons _ _ _ f T rest proj projs_rest =>
+      fun n =>
+        match n return forall r, nth_spec_proj_type (Projs_Cons _ _ _ _ _ _ _ _) n r with
+          | 0 => proj
+          | S n' => nth_spec_proj projs_rest n'
+        end
+  end.
+
+
+(* Examples *)
+
+Record R1 : Type := { R1_n:nat; R1_m:nat; R1_lt_n_m:R1_n < R1_m }.
+
+Definition R1_Spec :=
+  Spec_Cons "n" nat
+            (fun n =>
+               Spec_Cons "m" nat
+                         (fun m => Spec_Axioms [specAxiom "lt_n_m" (n < m)])).
+
+Definition R1_ctor : SpecCtor R1 R1_Spec := Build_R1.
+
+Definition R1_projs : SpecProjsTop R1 R1_Spec :=
+  Projs_Cons
+    _ _ _ _ _ _
+    R1_n
+    (Projs_Cons
+       _ _ _ _ _ _
+       R1_m
+       (Projs_ConsAx _ _ _ _ _ _ R1_lt_n_m (Projs_Nil _ _ _))).
+
+Class R2_class (R2_n R2_m : nat) : Prop :=
+  {R2_lt_n_m: R2_n < R2_m;
+   R2_lt_0_n: 0 < R2_n }.
+
+Record R2 : Type := { R2_n:nat; R2_m:nat; R2_proofs:R2_class R2_n R2_m }.
+
+Definition R2_Spec :=
+  Spec_Cons "n" nat
+            (fun n =>
+               Spec_Cons "m" nat
+                         (fun m =>
+                            Spec_Axioms [specAxiom "lt_n_m" (n < m);
+                                          specAxiom "lt_0_n" (0 < n)])).
+
+Definition R2_ctor : SpecCtor R2 R2_Spec :=
+  fun n m pf1 pf2 => Build_R2 n m (Build_R2_class n m pf1 pf2).
+
+Definition R2_projs : SpecProjsTop R2 R2_Spec :=
+  Projs_Cons
+    _ _ _ _ _ _
+    R2_n
+    (Projs_Cons
+       _ _ _ _ _ _
+       R2_m
+       (Projs_ConsAx
+          _ _ _ _ _ _
+          (fun r => @R2_lt_n_m (R2_n r) (R2_m r) (R2_proofs r))
+          (Projs_ConsAx
+             _ _ _ _ _ _
+             (fun r => @R2_lt_0_n (R2_n r) (R2_m r) (R2_proofs r))
+             (Projs_Nil _ _ _)))).
+
+
+
 (*** Models ***)
 
 (* Helper for conjoining all the axioms in an axiom list *)
