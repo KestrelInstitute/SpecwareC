@@ -181,6 +181,8 @@ Fixpoint model_proj spec (model: SpecModel spec) :
         end
   end.
 
+(* Examples of specs *)
+
 Class MonoidEx (MEx_T: Set) (MEx_zero: MEx_T)
       (MEx_plus: MEx_T -> MEx_T -> MEx_T) : Prop :=
   {MEx_zero_left : (forall x, MEx_plus MEx_zero x = x);
@@ -190,6 +192,10 @@ Class MonoidEx (MEx_T: Set) (MEx_zero: MEx_T)
 Record MonoidEx_Record : Type :=
   { MEx_T: Set; MEx_zero: MEx_T; MEx_plus: MEx_T -> MEx_T -> MEx_T;
     MEx_proofs : MonoidEx MEx_T MEx_zero MEx_plus }.
+
+(* NOTE: don't generally want this as an actual typeclass instance... *)
+Definition MonoidEx_Record_inst (r:MonoidEx_Record) : MonoidEx _ _ _ :=
+  MEx_proofs r.
 
 Definition MonoidEx_Spec : Spec :=
   Spec_Cons
@@ -245,6 +251,49 @@ Eval compute in MEx_plus.
 Eval compute in (fun r => model_proj _ (MonoidEx_model r) 5).
 Eval compute in (fun r => MEx_plus_assoc (MonoidEx:=MEx_proofs r)).
 *)
+
+
+(*** Refinement Based on GeneralModels ***)
+
+(* A "general model" of a spec is a type that can build and be built from models
+of specs. The intent is actually that the type be isomorphic to the models of
+spec, but the full strength of isomorphisms is not really needed. *)
+Record GeneralModelOf (spec:Spec) : Type :=
+  { genmod_type : Type;
+    genmod_ctor : SpecCtor genmod_type spec;
+    genmod_model : genmod_type -> SpecModel spec }.
+
+(* Build the nth projection function for a general model *)
+Definition genmod_proj spec (genmod: GeneralModelOf spec) n :=
+  fun r => model_proj spec (genmod_model spec genmod r) n.
+
+(* A general spec is a spec plus a general model of it *)
+Record GeneralSpec : Type :=
+  { genspec_spec : Spec;
+    genspec_model : GeneralModelOf genspec_spec }.
+
+(* A general model interpretation is a function on the general model types *)
+Definition GMInterpretation gspec1 gspec2 : Type :=
+  genmod_type _ (genspec_model gspec2) ->
+  genmod_type _ (genspec_model gspec1).
+
+(* A general model refinement is like a GMInterpretation but for any general
+model of the result spec *)
+Record GMRefinement gspec : Type :=
+  { gmref_spec : Spec;
+    gmref_interp : GeneralModelOf gmref_spec ->
+                   genmod_type _ (genspec_model gspec) }.
+
+(* A general model pushout is a pair of related GMRefinements that unify *)
+Record GMPushout {gspec gspec1 gspec2}
+       (i1: GMInterpretation gspec gspec1)
+       (i2: GMInterpretation gspec gspec2) : Type :=
+  {gmpo_spec: Spec;
+   gmpo_interp1: GeneralModelOf gmpo_spec ->
+                 genmod_type _ (genspec_model gspec1);
+   gmpo_interp2: GeneralModelOf gmpo_spec ->
+                 genmod_type _ (genspec_model gspec2);
+   gmpo_equal: forall gm, i1 (gmpo_interp1 gm) = i2 (gmpo_interp2 gm) }.
 
 
 (*** Models ***)
