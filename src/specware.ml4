@@ -679,8 +679,8 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
                        pp_constr constr in
 
   (* Helper definitions *)
-  let consop_constructor = mk_constructor loc specware_mod "Spec_Cons" in
-  let axioms_constructor = mk_constructor loc specware_mod "Spec_Axioms" in
+  let consop_constructor = mk_constructor specware_mod "Spec_Cons" in
+  let axioms_constructor = mk_constructor specware_mod "Spec_Axioms" in
   (* Helper: unfold constants in constr using const_map, which either maps to a
   variable id in scope or to None, meaning the constant should be unfolded *)
   let rec unfold_helper const_map constr =
@@ -1584,7 +1584,7 @@ let import_refinement_constr_expr loc constr_expr =
     match Term.kind_of_term constr_hnf with
     | Term.App (ctor, args) ->
        if constr_is_constructor (mk_constructor
-                                   loc specware_mod "Build_RefinementOf") ctor
+                                   specware_mod "Build_RefinementOf") ctor
        then args.(0)
        else
          raise loc (Failure "import_refinement_constr_expr")
@@ -2414,6 +2414,170 @@ TACTIC EXTEND my_instantiate_tac
               evar_id
               (Tacinterp.default_ist (),
                Detyping.detype true [] env evd evar_def)
+       )]
+END
+
+
+(* Helper type for instantiate_spec *)
+type field_evar = {field_evar_evar : Evar.t;
+                   field_evar_info : Evd.evar_info;
+                   field_evar_tp : Constr.t;
+                   field_evar_id : Id.t;
+                   field_evar_is_prop : bool}
+
+(* Instantiate a Spec evar using all evars that depend on it as fields *)
+TACTIC EXTEND instantiate_spec_tac
+  | [ "instantiate_spec" constr(evar_constr) ]
+    -> [ Proofview.Goal.nf_enter
+           (fun gl ->
+            let env = Proofview.Goal.env gl in
+            let evd = Proofview.Goal.sigma gl in
+
+            (* Extract the evar we care about from evar_constr *)
+            let spec_evar =
+              match Term.kind_of_term evar_constr with
+              | Term.Evar (evar, [| |]) -> evar
+              | Term.Evar (evar, args) ->
+                 user_err_loc (dummy_loc, "_",
+                               str "Evar must have empty context")
+              | _ -> user_err_loc (dummy_loc, "_",
+                                   str "Not an evar: "
+                                   ++ Printer.pr_constr evar_constr)
+            in
+            let spec_id = Evd.evar_ident spec_evar evd in
+            let spec_info = Evd.find evd spec_evar in
+
+            (* Check that evar has an empty context *)
+            let _ =
+              match Evd.evar_context spec_info with
+              | [] -> ()
+              | _ -> user_err_loc
+                       (dummy_loc, "_",
+                        str "instantiate_record_type: evar has non-empty context: "
+                        ++ Printer.pr_constr (Term.mkEvar (spec_evar, [| |])))
+            in
+
+            (* Find all the evars with context of the following form:
+               (R:Type) (mod: R -> spec_model ?spec_evar) (r:R) *)
+            let (field_evars_type, field_evars_prop) =
+              Evd.fold_undefined
+                (fun evar info (l_type, l_prop) ->
+                 match Evd.evar_context info with
+                 | [_, None, hyp_tp1; _, None, hyp_tp2; _, None, hyp_tp3]
+                   (* FIXME: check that the evar is ok! *)
+                    when
+                      not (Evar.Set.mem
+                             spec_evar (Evd.evars_of_term
+                                          (Evd.evar_concl info)))
+                      (*
+                      (match Term.kind_of_term hyp_tp with
+                       | Term.App (hd, [| arg |]) ->
+                          constr_is_inductive
+                            (mk_inductive specware_mod "GeneralModelOf") hd
+                          && Term.isEvar arg
+                          && Evar.equal (fst (Term.destEvar arg)) spec_evar
+                          && 
+                       | _ -> false) *)
+                   ->
+                    let field_evar =
+                      {field_evar_evar = evar;
+                       field_evar_info = info;
+                       field_evar_tp = Evd.evar_concl info;
+                       field_evar_id = Evd.evar_ident evar evd;
+                       field_evar_is_prop =
+                         match Retyping.get_sort_family_of
+                                 env evd (Evd.evar_concl info) with
+                         | Sorts.InProp -> true
+                         | _ -> false }
+                    in
+                    if field_evar.field_evar_is_prop then
+                      (l_type, field_evar::l_prop)
+                    else
+                      (field_evar::l_type, l_prop)
+                 | _ -> (l_type, l_prop))
+                evd ([], [])
+            in
+            let field_evars = field_evars_type @ field_evars_prop in
+
+            (* Sort the evars based on type dependencies *)
+            let field_evars_sorted =
+              evar_topo_sort
+                ~eager:true
+                (fun fev -> fev.field_evar_evar)
+                (List.fold_left
+                   (fun deps fev ->
+                    Evar.Map.add
+                      fev.field_evar_evar
+                      (Evd.evars_of_term fev.field_evar_tp) deps)
+                   Evar.Map.empty field_evars)
+                field_evars
+            in
+
+            (* Split the sorted evars into predicative vs propositional *)
+            let (field_evars_type, field_evars_prop) =
+              split_list_suffix_pred (fun fe -> fe.field_evar_is_prop)
+                                     field_evars_sorted
+            in
+
+            (* Helper to replace evars with local variables, in the types of
+               evars when building the Spec object *)
+            let rec replace_evars_with_rels evars lifting constr =
+              match Term.kind_of_term constr with
+              | Term.Evar (ev,args) ->
+                 (try
+                     let evar_num = index_of (Evar.equal ev) evars in
+                     let _ = if Array.length args != 1 then
+                               raise dummy_loc
+                                     (Failure "instantiate_record_type") in
+                     Term.mkRel (lifting + evar_num)
+                   with Not_found -> constr)
+              | _ ->
+                 Term.map_constr_with_binders (fun x -> x+1)
+                                              (replace_evars_with_rels evars)
+                                              lifting constr
+            in
+
+            (* Build the required Spec object *)
+            let build_axioms evars =
+              List.fold_right
+                (fun fev rest ->
+                 Term.mkApp
+                   (Term.mkConstruct (mk_constructor datatypes_mod "cons"),
+                    [| Term.mkInd (mk_inductive specware_mod "SpecAxiom");
+                       replace_evars_with_rels
+                         evars 0 (Evd.evar_concl fev.field_evar_info);
+                       rest |]))
+                field_evars_prop
+                (Term.mkApp
+                   (Term.mkConstruct (mk_constructor datatypes_mod "nil"),
+                    [| Term.mkInd (mk_inductive specware_mod "SpecAxiom") |]))
+            in
+            let rec build_spec evars fevs =
+              match fevs with
+              | [] -> Term.mkApp
+                        (Term.mkConstruct
+                           (mk_constructor specware_mod "Spec_Axioms"),
+                         [| build_axioms evars |])
+              | fev::fevs' ->
+                 let tp = replace_evars_with_rels evars 0 fev.field_evar_tp in
+                 Term.mkApp
+                   (Term.mkConstruct (mk_constructor specware_mod "Spec_Cons"),
+                    [| mk_string_constr (Id.to_string fev.field_evar_id);
+                       tp;
+                       Term.mkLambda
+                         (Name fev.field_evar_id, tp,
+                          (* NOTE: we push the evar to the front of evars
+                          because rel_contexts are stored inside-out *)
+                          build_spec (fev.field_evar_evar::evars) fevs') |])
+            in
+            let spec_constr = build_spec [] field_evars_type in
+
+            (* Instantiate spec_evar *)
+            (* FIXME: instantiate the remaining evars *)
+            Evar_tactics.instantiate_tac_by_name
+              spec_id
+              (Tacinterp.default_ist (),
+               Detyping.detype true [] env evd spec_constr)
        )]
 END
 

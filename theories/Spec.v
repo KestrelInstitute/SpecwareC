@@ -344,18 +344,27 @@ Record GMPushout {gspec gspec1 gspec2}
                    genmod_type _ (genspec_model gspec2);
    gmpo_equal: forall R mod r, i1 (gmpo_interp1 R mod r) = i2 (gmpo_interp2 R mod r) }.
 
-
+(* Helper for instantiating evars *)
+Definition model_proj_fun_type spec n :=
+  (fun R (mod: R -> spec_model spec) (r:R) => model_proj_type _ (mod r) n).
+Definition model_proj_fun spec n :=
+  (fun R (mod: R -> spec_model spec) (r:R) => model_proj _ (mod r) n).
 
 (* Tests that model_proj has the right type *)
 (*
-Eval compute in (fun R (mod: R -> spec_model MonoidEx_Spec) (r:R) => model_proj_type _ (mod r) 2).
-Eval compute in (fun R (mod: R -> spec_model MonoidEx_Spec) (r:R) => model_proj _ (mod r) 2).
+Eval compute in model_proj_fun MonoidEx_Spec 2.
+Eval compute in model_proj_fun_type MonoidEx_Spec 2.
 
-Eval compute in (fun R (mod: R -> spec_model MonoidEx_Spec) (r:R) => model_proj_type _ (mod r) 5).
-Eval compute in (fun R (mod: R -> spec_model MonoidEx_Spec) (r:R) => model_proj _ (mod r) 5).
+Eval compute in model_proj_fun MonoidEx_Spec 5.
+Eval compute in model_proj_fun_type MonoidEx_Spec 5.
 
 Check (fun R (mod: R -> spec_model MonoidEx_Spec) (r:R) =>
          (model_proj _ (mod r) 2)
+           (model_proj _ (mod r) 1)
+           (model_proj _ (mod r) 1)).
+
+Check (fun R (mod: R -> spec_model MonoidEx_Spec) (r:R) =>
+         (model_proj _ (mod r) 5)
            (model_proj _ (mod r) 1)
            (model_proj _ (mod r) 1)).
 *)

@@ -1,6 +1,8 @@
 
 Add LoadPath "../theories" as Specware.
 Require Import Specware.SpecwareC.
+Require Import List.
+Import ListNotations.
 
 (* Base spec contains two natural numbers, n and m *)
 Definition base : Spec :=
@@ -134,70 +136,80 @@ Definition pushout12 : Pushout interp1 interp2.
 Defined.
 
 
+
 (*** New idea: use record types! ***)
 
 Module rec_base.
 Record rec_base : Type := { n:nat; m:nat }.
+Definition rec_base_Spec :=
+  Spec_Cons "n" nat
+            (fun n => Spec_Cons "m" nat (fun m => Spec_Axioms nil)).
+Definition rec_base_gspec :=
+  {| genspec_spec := rec_base_Spec;
+     genspec_model :=
+       Build_GeneralModelOf rec_base_Spec rec_base Build_rec_base
+                            (fun r => existT _ (n r) (existT _ (m r) I)) |}.
 End rec_base.
 
 Module rec_1.
 Record rec_1 : Type := { n:nat }.
+Definition rec_1_Spec :=
+  Spec_Cons "n" nat (fun n => Spec_Axioms nil).
+Definition rec_1_gspec :=
+  {| genspec_spec := rec_1_Spec;
+     genspec_model :=
+       Build_GeneralModelOf rec_1_Spec rec_1 Build_rec_1
+                            (fun r => existT _ (n r) I) |}.
 End rec_1.
 
 Module rec_2.
 Record rec_2 : Type := { m:nat }.
+Definition rec_2_Spec :=
+  Spec_Cons "m" nat (fun m => Spec_Axioms nil).
+Definition rec_2_gspec :=
+  {| genspec_spec := rec_2_Spec;
+     genspec_model :=
+       Build_GeneralModelOf rec_2_Spec rec_2 Build_rec_2
+                            (fun r => existT _ (m r) I) |}.
 End rec_2.
 
-Definition rec_interp1 (model: rec_1.rec_1) : rec_base.rec_base :=
-  match model with
-    | {| rec_1.n := n |} => {| rec_base.n := n; rec_base.m := 2 |}
-  end.
+Definition rec_interp1 : GMInterpretation rec_base.rec_base_gspec rec_1.rec_1_gspec :=
+  fun model =>
+    match model with
+      | {| rec_1.n := n |} => {| rec_base.n := n; rec_base.m := 2 |}
+    end.
 
-Definition rec_interp2 (model: rec_2.rec_2) : rec_base.rec_base :=
-  match model with
-    | {| rec_2.m := m |} => {| rec_base.n := 1; rec_base.m := m |}
-  end.
+Definition rec_interp2 : GMInterpretation rec_base.rec_base_gspec rec_2.rec_2_gspec :=
+  fun model =>
+    match model with
+      | {| rec_2.m := m |} => {| rec_base.n := 1; rec_base.m := m |}
+    end.
 
-Record RPushout {R R1 R2} (i1: R1 -> R) (i2: R2 -> R) : Type :=
-  {R' : Type;
-   i1' : R' -> R1;
-   i2' : R' -> R2;
-   rpushout_pf : forall model', i1 (i1' model') = i2 (i2' model') }.
 
 Module rpushout12.
-Definition rpushout12__Pushout : RPushout rec_interp1 rec_interp2.
+Definition rpushout12__Pushout : GMPushout rec_interp1 rec_interp2.
   (raw_evar
-     "__R"%string Type
+     "__R"%string Spec
      (fun evar =>
-        refine (Build_RPushout _ _ _ rec_interp1 rec_interp2 ?__R _ _ _)
+        refine (Build_GMPushout _ _ _ rec_interp1 rec_interp2 ?__R _ _ _)
       ;
-      [ intro model;
+      [ intros R model r;
         raw_evar "n"%string nat (fun evar => apply (rec_1.Build_rec_1 evar))
-      | intro model;
+      | intros R model r;
         raw_evar "m"%string nat (fun evar => apply (rec_2.Build_rec_2 evar))
-      | intro model;
+      | intros R model r;
         lazymatch goal with
           | |- ?m1 = ?m2 =>
             unify m1 m2
         end ])).
-  (* Unshelve. Focus 2. instantiate_record_type ?__R. *)
-  (* Instantiate Record Type __R. *)
-  (* Record __R : Type := { }. *)
-  MyRecordType __R.
-  Set Print Universes.
-  (* Print __R. *)
-  Show Universes.
-  instantiate (__R:=True).
-  (*
-  Record rpushout12__Record : Type := { }.
-  instantiate (__R:=rpushout12__Record). *)
+  Show Existentials.
+  instantiate_spec ?__R.
   apply eq_refl.
 Defined.
 
-Print __R.
+Print rpushout12__Pushout.
 End rpushout12.
 
-Print rpushout12.rpushout12__Pushout.
 
 (*
 
