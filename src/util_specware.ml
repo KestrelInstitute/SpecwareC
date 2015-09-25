@@ -436,7 +436,7 @@ let mk_constant dir name =
                        str ("Not a constant: " ^ string_of_qualid qualid))
 
 (* Look up a constructor by a path list and a string name *)
-let mk_constructor loc dir name =
+let mk_constructor dir name =
   let qualid = mk_qualid dir name in
   match Nametab.locate qualid with
   | ConstructRef c -> c
@@ -1129,7 +1129,7 @@ and destruct_constr_array : type t f. (t,f) constr_array_descr -> Constr.t array
 let nullary_ctor : 't_rest 'f_rest . string list -> string -> ('t_rest,'f_rest) constr_descr ->
                    ((unit, 't_rest) sum, (unit, 'f_rest) sum) constr_descr =
   fun dir name descr_rest ->
-  Descr_Ctor (mk_constructor dummy_loc dir name,
+  Descr_Ctor (mk_constructor dir name,
               ArrayDescr_Nil, descr_rest)
 let unary_ctor : 't1 'f1 't_rest 'f_rest . string list -> string ->
                  ('t1,'f1) constr_descr ->
@@ -1137,7 +1137,7 @@ let unary_ctor : 't1 'f1 't_rest 'f_rest . string list -> string ->
                  (('t1 * unit, 't_rest) sum,
                   ('f1 * unit, 'f_rest) sum) constr_descr =
   fun dir name descr_a descr_rest ->
-  Descr_Ctor (mk_constructor dummy_loc dir name,
+  Descr_Ctor (mk_constructor dir name,
               ArrayDescr_Cons (descr_a, fun _ -> ArrayDescr_Nil), descr_rest)
 let binary_ctor : 't1 'f1 't2 'f2 't_rest 'f_rest . string list -> string ->
                   ('t1,'f1) constr_descr ->
@@ -1146,7 +1146,7 @@ let binary_ctor : 't1 'f1 't2 'f2 't_rest 'f_rest . string list -> string ->
                   (('t1 * ('t2 * unit), 't_rest) sum,
                    ('f1 * ('f2 * unit), 'f_rest) sum) constr_descr =
   fun dir name descr_a descr_b descr_rest ->
-  Descr_Ctor (mk_constructor dummy_loc dir name,
+  Descr_Ctor (mk_constructor dir name,
               ArrayDescr_Cons
                 (descr_a,
                  fun a ->
@@ -1161,7 +1161,7 @@ let ternary_ctor : 't1 'f1 't2 'f2 't3 'f3 't_rest 'f_rest .
                    (('t1 * ('t2 * ('t3 * unit)), 't_rest) sum,
                     ('f1 * ('f2 * ('f3 * unit)), 'f_rest) sum) constr_descr =
   fun dir name descr_a descr_b descr_c descr_rest ->
-  Descr_Ctor (mk_constructor dummy_loc dir name,
+  Descr_Ctor (mk_constructor dir name,
               ArrayDescr_Cons
                 (descr_a,
                  fun a ->
@@ -1172,7 +1172,7 @@ let ternary_ctor : 't1 'f1 't2 'f2 't3 'f3 't_rest 'f_rest .
               descr_rest)
 let quaternary_ctor =
   fun dir name descr_a descr_b descr_c descr_d descr_rest ->
-  Descr_Ctor (mk_constructor dummy_loc dir name,
+  Descr_Ctor (mk_constructor dir name,
               ArrayDescr_Cons
                 (descr_a,
                  fun a ->
@@ -1187,7 +1187,7 @@ let quaternary_ctor =
               descr_rest)
 let quinary_ctor =
   fun dir name descr_a descr_b descr_c descr_d descr_e descr_rest ->
-  Descr_Ctor (mk_constructor dummy_loc dir name,
+  Descr_Ctor (mk_constructor dir name,
               ArrayDescr_Cons
                 (descr_a,
                  fun a ->
@@ -1207,7 +1207,7 @@ let quinary_ctor =
 
 let senary_ctor =
   fun dir name descr_a descr_b descr_c descr_d descr_e descr_f descr_rest ->
-  Descr_Ctor (mk_constructor dummy_loc dir name,
+  Descr_Ctor (mk_constructor dir name,
               ArrayDescr_Cons
                 (descr_a,
                  fun a ->
@@ -1348,7 +1348,7 @@ let ascii_descr : (char, char) constr_descr =
        | Right emp -> emp.elim_empty),
      (fun c -> Left c),
      Descr_Ctor
-       (mk_constructor dummy_loc ["Coq"; "Strings"; "Ascii"] "Ascii",
+       (mk_constructor ["Coq"; "Strings"; "Ascii"] "Ascii",
         (ArrayDescr_Direct
            ((fun args ->
              if List.length args = 8 then
@@ -1394,3 +1394,6 @@ let string_fast_descr : (string, string) constr_descr =
                    CPrim (dummy_loc, String str))))
 
 let mk_string = build_constr_expr string_fast_descr
+
+let mk_string_constr str =
+  fst (Constrintern.interp_constr (Global.env ()) Evd.empty (mk_string str))
