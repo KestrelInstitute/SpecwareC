@@ -316,15 +316,6 @@ Record GeneralModelOf (spec:Spec) : Type :=
     genmod_ctor : SpecCtor genmod_type spec;
     genmod_model : genmod_type -> spec_model spec }.
 
-(* A general model with an instance of the general model's type *)
-Record GeneralModelWithInst (spec:Spec) : Type :=
-  { gmwi_gm : GeneralModelOf spec;
-    gmwi_inst : genmod_type spec gmwi_gm }.
-
-(* Build the nth projection function for a general model *)
-Definition gmwi_proj spec (gmwi: GeneralModelWithInst spec) n :=
-  model_proj spec (genmod_model spec (gmwi_gm spec gmwi) (gmwi_inst spec gmwi)) n.
-
 (* A general spec is a spec plus a general model of it *)
 Record GeneralSpec : Type :=
   { genspec_spec : Spec;
@@ -339,19 +330,19 @@ Definition GMInterpretation gspec1 gspec2 : Type :=
 model of the result spec *)
 Record GMRefinement gspec : Type :=
   { gmref_spec : Spec;
-    gmref_interp : GeneralModelWithInst gmref_spec ->
-                   genmod_type _ (genspec_model gspec) }.
+    gmref_interp : forall R (mod : R -> spec_model gmref_spec) (r:R),
+                     genmod_type _ (genspec_model gspec) }.
 
 (* A general model pushout is a pair of related GMRefinements that unify *)
 Record GMPushout {gspec gspec1 gspec2}
        (i1: GMInterpretation gspec gspec1)
        (i2: GMInterpretation gspec gspec2) : Type :=
   {gmpo_spec: Spec;
-   gmpo_interp1: GeneralModelWithInst gmpo_spec ->
-                 genmod_type _ (genspec_model gspec1);
-   gmpo_interp2: GeneralModelWithInst gmpo_spec ->
-                 genmod_type _ (genspec_model gspec2);
-   gmpo_equal: forall gm, i1 (gmpo_interp1 gm) = i2 (gmpo_interp2 gm) }.
+   gmpo_interp1: forall R (mod : R -> spec_model gmpo_spec) (r:R),
+                   genmod_type _ (genspec_model gspec1);
+   gmpo_interp2: forall R (mod : R -> spec_model gmpo_spec) (r:R),
+                   genmod_type _ (genspec_model gspec2);
+   gmpo_equal: forall R mod r, i1 (gmpo_interp1 R mod r) = i2 (gmpo_interp2 R mod r) }.
 
 
 
