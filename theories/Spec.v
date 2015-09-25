@@ -249,7 +249,53 @@ Fixpoint model_proj spec :
 *)
 
 
-(* Examples of specs *)
+(*** Refinement Based on GeneralModels ***)
+
+(* A "general model" of a spec is a type that can build and be built from models
+of specs. The intent is actually that the type be isomorphic to the models of
+spec, but the full strength of isomorphisms is not really needed. *)
+Record GeneralModelOf (spec:Spec) : Type :=
+  { genmod_type : Type;
+    genmod_ctor : SpecCtor genmod_type spec;
+    genmod_model : genmod_type -> spec_model spec }.
+
+(* A general spec is a spec plus a general model of it *)
+Record GeneralSpec : Type :=
+  { genspec_spec : Spec;
+    genspec_model : GeneralModelOf genspec_spec }.
+
+(* A general model interpretation is a function on the general model types *)
+Definition GMInterpretation gspec1 gspec2 : Type :=
+  genmod_type _ (genspec_model gspec2) ->
+  genmod_type _ (genspec_model gspec1).
+
+(* A general model refinement is like a GMInterpretation but for any general
+model of the result spec *)
+Record GMRefinement gspec : Type :=
+  { gmref_spec : Spec;
+    gmref_interp : forall R (mod : R -> spec_model gmref_spec) (r:R),
+                     genmod_type _ (genspec_model gspec) }.
+
+(* A general model pushout is a pair of related GMRefinements that unify *)
+Record GMPushout {gspec gspec1 gspec2}
+       (i1: GMInterpretation gspec gspec1)
+       (i2: GMInterpretation gspec gspec2) : Type :=
+  {gmpo_spec: Spec;
+   gmpo_interp1: forall R (mod : R -> spec_model gmpo_spec) (r:R),
+                   genmod_type _ (genspec_model gspec1);
+   gmpo_interp2: forall R (mod : R -> spec_model gmpo_spec) (r:R),
+                   genmod_type _ (genspec_model gspec2);
+   gmpo_equal: forall R mod r, i1 (gmpo_interp1 R mod r) = i2 (gmpo_interp2 R mod r) }.
+
+(* Helper for instantiating evars *)
+Definition model_proj_fun_type spec n :=
+  (fun R (mod: R -> spec_model spec) (r:R) => model_proj_type _ (mod r) n).
+Definition model_proj_fun spec n :=
+  (fun R (mod: R -> spec_model spec) (r:R) => model_proj _ (mod r) n).
+
+
+
+(*** Examples ***)
 
 Class MonoidEx (MEx_T: Set) (MEx_zero: MEx_T)
       (MEx_plus: MEx_T -> MEx_T -> MEx_T) : Prop :=
@@ -304,51 +350,10 @@ Definition MonoidEx_model : MonoidEx_Record -> spec_model MonoidEx_Spec :=
                      (MEx_plus_assoc (MonoidEx:=MEx_proofs r))
                      I))))).
 
-
-
-(*** Refinement Based on GeneralModels ***)
-
-(* A "general model" of a spec is a type that can build and be built from models
-of specs. The intent is actually that the type be isomorphic to the models of
-spec, but the full strength of isomorphisms is not really needed. *)
-Record GeneralModelOf (spec:Spec) : Type :=
-  { genmod_type : Type;
-    genmod_ctor : SpecCtor genmod_type spec;
-    genmod_model : genmod_type -> spec_model spec }.
-
-(* A general spec is a spec plus a general model of it *)
-Record GeneralSpec : Type :=
-  { genspec_spec : Spec;
-    genspec_model : GeneralModelOf genspec_spec }.
-
-(* A general model interpretation is a function on the general model types *)
-Definition GMInterpretation gspec1 gspec2 : Type :=
-  genmod_type _ (genspec_model gspec2) ->
-  genmod_type _ (genspec_model gspec1).
-
-(* A general model refinement is like a GMInterpretation but for any general
-model of the result spec *)
-Record GMRefinement gspec : Type :=
-  { gmref_spec : Spec;
-    gmref_interp : forall R (mod : R -> spec_model gmref_spec) (r:R),
-                     genmod_type _ (genspec_model gspec) }.
-
-(* A general model pushout is a pair of related GMRefinements that unify *)
-Record GMPushout {gspec gspec1 gspec2}
-       (i1: GMInterpretation gspec gspec1)
-       (i2: GMInterpretation gspec gspec2) : Type :=
-  {gmpo_spec: Spec;
-   gmpo_interp1: forall R (mod : R -> spec_model gmpo_spec) (r:R),
-                   genmod_type _ (genspec_model gspec1);
-   gmpo_interp2: forall R (mod : R -> spec_model gmpo_spec) (r:R),
-                   genmod_type _ (genspec_model gspec2);
-   gmpo_equal: forall R mod r, i1 (gmpo_interp1 R mod r) = i2 (gmpo_interp2 R mod r) }.
-
-(* Helper for instantiating evars *)
-Definition model_proj_fun_type spec n :=
-  (fun R (mod: R -> spec_model spec) (r:R) => model_proj_type _ (mod r) n).
-Definition model_proj_fun spec n :=
-  (fun R (mod: R -> spec_model spec) (r:R) => model_proj _ (mod r) n).
+Definition MonoidEx_gspec : GeneralSpec :=
+  Build_GeneralSpec MonoidEx_Spec
+                    (Build_GeneralModelOf _ MonoidEx_Record
+                                          MonoidEx_ctor MonoidEx_model).
 
 (* Tests that model_proj has the right type *)
 (*
