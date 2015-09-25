@@ -204,11 +204,49 @@ Definition rpushout12__Pushout : GMPushout rec_interp1 rec_interp2.
         end ])).
   Show Existentials.
   instantiate_spec ?__R.
+  (* instantiate (__R:=Spec_Axioms []). *)
   apply eq_refl.
 Defined.
 
 Print rpushout12__Pushout.
 End rpushout12.
+
+
+
+(*** Trying some refinement now... ***)
+
+Require Import Coq.Arith.Plus.
+
+Definition monoid_nat_ref : GMRefinement MonoidEx_gspec.
+  (raw_evar
+     "__Spec"%string Spec
+     (fun evar =>
+        refine (Build_GMRefinement _ ?__Spec _)));
+  intros R model r;
+  econstructor; constructor.
+  instantiate (MEx_T:=nat).
+  instantiate (MEx_zero:=0).
+  instantiate (MEx_plus:=plus).
+  intro; reflexivity.
+  intro; apply plus_0_r.
+  (* apply plus_assoc.
+  Unshelve. *)
+  instantiate_spec ?__Spec.
+  Show Existentials.
+  Eval compute in (model_proj_fun_type
+                     (Spec_Axioms
+                        [specAxiom "Goal2"
+                                   (forall x y z : nat, x + (y + z) = x + y + z)]) 0
+                     R model).
+  Check (model_proj_fun
+           (Spec_Axioms
+              [specAxiom "Goal2"
+                         (forall x y z : nat, x + (y + z) = x + y + z)]) 0 R model r).
+  instantiate (Goal2:=model_proj_fun
+                        (Spec_Axioms
+                           [specAxiom "Goal2"
+                                      (forall x y z : nat, x + (y + z) = x + y + z)]) 0).
+Defined.
 
 
 (*

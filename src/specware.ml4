@@ -2526,7 +2526,7 @@ TACTIC EXTEND instantiate_spec_tac
               | Term.Evar (ev,args) ->
                  (try
                      let evar_num = index_of (Evar.equal ev) evars in
-                     let _ = if Array.length args != 1 then
+                     let _ = if Array.length args != 3 then
                                raise dummy_loc
                                      (Failure "instantiate_record_type") in
                      Term.mkRel (lifting + evar_num)
@@ -2544,8 +2544,13 @@ TACTIC EXTEND instantiate_spec_tac
                  Term.mkApp
                    (Term.mkConstruct (mk_constructor datatypes_mod "cons"),
                     [| Term.mkInd (mk_inductive specware_mod "SpecAxiom");
-                       replace_evars_with_rels
-                         evars 0 (Evd.evar_concl fev.field_evar_info);
+                       Term.mkApp
+                         (Term.mkConstruct
+                            (mk_constructor specware_mod "specAxiom"),
+                          [| mk_string_constr
+                               (Id.to_string fev.field_evar_id);
+                             replace_evars_with_rels
+                               evars 0 (Evd.evar_concl fev.field_evar_info) |]);
                        rest |]))
                 field_evars_prop
                 (Term.mkApp
@@ -2578,6 +2583,10 @@ TACTIC EXTEND instantiate_spec_tac
               spec_id
               (Tacinterp.default_ist (),
                Detyping.detype true [] env evd spec_constr)
+
+              (*
+            let _ = Pp.msg_info (str "Constr: " ++ Printer.pr_constr spec_constr) in
+            Proofview.tclUNIT () *)
        )]
 END
 
