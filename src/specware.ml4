@@ -2432,6 +2432,7 @@ TACTIC EXTEND instantiate_spec_tac
            (fun gl ->
             let env = Proofview.Goal.env gl in
             let evd = Proofview.Goal.sigma gl in
+            let evd, nf = Evarutil.nf_evars_and_universes evd in
 
             (* Extract the evar we care about from evar_constr *)
             let spec_evar =
@@ -2482,11 +2483,11 @@ TACTIC EXTEND instantiate_spec_tac
                     let field_evar =
                       {field_evar_evar = evar;
                        field_evar_info = info;
-                       field_evar_tp = Evd.evar_concl info;
+                       field_evar_tp = nf (Evd.evar_concl info);
                        field_evar_id = Evd.evar_ident evar evd;
                        field_evar_is_prop =
                          match Retyping.get_sort_family_of
-                                 env evd (Evd.evar_concl info) with
+                                 env evd (nf (Evd.evar_concl info)) with
                          | Sorts.InProp -> true
                          | _ -> false }
                     in
@@ -2521,6 +2522,7 @@ TACTIC EXTEND instantiate_spec_tac
 
             (* Helper to replace evars with local variables, in the types of
                evars when building the Spec object *)
+            (* FIXME: looks like the default lifting here needs to be 1...? *)
             let rec replace_evars_with_rels evars lifting constr =
               match Term.kind_of_term constr with
               | Term.Evar (ev,args) ->
@@ -2529,6 +2531,11 @@ TACTIC EXTEND instantiate_spec_tac
                      let _ = if Array.length args != 3 then
                                raise dummy_loc
                                      (Failure "instantiate_record_type") in
+                     let _ = Pp.msg_info (str "Replacing evar "
+                                          ++ Printer.pr_constr constr
+                                          ++ str (" with variable number "
+                                                  ^ string_of_int (lifting + evar_num)))
+                     in
                      Term.mkRel (lifting + evar_num)
                    with Not_found -> constr)
               | _ ->
@@ -2550,7 +2557,7 @@ TACTIC EXTEND instantiate_spec_tac
                           [| mk_string_constr
                                (Id.to_string fev.field_evar_id);
                              replace_evars_with_rels
-                               evars 0 (Evd.evar_concl fev.field_evar_info) |]);
+                               evars 1 fev.field_evar_tp |]);
                        rest |]))
                 field_evars_prop
                 (Term.mkApp
@@ -2564,7 +2571,7 @@ TACTIC EXTEND instantiate_spec_tac
                            (mk_constructor specware_mod "Spec_Axioms"),
                          [| build_axioms evars |])
               | fev::fevs' ->
-                 let tp = replace_evars_with_rels evars 0 fev.field_evar_tp in
+                 let tp = replace_evars_with_rels evars 1 fev.field_evar_tp in
                  Term.mkApp
                    (Term.mkConstruct (mk_constructor specware_mod "Spec_Cons"),
                     [| mk_string_constr (Id.to_string fev.field_evar_id);
@@ -2579,13 +2586,14 @@ TACTIC EXTEND instantiate_spec_tac
 
             (* Instantiate spec_evar *)
             (* FIXME: instantiate the remaining evars *)
-            Evar_tactics.instantiate_tac_by_name
-              spec_id
-              (Tacinterp.default_ist (),
-               Detyping.detype true [] env evd spec_constr)
+            Proofview.tclTHEN
+              (Evar_tactics.instantiate_tac_by_name
+                 spec_id
+                 (Tacinterp.default_ist (),
+                  Detyping.detype true [] env evd spec_constr))
+              (Proofview.V82.nf_evar_goals)
 
-              (*
-            let _ = Pp.msg_info (str "Constr: " ++ Printer.pr_constr spec_constr) in
+            (* let _ = Pp.msg_info (str "Constr: " ++ Printer.pr_constr spec_constr) in
             Proofview.tclUNIT () *)
        )]
 END

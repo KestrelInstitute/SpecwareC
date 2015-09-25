@@ -217,13 +217,35 @@ End rpushout12.
 
 Require Import Coq.Arith.Plus.
 
-Definition monoid_nat_ref : GMRefinement MonoidEx_gspec.
+Ltac start_refinement :=
   (raw_evar
      "__Spec"%string Spec
      (fun evar =>
         refine (Build_GMRefinement _ ?__Spec _)));
   intros R model r;
   econstructor; constructor.
+
+
+Definition monoid_nat_ref0 : GMRefinement MonoidEx_gspec.
+  start_refinement.
+  instantiate_spec ?__Spec.
+  (* instantiate (__Spec:=(Spec_Axioms
+               [specAxiom "Goal2"
+                  (forall x y z : nat, x + (y + z) = x + y + z)])). *)
+  instantiate (MEx_T:=model_proj_fun _ 0 R model r).
+  instantiate (MEx_plus:=model_proj_fun _ 1 R model r).
+  instantiate (MEx_zero:=model_proj_fun _ 2 R model r).
+  Show Existentials.
+
+  instantiate (Goal2:=model_proj_fun
+                        (Spec_Axioms
+                           [specAxiom "Goal2"
+                                      (forall x y z : nat, x + (y + z) = x + y + z)]) 0
+                        R model r).
+Defined.
+
+Definition monoid_nat_ref1 : GMRefinement MonoidEx_gspec.
+  start_refinement.
   instantiate (MEx_T:=nat).
   instantiate (MEx_zero:=0).
   instantiate (MEx_plus:=plus).
@@ -232,21 +254,16 @@ Definition monoid_nat_ref : GMRefinement MonoidEx_gspec.
   (* apply plus_assoc.
   Unshelve. *)
   instantiate_spec ?__Spec.
-  Show Existentials.
-  Eval compute in (model_proj_fun_type
-                     (Spec_Axioms
-                        [specAxiom "Goal2"
-                                   (forall x y z : nat, x + (y + z) = x + y + z)]) 0
-                     R model).
-  Check (model_proj_fun
-           (Spec_Axioms
-              [specAxiom "Goal2"
-                         (forall x y z : nat, x + (y + z) = x + y + z)]) 0 R model r).
+  (* instantiate (__Spec:=(Spec_Axioms
+               [specAxiom "Goal2"
+                  (forall x y z : nat, x + (y + z) = x + y + z)])). *)
   instantiate (Goal2:=model_proj_fun
                         (Spec_Axioms
                            [specAxiom "Goal2"
-                                      (forall x y z : nat, x + (y + z) = x + y + z)]) 0).
+                                      (forall x y z : nat, x + (y + z) = x + y + z)]) 0
+                        R model r).
 Defined.
+
 
 
 (*
