@@ -824,8 +824,8 @@ type spec_translation_elem =
 type spec_translation = spec_translation_elem list
 
 (* Translate an id using a single translation_elem, returning None if the
-translation_elem had no effect; same as translate_field1 in Spec.v *)
-let translate_field1 xlate_elem f =
+translation_elem had no effect; same as translate_id1 in Spec.v *)
+let translate_id1 xlate_elem f =
   match xlate_elem with
   | XlateSingle (f_from, f_to) ->
      if Id.equal f f_from then
@@ -836,13 +836,13 @@ let translate_field1 xlate_elem f =
       | None -> None
       | Some f_suf -> Some (Id.of_string (to_prefix ^ f_suf)))
 
-(* Translate an id; this is the same as translate_field in Spec.v *)
-let rec translate_field xlate f =
+(* Translate an id; this is the same as translate_id in Spec.v *)
+let rec translate_id xlate f =
   match xlate with
   | [] -> f
   | elem::xlate' ->
-     (match translate_field1 elem f with
-      | None -> translate_field xlate' f
+     (match translate_id1 elem f with
+      | None -> translate_id xlate' f
       | Some res -> res)
 
 
@@ -863,7 +863,7 @@ let rec apply_interp_map top_loc interp_map f =
   match interp_map with
   | [] -> mk_var (top_loc, f)
   | (InterpMapXlate (xloc, xelem))::interp_map' ->
-     (match translate_field1 xelem f with
+     (match translate_id1 xelem f with
       | Some f' -> mk_var (xloc, f')
       | None -> apply_interp_map top_loc interp_map' f)
   | (InterpMapTerm (f_from, expr_to))::interp_map' ->
