@@ -28,7 +28,7 @@ Spec End Monoid.
 
 Print Monoid.Monoid.
 Print Monoid.Monoid__Spec.
-Print Monoid.Monoid__Iso.
+(* Print Monoid.Monoid__Iso. *)
 
 
 (***
@@ -60,11 +60,17 @@ End Monoid_Thms.
 
 Spec Group.
 
-Spec Import Monoid {m_% +-> g_%}.
+(* Spec Import Monoid {m_% +-> g_%}. *)
+Spec Import Monoid.
+Spec Import Monoid.
 
 Spec Variable g_inv : (T -> T).
+(*
 Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
 Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
+*)
+Spec Axiom g_inv_left : (forall (x:T), m_plus (g_inv x) x = m_zero).
+Spec Axiom g_inv_right : (forall (x:T), m_plus x (g_inv x) = m_zero).
 
 Spec End Group.
 

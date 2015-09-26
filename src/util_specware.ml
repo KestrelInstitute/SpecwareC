@@ -316,7 +316,7 @@ let has_suffix id suffix =
     suffix = String.sub str (str_len - suffix_len) suffix_len
 
 (* Append a suffix to an Id, with "__" in between *)
-let add_suffix id suffix = Nameops.add_suffix id suffix
+let add_suffix id suffix = Nameops.add_suffix id ("__" ^ suffix)
 
 (* Append a suffix to an lident, with "__" in between *)
 let add_suffix_l lid suffix =
@@ -859,14 +859,14 @@ let constr_is_inductive ind constr =
   | _ -> false
 
 (* Build the expression t1 = t2 *)
-let mk_equality t1 t2 =
-  CApp (dummy_loc,
+let mk_equality loc t1 t2 =
+  CApp (loc,
         (None, mk_reference ["Coq"; "Init"; "Logic"] "eq"),
         [(t1, None); (t2, None)])
 
 (* Build the expression id1 = id2 for identifiers id1 and id2 *)
-let mk_ident_equality id1 id2 =
-  mk_equality (mk_var id1) (mk_var id2)
+let mk_ident_equality loc id1 id2 =
+  mk_equality loc (mk_var id1) (mk_var id2)
 
 (* Check that two terms are definitionally equal relative to the given
    parameter list, by checking that (forall params, eq_refl : t1=t2)
@@ -882,7 +882,7 @@ let check_equal_term params t1 t2 =
                                 (None, mk_reference
                                          ["Coq"; "Init"; "Logic"] "eq_refl"),
                                 [(t1, None)]),
-                          CastConv (mk_equality t1 t2)))))
+                          CastConv (mk_equality dummy_loc t1 t2)))))
   in
   let _ = debug_printf 2 "@[check_equal_term command:@ %a@]\n" pp_vernac cmd in
   try interp (dummy_loc, cmd); true
