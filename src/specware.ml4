@@ -85,6 +85,10 @@ let spec_iso_id s_id = add_suffix s_id "Iso"
 let spec_import_id i =
   add_suffix (Id.of_string "spec") ("import" ^ string_of_int i)
 
+(* The Id for the record type of a spec *)
+let spec_record_id spec_id =
+  add_suffix spec_id "Record"
+
 (* Get the Id for the spec_model for import number i *)
 let spec_import_model_id i =
   add_suffix (Id.of_string "spec_model") ("import" ^ string_of_int i)
@@ -858,19 +862,66 @@ type interp_map_elem =
   | InterpMapTerm of Id.t * constr_expr
 type interp_map = interp_map_elem list
 
-(* Apply an interp_map to an identifier *)
-let rec apply_interp_map top_loc interp_map f =
+(* Apply an interp_map to an identifier, returning None if the identifier is not
+explicitly mapped to a term *)
+let rec apply_interp_map interp_map f =
   match interp_map with
-  | [] -> mk_var (top_loc, f)
+  | [] -> None
   | (InterpMapXlate (xloc, xelem))::interp_map' ->
      (match translate_id1 xelem f with
-      | Some f' -> mk_var (xloc, f')
-      | None -> apply_interp_map top_loc interp_map' f)
+      | Some f' -> Some (mk_var (xloc, f'))
+      | None -> apply_interp_map interp_map' f)
   | (InterpMapTerm (f_from, expr_to))::interp_map' ->
-     if Id.equal f f_from then expr_to else
-       apply_interp_map top_loc interp_map' f
+     if Id.equal f f_from then Some expr_to else
+       apply_interp_map interp_map' f
 
-(* FIXME HERE NOW: do interpretations! *)
+(* Build an expression that maps from the record type of codom_globref to that
+of dom_globref, mapping fields in dom_globref using interp_map *)
+let make_interp_expr loc dom_globref codom_globref interp_map =
+  let dom_spec = lookup_global_spec dom_globref in
+  let dom_locref = spec_globref_to_locref dom_globref in
+  let codom_spec = lookup_global_spec codom_globref in
+  let codom_locref = spec_globref_to_locref codom_globref in
+  let lname_of_specf specf = (loc, Name specf.field_id) in
+  mkCLambdaN
+    loc
+    [LocalRawAssum ([loc, Name (Id.of_string "__r")],
+                    Default Explicit, mk_hole loc)]
+    (CLetTuple
+       (loc,
+        List.rev_map lname_of_specf codom_spec.spec_ops
+        @ [loc, Name (Id.of_string "__proofs")],
+        (None, None),
+        mk_var (loc, Id.of_string "__r"),
+        (CLetTuple
+           (loc,
+            List.rev_map
+              lname_of_specf
+              (spec_import_axioms codom_spec @ codom_spec.spec_axioms),
+            (None, None),
+            mk_var (loc, Id.of_string "__proofs"),
+            (CRecord
+               (loc, None,
+                List.rev_map
+                  (fun specf ->
+                   let t =
+                     match apply_interp_map interp_map specf.field_id with
+                     | Some t -> t
+                     | None ->
+                        if List.exists (fun specf' ->
+                                        Id.equal specf.field_id specf'.field_id)
+                                       codom_spec.spec_ops
+                        then
+                          mk_var (loc, specf.field_id)
+                        else
+                          mk_hole loc
+                   in
+                   (Qualid (loc, field_in_spec dom_locref specf.field_id), t))
+                  dom_spec.spec_ops
+                @ [Qualid (loc, field_in_spec dom_locref (Id.of_string "__proofs")),
+                   (* FIXME HERE: try to fill out the proofs as well *)
+                   mk_hole loc]))
+    ))))
 
 
 (***
@@ -964,7 +1015,7 @@ let complete_spec loc spec =
   (* Build the spec representation spec__Spec *)
   let _ = add_definition_constr (spec_repr_id spec.spec_name) None
                                 (build_spec_repr loc spec) in
-  (* FIXME HERE NOW: add back the Iso proof!! *)
+  (* FIXME HERE NOW: add the Record type and GeneralSpec *)
   (*
   (* Build spec__ops {op_params} : spec_ops spec__Spec *)
   let _ = add_definition
@@ -1903,57 +1954,3 @@ VERNAC COMMAND EXTEND Print_registered_spec
                str (Names.ModPath.to_string globref))
               (MPmap.bindings !spec_table)) ]
 END
-
-
-(* FIXME: why does this need an argument in order to work...? *)
-(*
-TACTIC EXTEND pushout_tactics
-  | [ "pushout_tactic" constr(s) ]
-    -> [ Proofview.Goal.nf_enter
-           (fun gl ->
-            reporting_exceptions
-              (fun () ->
-               (* Get the current proof state *)
-               let env = Proofview.Goal.env gl in
-               let evd = Proofview.Goal.sigma gl in
-               let evdref = ref evd in
-               let concl = Proofview.Goal.concl gl in
-
-               (* Make sure we have Pushout as the goal, and extract the two
-               functions we are trying to unify and their co-domains *)
-               let (dom_constr, codom_constr1, codom_constr2,
-                    f_constr1, f_constr2) =
-                 match Term.kind_of_term concl with
-                 | Term.App (head, [| dom_constr; codom_constr1; codom_constr2;
-                                      f_constr1; f_constr2 |])
-                      when constr_is_inductive
-                             (mk_inductive specware_mod "Pushout") head ->
-                    (dom_constr, codom_constr1, codom_constr2,
-                     f_constr1, f_constr2)
-                 | _ ->
-                    (* FIXME: is this the right way to fail...? *)
-                    raise
-                      dummy_loc
-                      (Refiner.FailError
-                         (0, lazy (str "pushout_tactic applied to a non-Pushout goal")))
-               in
-               (* let (dom_ops,dom_axioms) = destruct_constr spec_descr dom_constr in *)
-               let (codom1_ops,codom1_axioms) =
-                 destruct_constr
-                   spec_descr
-                   (hnf_constr ~env_opt:(Some env) ~evdref_opt:(Some evdref)
-                               codom_constr1) in
-               let (codom2_ops,codom2_axioms) =
-                 destruct_constr
-                   spec_descr
-                   (hnf_constr ~env_opt:(Some env) ~evdref_opt:(Some evdref)
-                               codom_constr2) in
-
-               
-
-               (* FIXME HERE NOW: do this!! *)
-               Proofview.tclUNIT ()
-           ))]
-
-END
- *)
