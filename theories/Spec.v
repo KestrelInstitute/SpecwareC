@@ -332,7 +332,7 @@ Definition MonoidEx_Spec : Spec :=
 
 Definition MonoidEx_ctor : SpecCtor MonoidEx_Record MonoidEx_Spec :=
   fun T zero plus pf1 pf2 pf3 =>
-    Build_MonoidEx_Record T zero plus (Build_MonoidEx _ _ _ pf1 pf2 pf3).
+    Build_MonoidEx_Record T zero plus (Build_MonoidEx T zero plus pf1 pf2 pf3).
 
 Definition MonoidEx_model : MonoidEx_Record -> spec_model MonoidEx_Spec :=
   fun r =>

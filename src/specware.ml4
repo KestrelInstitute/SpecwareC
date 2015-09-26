@@ -69,11 +69,23 @@ let match_proof_param_id id =
 (* The name of the instance associated with a field *)
 let field_inst_id f = add_suffix f "inst"
 
-(* The axiom typeclass field pointing to an instance of this axiom *)
-let field_axelem_id f = add_suffix f "axiom"
+(* The name of the record field associated with spec field named f *)
+let field_recfield_id f = add_suffix f "field"
 
 (* The name of the Spec representation of a spec named s_id *)
 let spec_repr_id s_id = add_suffix s_id "Spec"
+
+(* The name of the typeclass field in the record type of a spec named s_id *)
+let spec_proofs_id s_id = add_suffix s_id "proofs"
+
+(* The name of the record type of a spec named s_id *)
+let spec_rectp_id s_id = add_suffix s_id "Record"
+
+(* The name of the constructor for the record type of a spec named s_id *)
+let spec_recctor_id s_id = Nameops.add_prefix "Build_" (spec_rectp_id s_id)
+
+(* The name of the SpecCtor for a spec named s_id *)
+let spec_ctor_id s_id = add_suffix s_id "ctor"
 
 (* The name of the parameteric model constructor for a spec named s_id *)
 let spec_model_id s_id = add_suffix s_id "model"
@@ -258,14 +270,26 @@ type constr_spec_field = Constr.t spec_field
 
 let spec_field_class_id specf = field_class_id specf.field_id
 let spec_field_param_id specf = field_param_id specf.field_id
+let spec_field_param_var loc specf = mk_var (loc, spec_field_param_id specf)
 
+(* Build a parameter / assumption for a spec_field *)
+let param_of_spec_field ?(implicit=true) loc specf =
+  (if implicit then mk_implicit_assum else mk_explicit_assum)
+    (spec_field_param_id specf)
+    (mk_var (loc, spec_field_class_id specf))
+
+(* Build a record field for a spec_field *)
+let recfield_of_spec_field loc coercion_p specf =
+  ((loc, field_recfield_id specf.field_id),
+   mk_var (loc, spec_field_class_id specf),
+   coercion_p)
 
 (* A spec contains its name, its module path, its ops, its axioms, and its
 imports. Note that ops and axioms --- collectively called the "fields" of the
 spec --- are stored in reverse order, for efficiency of adding new ones. *)
 type spec = {
   spec_name: Id.t;
-  spec_mod: ModPath.t;
+  spec_globref: spec_globref;
   spec_ops: expr_spec_field list;
   spec_axioms: expr_spec_field list;
   spec_imports: spec_import list
@@ -311,8 +335,8 @@ let lambda_ops loc (ops : constr_expr op list) body : constr_expr =
  *)
 
 (* Create an empty spec with the given name in the current module *)
-let make_empty_spec spec_id spec_mod =
-  { spec_name = spec_id; spec_mod = spec_mod;
+let make_empty_spec spec_id spec_globref =
+  { spec_name = spec_id; spec_globref = spec_globref;
     spec_ops = []; spec_axioms = []; spec_imports = [] }
 
 (* Whether spec contains an op or axiom named id *)
@@ -325,8 +349,8 @@ let spec_field_of_import imp =
   {field_id = spec_import_id imp.spec_import_num;
    field_type = imp.spec_import_type}
 
-(* Return the imports of spec as axioms *)
-let spec_import_axioms spec =
+(* Return the imports of spec as spec_fields *)
+let spec_import_fields spec =
   List.map spec_field_of_import spec.spec_imports
 
 (* Find an unused import number in spec *)
@@ -346,6 +370,16 @@ let field_param_deps id =
          with Not_found -> false)
      | None -> false)
     (implicit_arg_ids gr)
+
+(* Build an expression for the typeclass of spec applied to named parameters *)
+let spec_typeclass_expr_params loc spec =
+  mk_ref_app_named_args
+    loc
+    (global_spec_typeclass_ref loc spec.spec_globref)
+    (List.rev_map (fun opf ->
+                   (spec_field_param_id opf,
+                    mk_var (loc, spec_field_param_id opf)))
+                  spec.spec_ops)
 
 
 (***
@@ -405,20 +439,18 @@ let spec_table = Summary.ref ~name:"spec_table" (MPmap.empty)
 
 (* Add a reference to the spec_table *)
 let add_specref specref =
-  spec_table := MPmap.add (!specref).spec_mod specref !spec_table
+  spec_table := MPmap.add (!specref).spec_globref specref !spec_table
 
 (* Constructor for persistent references to spec objects *)
 let inSpec =
   Libobject.declare_object
     {(Libobject.default_object "SPEC") with
       Libobject.cache_function =
-        (fun (_,specref) -> msg_info (str "Cache"); add_specref specref);
+        (fun (_,specref) -> add_specref specref);
       Libobject.load_function = (fun _ (_,specref) -> add_specref specref);
       Libobject.open_function = (fun _ (_,specref) -> add_specref specref);
       Libobject.discharge_function = (fun (_,specref) -> Some specref);
-      Libobject.classify_function =
-        (fun specref ->
-         msg_info (str "Classify"); Libobject.Keep specref)
+      Libobject.classify_function = (fun specref -> Libobject.Keep specref)
     }
 
 (* Declare a module to be a spec *)
@@ -525,7 +557,7 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
   let spec_expr =
     build_constr_expr spec_descr
                       (List.rev spec.spec_ops,
-                       List.rev (spec_import_axioms spec @ spec.spec_axioms)) in
+                       List.rev (spec_import_fields spec @ spec.spec_axioms)) in
   let _ = debug_printf 1 "@[build_spec_repr (1):@ %a@]\n"
                        pp_constr_expr spec_expr in
   (* Internalize spec_expr into a construction *)
@@ -782,15 +814,7 @@ let add_spec_import r =
 
   (* Build the type of the import, which is the import's typeclass applied to
   all of its ops *)
-  let import_tp =
-    mk_ref_app_named_args
-      loc
-      (spec_typeclass_ref loc locref)
-      (List.rev_map
-         (fun specf -> (spec_field_param_id specf,
-                        mk_var (loc, spec_field_param_id specf)))
-         spec.spec_ops)
-  in
+  let import_tp = spec_typeclass_expr_params loc spec in
 
   (* Add all the ops of the imported spec that are not already present *)
   let _ = List.iter
@@ -890,16 +914,16 @@ let make_interp_expr loc dom_globref codom_globref interp_map =
     (CLetTuple
        (loc,
         List.rev_map lname_of_specf codom_spec.spec_ops
-        @ [loc, Name (Id.of_string "__proofs")],
+        @ [loc, Name (spec_proofs_id codom_spec.spec_name)],
         (None, None),
         mk_var (loc, Id.of_string "__r"),
         (CLetTuple
            (loc,
             List.rev_map
               lname_of_specf
-              (spec_import_axioms codom_spec @ codom_spec.spec_axioms),
+              (spec_import_fields codom_spec @ codom_spec.spec_axioms),
             (None, None),
-            mk_var (loc, Id.of_string "__proofs"),
+            mk_var (loc, spec_proofs_id dom_spec.spec_name),
             (CRecord
                (loc, None,
                 List.rev_map
@@ -918,7 +942,9 @@ let make_interp_expr loc dom_globref codom_globref interp_map =
                    in
                    (Qualid (loc, field_in_spec dom_locref specf.field_id), t))
                   dom_spec.spec_ops
-                @ [Qualid (loc, field_in_spec dom_locref (Id.of_string "__proofs")),
+                @ [Qualid (loc,
+                           field_in_spec dom_locref
+                                         (spec_proofs_id dom_spec.spec_name)),
                    (* FIXME HERE: try to fill out the proofs as well *)
                    mk_hole loc]))
     ))))
@@ -986,75 +1012,62 @@ let import_spec_term loc st =
    this needs to be called after the spec's section is closed, but before its
    module is closed. *)
 let complete_spec loc spec =
-  (* First, build the axioms into fields for the axiom type-class *)
-  let ax_fields =
-    (List.rev_map
-       (fun axf -> ((loc, field_axelem_id axf.field_id),
-                    mk_var (loc, field_class_id axf.field_id),
-                    true))
-       spec.spec_axioms)
-    @ (List.rev_map
-         (fun imp ->
-          ((loc, spec_import_id imp.spec_import_num),
-           imp.spec_import_type,
-           true))
-         spec.spec_imports)
+
+  (* Build parameters for all the ops and the axioms, where the latter include
+  all the imports as well *)
+  let op_params = List.rev_map (param_of_spec_field loc) spec.spec_ops in
+  let all_axioms = spec_import_fields spec @ spec.spec_axioms in
+  let ax_params = List.rev_map (param_of_spec_field loc) all_axioms in
+
+  (* Create the spec typeclass *)
+  let _ = add_typeclass
+            (loc, spec.spec_name) false true op_params
+            (List.rev_map (recfield_of_spec_field loc true) all_axioms)
   in
-  (* Next, build parameters for all the ops. NOTE: we do this explicitly, rather
-  than implicitly relying on the context, so that we can ensure all of the ops
-  become params *)
-  let op_params =
-    List.rev_map
-      (fun opf ->
-       let op_id = opf.field_id in
-       mk_implicit_assum (field_param_id op_id)
-                         (mk_var (loc, field_class_id op_id)))
-      spec.spec_ops
+
+  (* Create the record type spec__Record *)
+  let _ =
+    add_record_type
+      (loc, spec_rectp_id spec.spec_name) (Some type_expr) []
+      (List.rev_map (recfield_of_spec_field loc false) spec.spec_ops
+       @ [(loc, spec_proofs_id spec.spec_name),
+          mk_id_app_named_args
+            loc spec.spec_name
+            (List.rev_map (fun specf ->
+                           (spec_field_param_id specf,
+                            mk_var (loc, field_recfield_id specf.field_id)))
+                          spec.spec_ops),
+          false])
   in
-  let _ = add_typeclass (loc, spec.spec_name) false true op_params ax_fields in
+
   (* Build the spec representation spec__Spec *)
   let _ = add_definition_constr (spec_repr_id spec.spec_name) None
                                 (build_spec_repr loc spec) in
-  (* FIXME HERE NOW: add the Record type and GeneralSpec *)
-  (*
-  (* Build spec__ops {op_params} : spec_ops spec__Spec *)
-  let _ = add_definition
-            (loc, spec_ops_id spec.spec_name)
-            op_params
-            (Some mkAppC (mk_specware_ref "spec_ops",
-                          [mk_var (loc, spec_repr_id spec.spec_name)]))
-            (make_ops_constr_expr loc (List.rev spec.spec_ops))
-  in
-  (* Build a proof spec__iso that spec__Spec is isomorphic to the spec *)
-  let _ = add_term_instance
-            (loc, Name spec_iso_id spec.spec_name)
-            op_params
-            (mkAppC (mk_specware_ref "IsoToSpecModels",
-                     [mk_var (loc, spec_ops_id spec.spec_name);
-                      CAppExpl
-                        (loc, (None, Ident (loc, spec.spec_name), None),
-                         List.concat
-                           (List.rev_map
-                              (fun op ->
-                               List.map (fun id -> mk_var (loc, id))
-                                        (op_param_ids op))
-                              spec.spec_ops))]))
-            (mk_named_tactic_hole
-               loc
-               (mk_qualid specware_mod "prove_spec_models_iso"))
-  in
-   *)
 
-  (* Add all hints in the import list to the current module *)
-  (* let _ = List.iter (add_import_group_hints loc) spec.spec_imports in *)
-
-  (* Register the current spec *)
-  (*
-  let spec_globref =
-    global_modpath (Nametab.locate (qualid_of_ident spec.spec_name))
+  (* Build the SpecCtor for spec *)
+  let _ =
+    add_definition
+      (loc, spec_ctor_id spec.spec_name)
+      []
+      (Some (mkAppC (mk_specware_ref "SpecCtor",
+                     [mk_var (loc, spec_rectp_id spec.spec_name);
+                      mk_var (loc, spec_repr_id spec.spec_name)])))
+      (mkCLambdaN
+         loc
+         (List.rev_map (param_of_spec_field ~implicit:false loc)
+                       (all_axioms @ spec.spec_ops))
+         (mkAppC
+            (mk_var (loc, spec_recctor_id spec.spec_name),
+             List.rev_map (spec_field_param_var loc) spec.spec_ops
+             @ [mkAppC
+                  (mk_var (loc, Nameops.add_prefix "Build_" spec.spec_name),
+                   List.rev_map (spec_field_param_var loc)
+                                (all_axioms @ spec.spec_ops))])))
   in
-  let _ = register_spec spec_globref spec in
-   *)
+
+  (* Build the GeneralSpec spec__GSpec for spec *)
+
+  (* FIXME HERE NOW: finish the GeneralSpec *)
   ()
 
 (* Start the interactive definition of a new spec *)

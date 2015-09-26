@@ -631,7 +631,22 @@ let add_definition_constr id type_opt (body, uctx) =
     id (Local, false, Definition) def_entry []
     (Lemmas.mk_hook (fun _ x -> x))
 
-(* Add a record definition using constrs *)
+(* Add a record type definition *)
+let add_record_type lid sort_opt params fields =
+  let cmd =
+    VernacInductive
+      (false, BiFinite,
+       [((false, lid), params, sort_opt, Record,
+         RecordDecl (None, List.map mk_record_field fields)),
+        []])
+  in
+  let _ = debug_printf 1 "@[add_record_type command:@ %a@]\n" pp_vernac cmd in
+  Record.definition_structure
+    (Record, false, BiFinite, (false, lid), params,
+     List.map mk_record_field fields,
+     Nameops.add_prefix "Build_" (located_elem lid), sort_opt)
+
+(* Add a record type definition using constrs *)
 let add_record_type_constr evd id sort params fields =
   Record.declare_structure
     BiFinite false (Evd.universe_context evd) id
