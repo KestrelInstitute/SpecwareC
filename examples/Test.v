@@ -60,17 +60,11 @@ End Monoid_Thms.
 
 Spec Group.
 
-(* Spec Import Monoid {m_% +-> g_%}. *)
-Spec Import Monoid.
-Spec Import Monoid.
+Spec Import Monoid {m_% +-> g_%}.
 
 Spec Variable g_inv : (T -> T).
-(*
 Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
 Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
-*)
-Spec Axiom g_inv_left : (forall (x:T), m_plus (g_inv x) x = m_zero).
-Spec Axiom g_inv_right : (forall (x:T), m_plus x (g_inv x) = m_zero).
 
 Spec End Group.
 
@@ -101,7 +95,7 @@ Qed.
 Lemma g_left_id_uniq2 (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
   intros left_id.
   rewrite <- (left_id g_zero).
-  rewrite g_zero_right.
+  rewrite (Monoid.m_zero_right (m_zero_right__class:=Monoid.m_zero_right__field)).
   reflexivity.
 Qed.
 

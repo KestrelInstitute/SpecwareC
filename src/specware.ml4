@@ -1039,7 +1039,7 @@ let add_spec_import_map r interp_map =
          | Some e -> e
          | None -> mk_var (loc, opf.field_id)
        in
-       let (unfolds, folds) =
+       let (op_expr, unfolds, folds) =
          match op_expr with
          | CRef (Ident (_, op_id), None) ->
             (* Apply the op's original class to the existing args *)
@@ -1061,8 +1061,9 @@ let add_spec_import_map r interp_map =
             let _ = add_spec_field ~err_on_exists:false false (loc, op_id) tp in
             (* Add the fold (f__param, @f f__param) to the folds list *)
             let folds = (field_param_id op_id, mk_var (loc, op_id))::folds in
-            (unfolds, folds)
-         | _ -> (unfolds, folds)
+            (* FIXME HERE NOW: add an instance of the old op...? *)
+            (mk_var (loc, field_param_id op_id), unfolds, folds)
+         | _ -> (op_expr, unfolds, folds)
        in
        (ops_alist @ [spec_field_param_id opf, op_expr], unfolds, folds))
       spec.spec_ops ([],[],[])
