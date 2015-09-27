@@ -393,7 +393,6 @@ let field_param_deps id =
 (* Build an expression for the typeclass of spec applied to named parameters *)
 let spec_typeclass_expr_params loc spec =
   mk_ref_app_named_args
-    loc
     (global_spec_typeclass_ref loc spec.spec_globref)
     (List.rev_map (fun opf ->
                    (spec_field_param_id opf,
@@ -766,98 +765,6 @@ let rec make_model_constr_expr loc axioms =
 
 
 (***
- *** Building Up the Current Spec
- ***)
-
-(* Get the current spec, raising an exception if there is none *)
-let get_current_spec loc =
-  try lookup_global_spec (Lib.current_mp ())
-  with NoSuchSpec _ ->
-    raise loc NoCurrentSpec
-
-(* Update the current spec, if it exists, by applying f *)
-let update_current_spec loc f =
-  try
-    let specref = lookup_global_spec_ref (Lib.current_mp ()) in
-    specref := f !specref
-  with NoSuchSpec _ ->
-    raise loc NoCurrentSpec
-
-(* Add a field (op or axiom) to the current spec *)
-let add_spec_field ?(err_on_exists=true) axiom_p lid tp =
-  (* Extract the field id and loc from field_name *)
-  let f = located_elem lid in
-  let loc = located_loc lid in
-  let specf = {field_id = f; field_type = tp} in
-
-  update_current_spec
-    loc
-    (fun spec ->
-     (* First, check that the given field name does not already exist *)
-     if contains_field spec f then
-       if err_on_exists then raise loc (FieldExists f)
-       else spec
-     else
-
-       (* Check that we are not adding an op when axioms are present *)
-       let _ =
-         match axiom_p, spec.spec_axioms with
-         | false, _::_ -> raise loc AxiomsExist
-         | _ -> ()
-       in
-
-       (* Add the operational type-class f__class := acc : tp *)
-       let _ = add_typeclass (loc, field_class_id f) true axiom_p []
-                             [((loc, f), tp, false)]
-       in
-
-       (* Add an instance of the type-class to the context *)
-       let _ =
-         add_to_context [mk_implicit_assum
-                           (field_param_id f)
-                           (mk_var (loc, field_class_id f))]
-       in
-
-       (* Then, finally, add the field to the current spec *)
-       if axiom_p then
-         { spec with spec_axioms = specf::spec.spec_axioms }
-       else
-         { spec with spec_ops = specf::spec.spec_ops }
-    )
-
-
-(* Add an import to the current spec, given by a reference *)
-let add_spec_import r =
-  let (loc, locref) = qualid_of_reference r in
-  let (spec, globref) = lookup_spec_and_globref locref in
-
-  (* Build the type of the import, which is the import's typeclass applied to
-  all of its ops *)
-  let import_tp = spec_typeclass_expr_params loc spec in
-
-  (* Add all the ops of the imported spec that are not already present *)
-  let _ = List.iter
-            (fun specf ->
-             add_spec_field ~err_on_exists:false false
-                            (loc, specf.field_id) specf.field_type)
-            (List.rev spec.spec_ops)
-  in
-
-  (* Finally, add the import *)
-  update_current_spec
-    loc
-    (fun spec ->
-     let imp_num = find_unused_import_id spec in
-     let imp = {spec_import_num = imp_num;
-                spec_import_spec = spec;
-                spec_import_globref = globref;
-                spec_import_type = import_tp} in
-
-     {spec with spec_imports = imp::spec.spec_imports}
-    )
-
-
-(***
  *** Spec Translations
  ***)
 
@@ -904,6 +811,8 @@ type interp_map_elem =
   (* Map a name to an expression *)
   | InterpMapTerm of Id.t * constr_expr
 type interp_map = interp_map_elem list
+
+let empty_interp_map = []
 
 (* Apply an interp_map to an identifier, returning None if the identifier is not
 explicitly mapped to a term *)
@@ -1020,6 +929,162 @@ let refinement_expr_of_spec_term st =
 (* Import a spec_term *)
 let import_spec_term loc st =
   raise loc (Failure "import_spec_term")
+
+
+(***
+ *** Building Up the Current Spec
+ ***)
+
+(* Get the current spec, raising an exception if there is none *)
+let get_current_spec loc =
+  try lookup_global_spec (Lib.current_mp ())
+  with NoSuchSpec _ ->
+    raise loc NoCurrentSpec
+
+(* Update the current spec, if it exists, by applying f *)
+let update_current_spec loc f =
+  try
+    let specref = lookup_global_spec_ref (Lib.current_mp ()) in
+    specref := f !specref
+  with NoSuchSpec _ ->
+    raise loc NoCurrentSpec
+
+(* Add a field (op or axiom) to the current spec *)
+let add_spec_field ?(err_on_exists=true) axiom_p lid tp =
+  (* Extract the field id and loc from field_name *)
+  let f = located_elem lid in
+  let loc = located_loc lid in
+  let specf = {field_id = f; field_type = tp} in
+
+  update_current_spec
+    loc
+    (fun spec ->
+     (* First, check that the given field name does not already exist *)
+     if contains_field spec f then
+       if err_on_exists then raise loc (FieldExists f)
+       else spec
+     else
+
+       (* Check that we are not adding an op when axioms are present *)
+       let _ =
+         match axiom_p, spec.spec_axioms with
+         | false, _::_ -> raise loc AxiomsExist
+         | _ -> ()
+       in
+
+       (* Add the operational type-class f__class := acc : tp *)
+       let _ = add_typeclass (loc, field_class_id f) true axiom_p []
+                             [((loc, f), tp, false)]
+       in
+
+       (* Add an instance of the type-class to the context *)
+       let _ =
+         add_to_context [mk_implicit_assum
+                           (field_param_id f)
+                           (mk_var (loc, field_class_id f))]
+       in
+
+       (* Then, finally, add the field to the current spec *)
+       if axiom_p then
+         { spec with spec_axioms = specf::spec.spec_axioms }
+       else
+         { spec with spec_ops = specf::spec.spec_ops }
+    )
+
+
+(* Add an import to the current spec, given by a reference *)
+let add_spec_import r =
+  let (loc, locref) = qualid_of_reference r in
+  let (spec, globref) = lookup_spec_and_globref locref in
+
+  (* Build the type of the import, which is the import's typeclass applied to
+  all of its ops *)
+  let import_tp = spec_typeclass_expr_params loc spec in
+
+  (* Add all the ops of the imported spec that are not already present *)
+  let _ = List.iter
+            (fun specf ->
+             add_spec_field ~err_on_exists:false false
+                            (loc, specf.field_id) specf.field_type)
+            (List.rev spec.spec_ops)
+  in
+
+  (* Finally, add the import *)
+  update_current_spec
+    loc
+    (fun spec ->
+     let imp_num = find_unused_import_id spec in
+     let imp = {spec_import_num = imp_num;
+                spec_import_spec = spec;
+                spec_import_globref = globref;
+                spec_import_type = import_tp} in
+
+     {spec with spec_imports = imp::spec.spec_imports}
+    )
+
+(* Add an import to the current spec, mapping the ops using interp_map *)
+let add_spec_import_map r interp_map =
+  let (loc, locref) = qualid_of_reference r in
+  let (spec, globref) = lookup_spec_and_globref locref in
+
+  (* Add the ops of the imported spec, applying interp_map to each one and only
+  adding it if this yields an identifier that is not already in the current
+  spec.  Also build an association list from each of the already-added fields to
+  its instantiation in the current spec. *)
+  let (ops_alist,_,_) =
+    List.fold_right
+      (fun opf (ops_alist, unfolds, folds) ->
+       let op_expr =
+         match apply_interp_map interp_map opf.field_id with
+         | Some e -> e
+         | None -> mk_var (loc, opf.field_id)
+       in
+       let (unfolds, folds) =
+         match op_expr with
+         | CRef (Ident (_, op_id), None) ->
+            (* Apply the op's original class to the existing args *)
+            let orig_class_qualid =
+              field_in_spec locref (field_class_id opf.field_id)
+            in
+            let tp = mk_ref_app_named_args_filter
+                       (Qualid (loc, orig_class_qualid)) ops_alist in
+            (* Add the original class as well as op_id to the unfold list *)
+            let unfolds =
+              (Nametab.locate orig_class_qualid)::
+                (Nametab.locate (field_in_spec locref opf.field_id))::
+                  unfolds
+            in
+            (* Unfold all references to the old spec, folding all f__param
+            fields into just references to f *)
+            let tp = unfold_fold_term [] unfolds folds tp in
+            (* Add the new field *)
+            let _ = add_spec_field ~err_on_exists:false false (loc, op_id) tp in
+            (* Add the fold (f__param, @f f__param) to the folds list *)
+            let folds = (field_param_id op_id, mk_var (loc, op_id))::folds in
+            (unfolds, folds)
+         | _ -> (unfolds, folds)
+       in
+       (ops_alist @ [spec_field_param_id opf, op_expr], unfolds, folds))
+      spec.spec_ops ([],[],[])
+  in
+
+  (* Build the type of the import, which is the import's typeclass applied to
+  all of its ops *)
+  let import_tp =
+    mk_ref_app_named_args (spec_typeclass_ref loc locref) ops_alist in
+
+  (* Finally, add the import *)
+  update_current_spec
+    loc
+    (fun spec ->
+     let imp_num = find_unused_import_id spec in
+     let imp = {spec_import_num = imp_num;
+                spec_import_spec = spec;
+                spec_import_globref = globref;
+                spec_import_type = import_tp} in
+
+     {spec with spec_imports = imp::spec.spec_imports}
+    )
 
 
 (***
@@ -1353,6 +1418,10 @@ VERNAC COMMAND EXTEND Spec
   | [ "Spec" "Import" global(r) ]
     => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions (fun () -> add_spec_import r) ]
+
+  | [ "Spec" "Import" global(r) "{" interp_map(m) "}" ]
+    => [ (Vernacexpr.VtSideff [], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions (fun () -> add_spec_import_map r m) ]
 
 
   (* Define an interpretation *)

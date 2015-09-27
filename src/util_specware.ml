@@ -353,24 +353,6 @@ let mk_named_tactic_hole loc tac_qualid =
                   (Genarg.rawwit Constrarg.wit_tactic)
                   (mk_tactic_call loc tac_qualid []))))
 
-(* Build an application *)
-let mk_app f args =
-  CApp (dummy_loc, (None, f),
-        List.map (fun arg -> (arg, None)) args)
-
-(* Build an expression for a local reference applied to named implicit
-   args, where the args are given as (name,value) pairs *)
-let mk_ref_app_named_args loc r args =
-  CApp (loc,
-        (None, CRef (r, None)),
-        List.map (fun (id,arg) ->
-                  (arg, Some (dummy_loc, ExplByName id))) args)
-
-(* Build an expression for a variable applied to named implicit args,
-   where the args are given as (name,value) pairs *)
-let mk_id_app_named_args loc id args =
-  mk_ref_app_named_args loc (Ident (loc, id)) args
-
 (* Get the names of the implicit arguments of a global_reference gr *)
 let implicit_arg_ids gr =
   concat_map
@@ -382,6 +364,33 @@ let implicit_arg_ids gr =
         | None -> None)
        impstatus_list)
     (Impargs.implicits_of_global gr)
+
+(* Build an application *)
+let mk_app f args =
+  CApp (dummy_loc, (None, f),
+        List.map (fun arg -> (arg, None)) args)
+
+(* Build an expression for a local reference applied to named implicit
+   args, where the args are given as (name,value) pairs *)
+let mk_ref_app_named_args r args =
+  CApp (loc_of_reference r,
+        (None, CRef (r, None)),
+        List.map (fun (id,arg) ->
+                  (arg, Some (dummy_loc, ExplByName id))) args)
+
+(* Build an expression for a variable applied to named implicit args,
+   where the args are given as (name,value) pairs *)
+let mk_id_app_named_args loc id args =
+  mk_ref_app_named_args (Ident (loc, id)) args
+
+(* Like mk_ref_app_named_args, but filter the arguments to the names actually
+accepted by the function referenced by r *)
+let mk_ref_app_named_args_filter r args =
+  let arg_ids =
+    implicit_arg_ids (Nametab.locate (snd (qualid_of_reference r))) in
+  mk_ref_app_named_args
+    r
+    (List.filter (fun (id,_) -> List.exists (Id.equal id) arg_ids) args)
 
 (* Build a qualified id (NOTE: dir is *not* reversed here) *)
 let mk_qualid dir str =
@@ -419,7 +428,7 @@ let qualid_of_global gr =
 
 (* Build an expression for a global applied to named implicit args *)
 let mk_global_app_named_args gr args =
-  mk_ref_app_named_args dummy_loc (Qualid (dummy_loc, qualid_of_global gr)) args
+  mk_ref_app_named_args (Qualid (dummy_loc, qualid_of_global gr)) args
 
 (* Build an exprssion for a global with @ in front of it *)
 let mk_global_expl gr =
@@ -919,100 +928,77 @@ let mk_glob_hole loc =
 let mk_glob_cast loc body tp =
   Glob_term.GCast (loc, body, CastConv tp)
 
-(* Map function f over all subterms of a glob_term, including the glob_term
-itself, doing subterms before superterms. The function f is also passed a
-context argument of some arbitrary type, which is updated by the add_var
-argument whenever the mapping passes inside a binder. *)
-let rec map_rec_glob_constr_with_binders add_var f ctx glob =
-  let add_vars vars = List.fold_right add_var vars ctx in
-  (* First apply f to all subterms of glob, making sure to add_var if needed *)
-  let glob_subterms =
-    match glob with
-    | Glob_term.GApp (loc, head, args) ->
-       let head' = map_rec_glob_constr_with_binders add_var f ctx head in
-       let args' =
-         List.map (map_rec_glob_constr_with_binders add_var f ctx) args in
-       Glob_term.GApp (loc, head', args')
-    | Glob_term.GLambda (loc, nm, b_kind, tp, body) ->
-       let tp' = map_rec_glob_constr_with_binders add_var f ctx tp in
-       let body' =
-         map_rec_glob_constr_with_binders add_var f (add_var nm ctx) body in
-       Glob_term.GLambda (loc, nm, b_kind, tp', body')
-    | Glob_term.GProd (loc, nm, b_kind, tp, body) ->
-       let tp' = map_rec_glob_constr_with_binders add_var f ctx tp in
-       let body' =
-         map_rec_glob_constr_with_binders add_var f (add_var nm ctx) body in
-       Glob_term.GProd (loc, nm, b_kind, tp', body')
-    | Glob_term.GLetIn (loc, nm, rhs, body) ->
-       let rhs' = map_rec_glob_constr_with_binders add_var f ctx rhs in
-       let body' =
-         map_rec_glob_constr_with_binders add_var f (add_var nm ctx) body in
-       Glob_term.GLetIn (loc, nm, rhs', body')
-    | Glob_term.GCases (loc, style, r_opt, scruts, clauses) ->
-       let scruts_vars =
-         concat_map (function
-                      | (_, (as_name, None)) -> [as_name]
-                      | (_, (as_name, Some (_, _, in_vars))) ->
-                         as_name::in_vars) scruts in
-       let r_opt' =
-         Option.map
-           (map_rec_glob_constr_with_binders add_var f (add_vars scruts_vars))
-           r_opt
-       in
-       let scruts' =
-         List.map (fun (tm, stuff) ->
-                   (map_rec_glob_constr_with_binders add_var f ctx tm, stuff))
-                  scruts in
-       let clauses' =
-         List.map (fun (loc, pvars, pats, body) ->
-                   let ctx' = add_vars (List.map (fun x -> Name x) pvars) in
-                   (loc, pvars, pats,
-                    map_rec_glob_constr_with_binders add_var f ctx' body))
-                  clauses in
-       Glob_term.GCases (loc, style, r_opt', scruts', clauses')
-    | Glob_term.GLetTuple (loc, vars, (as_var, ret_opt), rhs, body) ->
-       let ret_opt' =
-         Option.map (map_rec_glob_constr_with_binders
-                       add_var f (add_var as_var ctx)) ret_opt in
-       let rhs' = map_rec_glob_constr_with_binders add_var f ctx rhs in
-       let body' =
-         map_rec_glob_constr_with_binders add_var f (add_vars vars) body
-       in
-       Glob_term.GLetTuple (loc, vars, (as_var, ret_opt'), rhs', body')
-    | Glob_term.GIf (loc, scrut, (as_var, ret_opt), sub1, sub2) ->
-       let scrut' = map_rec_glob_constr_with_binders add_var f ctx scrut in
-       let ret_opt' =
-         Option.map (map_rec_glob_constr_with_binders
-                       add_var f (add_var as_var ctx)) ret_opt in
-       let sub1' = map_rec_glob_constr_with_binders add_var f ctx sub1 in
-       let sub2' = map_rec_glob_constr_with_binders add_var f ctx sub2 in
-       Glob_term.GIf (loc, scrut', (as_var, ret_opt'), sub1', sub2')
-    | Glob_term.GRec (loc, fix_kind, _, _, _, _) ->
-       raise dummy_loc (Failure "map_rec_glob_constr_with_binders: does not yet handle GRec")
-    | Glob_term.GCast (loc, tm, cast) ->
-       let tm' = map_rec_glob_constr_with_binders add_var f ctx tm in
-       let cast' = Miscops.map_cast_type
-                     (map_rec_glob_constr_with_binders add_var f ctx) cast in
-       Glob_term.GCast (loc, tm', cast')
-    | (Glob_term.GVar _ | Glob_term.GSort _ | Glob_term.GHole _ |
-       Glob_term.GRef _ | Glob_term.GEvar _ | Glob_term.GPatVar _) as x -> x
-  in
-  f ctx glob_subterms
+(* Map function f over all direct subterms of a glob_term, in a manner similar
+to glob_ops.map_glob_constr, except that a "context" argument is also passed to
+f, which is updated by add_var when a binder is traversed in a manner similar to
+Constr.map_with_binders *)
+let map_glob_with_binders add_var f ctx glob =
+  let add_vars vars = List.fold_left (fun ctx n -> add_var n ctx) ctx vars in
+  let add_ids ids = add_vars (List.map (fun x -> Name x) ids) in
+  match glob with
+  | Glob_term.GApp (loc,g,args) ->
+     let comp1 = f ctx g in
+     let comp2 = Util.List.map_left (f ctx) args in
+     Glob_term.GApp (loc,comp1,comp2)
+  | Glob_term.GLambda (loc,na,bk,ty,c) ->
+     let comp1 = f ctx ty in
+     let comp2 = f (add_var na ctx) c in
+     Glob_term.GLambda (loc,na,bk,comp1,comp2)
+  | Glob_term.GProd (loc,na,bk,ty,c) ->
+     let comp1 = f ctx ty in
+     let comp2 = f (add_var na ctx) c in
+     Glob_term.GProd (loc,na,bk,comp1,comp2)
+  | Glob_term.GLetIn (loc,na,b,c) ->
+     let comp1 = f ctx b in
+     let comp2 = f (add_var na ctx) c in
+     Glob_term.GLetIn (loc,na,comp1,comp2)
+  | Glob_term.GCases (loc,sty,rtntypopt,tml,pl) ->
+     let comp1 = Option.map (f ctx) rtntypopt in
+     let comp2 = Util.List.map_left (fun (tm,x) -> (f ctx tm,x)) tml in
+     let comp3 = Util.List.map_left (fun (loc,idl,p,c) ->
+                                     (loc,idl,p,f (add_ids idl) c)) pl in
+     Glob_term.GCases (loc,sty,comp1,comp2,comp3)
+  | Glob_term.GLetTuple (loc,nal,(na,po),b,c) ->
+     let comp1 = Option.map (f (add_var na ctx)) po in
+     let comp2 = f ctx b in
+     let comp3 = f (add_vars nal) c in
+     Glob_term.GLetTuple (loc,nal,(na,comp1),comp2,comp3)
+  | Glob_term.GIf (loc,c,(na,po),b1,b2) ->
+     let comp1 = Option.map (f (add_var na ctx)) po in
+     let comp2 = (f ctx) b1 in
+     let comp3 = (f ctx) b2 in
+     Glob_term.GIf (loc,f ctx c,(na,comp1),comp2,comp3)
+  | Glob_term.GRec (loc,fk,idl,bl,tyl,bv) ->
+     (*
+     let comp1 =
+       Array.map (Util.List.map_left
+                    (map_glob_with_binders add_var f ctx))
+                 bl in
+     let comp2 = Array.map (f ctx) tyl in
+     let comp3 = Array.map f bv in
+     Glob_term.GRec (loc,fk,idl,comp1,comp2,comp3) *)
+     raise dummy_loc (Failure "map_glob_with_binders")
+  | Glob_term.GCast (loc,c,k) ->
+     let comp1 = f ctx c in
+     let comp2 = Miscops.map_cast_type (f ctx) k in
+     Glob_term.GCast (loc,comp1,comp2)
+  | (Glob_term.GVar _ | Glob_term.GSort _ | Glob_term.GHole _ | Glob_term.GRef _
+     | Glob_term.GEvar _ | Glob_term.GPatVar _) as x -> x
 
-(* Replace the free variables of a glob_term using a Map *)
-let replace_glob_free_vars map glob =
-  map_rec_glob_constr_with_binders
-    (function
-      | Name x -> Id.Map.remove x
-      | Anonymous -> fun map -> map)
-    (fun map g ->
-     match g with
-     | (Glob_term.GVar (loc, x) | Glob_term.GRef (loc, VarRef x, _)) as glob ->
-        (try Id.Map.find x map
-         with Not_found -> glob)
-     | glob -> glob)
-    map
-    glob
+(* Replace the free variables of a glob_term using an alist *)
+let rec replace_glob_free_vars alist glob =
+  match glob with
+  | (Glob_term.GVar (loc, x) | Glob_term.GRef (loc, VarRef x, _)) as glob ->
+     (try snd (List.find (fun (id,_) -> Id.equal id x) alist)
+      with Not_found -> glob)
+  | _ ->
+     map_glob_with_binders
+       (function
+         | Name x -> List.filter (fun (id,_) -> not (Id.equal id x))
+         | Anonymous -> fun alist -> alist)
+       replace_glob_free_vars
+       alist
+       glob
 
 
 (***
