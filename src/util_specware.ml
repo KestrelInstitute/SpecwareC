@@ -864,6 +864,23 @@ let unfold_fold_term params unfolds folds t =
                        pp_constr_expr res in
   res
 
+(* Substitute constrs into a constr_expr *)
+let term_subst_constrs loc env uctx t params args =
+  (* First build a lambda-abstraction around t *)
+  let t_lambda = mkCLambdaN loc params t in
+  (* Next, interpret t_lambda as a constr *)
+  let _ = debug_printf 1 "@[term_subst_constrs lambda:@ %a@]\n"
+                       pp_constr_expr t_lambda in
+  let (t_lambda_constr, uctx) =
+    Constrintern.interp_constr
+      env (Evd.from_env ~ctx:uctx env) t_lambda in
+  (* Now apply this lambda to args *)
+  let ret_constr =
+    Reduction.beta_appvect t_lambda_constr (Array.of_list args) in
+  (* Finally, externalize ret_constr *)
+  (Constrextern.extern_type false env (Evd.from_env ~ctx:uctx env) ret_constr,
+   uctx)
+
 (* Test if constr is a constant equal to const *)
 let constr_is_constant const constr =
   match Term.kind_of_term constr with
