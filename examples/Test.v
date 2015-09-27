@@ -76,7 +76,6 @@ Spec End Group.
 Print Group.Group.
 
 
-
 (***
  *** We can prove theorems in the Group spec using theorems we proved in the
  *** context of the Monoid spec; e.g., left_id_uniq, used below, was proved
@@ -92,19 +91,21 @@ Lemma g_left_id_uniq (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
   apply left_id_uniq.
 Qed.
 
+Set Printing All.
 Lemma g_left_id_uniq2 (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
   intros left_id.
   rewrite <- (left_id g_zero).
-  rewrite (Monoid.m_zero_right (m_zero_right__class:=Monoid.m_zero_right__field)).
+  rewrite (Monoid.m_zero_right x).
   reflexivity.
 Qed.
 
 Lemma left_inv_uniq (x x_inv:T) :
   g_plus x_inv x = g_zero -> x_inv = g_inv x.
   intro left_inv.
-  rewrite <- (g_zero_right x_inv).
+  rewrite <- (Monoid.m_zero_right x_inv).
   rewrite <- (g_inv_right x).
-  rewrite g_plus_assoc.
+  rewrite Monoid.m_plus_assoc.
+  fold g_plus.
   rewrite left_inv.
   rewrite g_zero_left.
   reflexivity.
