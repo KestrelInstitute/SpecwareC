@@ -196,6 +196,24 @@ Spec NatMonoid3 := transform Monoid.
 Defined.
 
 
+Print NatMonoid3.NatMonoid3.
+Print NatMonoid3.NatMonoid3__Spec.
+
+Section NatMonoid3_Thms.
+Import NatMonoid3.
+Context `{NatMonoid3}.
+
+Lemma nm3_left_id_uniq x : (forall y, x + y = y) -> x = m_zero.
+  apply left_id_uniq.
+Qed.
+
+Eval hnf in Monoid.T__value.
+Eval hnf in Monoid.m_plus__value.
+Eval hnf in Monoid.m_zero__value.
+
+End NatMonoid3_Thms.
+
+
 
 Spec Group2.
 
