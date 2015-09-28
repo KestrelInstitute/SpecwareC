@@ -131,6 +131,9 @@ let interp_instance_id id =
 (* The name of the GMRefinement object created for spec s_id *)
 let spec_refinement_id s_id = add_suffix s_id "refinement"
 
+(* The name of the GMPushout object created for spec s_id *)
+let spec_pushout_id s_id = add_suffix s_id "pushout"
+
 
 (***
  *** Specware-Specific Symbols
@@ -1294,38 +1297,46 @@ let end_new_spec spec_lid =
  *** Spec Transformations
  ***)
 
+(* Create a spec from a Coq Spec object *)
+let create_spec_from_repr loc spec_id spec_expr =
+  (* Interpret spec_expr as a constr *)
+  let env = Global.env () in
+  let (spec_constr, _) = Constrintern.interp_constr env Evd.empty spec_expr in
+  (* Destruct spec_expr into ops and axioms *)
+  let (ops, axioms) = destruct_constr spec_descr (hnf_constr spec_constr) in
+  (* Start a new spec *)
+  let _ = begin_new_spec (loc, spec_id) in
+  (* Add all the ops and axioms *)
+  let add_specf env specf =
+    add_spec_field
+      (not (spec_field_is_op specf))
+      (loc, specf.field_id)
+      (Constrextern.extern_constr false env Evd.empty specf.field_type)
+  in
+  let ops_env =
+    List.fold_left
+      (fun env specf ->
+       let _ = add_specf env specf in
+       Environ.push_rel (Name specf.field_id, None, specf.field_type) env)
+      env
+      ops
+  in
+  let _ = List.iter (add_specf ops_env) axioms in
+  (* End the spec *)
+  end_new_spec (loc, spec_id)
+
+
+(* Start a definition of a spec from a transformation script *)
 let start_transformation loc spec_id dom_locref =
   let gmref_lid = (loc, spec_refinement_id spec_id) in
   let hook _ _ =
-    let _ = Pfedit.delete_current_proof () in
     (* When the transformation is finished... *)
-    let env = Global.env () in
-    (* Interpret and HNF the resulting GMRefinement object *)
-    let (gmref_constr, _) =
-      Constrintern.interp_constr env Evd.empty (mk_var gmref_lid) in
-    (* Destruct that object into ops, axioms, and an interpretation function *)
-    let ((ops, axioms), _) =
-      destruct_constr gmrefinement_descr (hnf_constr gmref_constr) in
-    (* Start a new spec *)
-    let _ = begin_new_spec (loc, spec_id) in
-    (* Add all the ops and axioms *)
-    let add_specf env specf =
-      add_spec_field
-        (not (spec_field_is_op specf))
-        (loc, specf.field_id)
-        (Constrextern.extern_constr false env Evd.empty specf.field_type)
-    in
-    let ops_env =
-      List.fold_left
-        (fun env specf ->
-         let _ = add_specf env specf in
-         Environ.push_rel (Name specf.field_id, None, specf.field_type) env)
-        env
-        ops
-    in
-    let _ = List.iter (add_specf ops_env) axioms in
-    (* End the spec *)
-    let _ = end_new_spec (loc, spec_id) in
+    (* First, delete the current proof (FIXME: why is this necessary?) *)
+    let _ = Pfedit.delete_current_proof () in
+    (* Build a new spec from the gmref_spec field of the refinement *)
+    let _ = create_spec_from_repr
+              loc spec_id
+              (mkAppC (mk_specware_ref "gmref_spec", [mk_var gmref_lid])) in
     (* Add a definition spec_interp for the interpretation *)
     let _ = add_definition
               (loc, add_suffix spec_id "interp") [] None
@@ -1348,6 +1359,85 @@ let start_transformation loc spec_id dom_locref =
   start_definition ~hook gmref_lid []
                    (mkAppC (mk_specware_ref "GMRefinement",
                             [mkRefC (spec_gspec_ref loc dom_locref)]))
+
+
+(* Define a spec by a pushout of two interpretations *)
+let do_pushout lid interp1_expr interp2_expr =
+  let (loc, spec_id) = lid in
+  let gmpo_lid = (loc, spec_pushout_id spec_id) in
+
+  (* Extract references to the three specs in the pushout *)
+  let spec_locref = raise loc (Failure "do_pushout") in
+  let spec1_locref = raise loc (Failure "do_pushout") in
+  let spec2_locref = raise loc (Failure "do_pushout") in
+
+  (* The hook function... *)
+  let hook _ _ =
+    (* First, delete the current proof (FIXME: why is this necessary?) *)
+    let _ = Pfedit.delete_current_proof () in
+
+    (* Helper function to apply a GMPushout accessor to our pushout object *)
+    let gmpo_accessor acc args =
+      mkAppC (mk_specware_ref acc,
+              ([mk_hole loc; mk_hole loc; mk_var gmpo_lid] @ args))
+    in
+
+    (* Build a new spec from the gmpo_spec field of the refinement *)
+    let _ = create_spec_from_repr loc spec_id (gmpo_accessor "gmpo_spec" []) in
+
+    (* Add definitions the two interpretations created by the pushout *)
+    let _ = add_definition
+              (loc, add_suffix spec_id "interp1") [] None
+              (mkCLambdaN
+                 loc [mk_explicit_assum (Id.of_string "__r") (mk_hole loc)]
+                 (gmpo_accessor "gmpo_interp1"
+                                [mk_hole loc;
+                                 mkRefC (spec_model_ref
+                                           loc (spec_locref_of_id spec_id));
+                                 mk_var (loc, Id.of_string "__r")]))
+    in
+    let _ = add_definition
+              (loc, add_suffix spec_id "interp2") [] None
+              (mkCLambdaN
+                 loc [mk_explicit_assum (Id.of_string "__r") (mk_hole loc)]
+                 (gmpo_accessor "gmpo_interp2"
+                                [mk_hole loc;
+                                 mkRefC (spec_model_ref
+                                           loc (spec_locref_of_id spec_id));
+                                 mk_var (loc, Id.of_string "__r")]))
+    in
+
+    (* Add instances for the two interpretations *)
+    let _ =
+      add_instance_for_interp
+        loc
+        (add_suffix (interp_instance_id spec_id) "1")
+        (mk_var (loc, add_suffix spec_id "interp1"))
+        spec1_locref
+        (spec_locref_of_id spec_id)
+    in
+    let _ =
+      add_instance_for_interp
+        loc
+        (add_suffix (interp_instance_id spec_id) "2")
+        (mk_var (loc, add_suffix spec_id "interp2"))
+        spec2_locref
+        (spec_locref_of_id spec_id)
+    in
+    ()
+  in
+
+  (* Add the definition *)
+  add_definition
+    ~hook (loc, spec_pushout_id spec_id) []
+    (Some (mkAppC (mk_specware_ref "GMPushout",
+                   [mkRefC (spec_gspec_ref loc spec_locref);
+                    mkRefC (spec_gspec_ref loc spec1_locref);
+                    mkRefC (spec_gspec_ref loc spec2_locref);
+                    interp1_expr; interp2_expr])))
+    (mk_named_tactic_hole
+       loc
+       (mk_qualid ["Specware"; "SpecwareC"] "pushout_tac"))
 
 
 (***
@@ -1562,6 +1652,14 @@ VERNAC COMMAND EXTEND Spec
             let codom_locref = located_elem (qualid_of_reference codom_ref) in
             start_interpretation loc id dom_locref codom_locref imap) ]
 
+  (* Define a spec from a "raw" Spec object *)
+  | [ "Spec" var(lid) ":=" "raw" constr(spec_expr) ]
+    => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () ->
+            let (loc, spec_id) = lid in
+            ignore (create_spec_from_repr loc spec_id spec_expr)) ]
+
   (* Start transforming a spec *)
   | [ "Spec" var(lid) ":=" "transform" global(dom_ref) ]
     => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity,
@@ -1573,6 +1671,12 @@ VERNAC COMMAND EXTEND Spec
             let (loc, id) = lid in
             let dom_locref = located_elem (qualid_of_reference dom_ref) in
             start_transformation loc id dom_locref) ]
+
+  (* Define a spec by pushout *)
+  | [ "Spec" var(lid) ":=" "pushout" constr(interp1) constr(interp2) ]
+    => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () -> do_pushout lid interp1 interp2) ]
 
 END
 

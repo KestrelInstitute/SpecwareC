@@ -277,7 +277,7 @@ Record GMRefinement gspec : Type :=
                      genmod_type _ (genspec_model gspec) }.
 
 (* A general model pushout is a pair of related GMRefinements that unify *)
-Record GMPushout {gspec gspec1 gspec2}
+Record GMPushout gspec gspec1 gspec2
        (i1: GMInterpretation gspec gspec1)
        (i2: GMInterpretation gspec gspec2) : Type :=
   {gmpo_spec: Spec;
