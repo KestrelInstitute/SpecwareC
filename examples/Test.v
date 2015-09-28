@@ -151,7 +151,7 @@ Qed.
 
 End NatMonoid_Thms.
 
-
+Set Printing All.
 Spec NatMonoid2 := transform NatMonoid.
   start_refinement.
   Unshelve. shelve.
