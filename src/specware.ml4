@@ -1314,6 +1314,7 @@ let end_new_spec spec_lid =
 let start_transformation loc spec_id dom_locref =
   let gmref_lid = (loc, spec_refinement_id spec_id) in
   let hook _ _ =
+    let _ = Pfedit.delete_current_proof () in
     (* When the transformation is finished... *)
     let env = Global.env () in
     (* Interpret and HNF the resulting GMRefinement object *)
@@ -1580,7 +1581,10 @@ VERNAC COMMAND EXTEND Spec
 
   (* Start transforming a spec *)
   | [ "Spec" var(lid) ":=" "transform" global(dom_ref) ]
-    => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
+    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity,
+                                   [located_elem lid]),
+          Vernacexpr.VtLater) ]
+    (* => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ] *)
     -> [ reporting_exceptions
            (fun () ->
             let (loc, id) = lid in
