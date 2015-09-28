@@ -152,7 +152,6 @@ Qed.
 End NatMonoid_Thms.
 
 
-(*
 Spec NatMonoid2 := transform NatMonoid.
   start_refinement.
   Unshelve. shelve.
@@ -168,6 +167,8 @@ Spec NatMonoid2 := transform NatMonoid.
 Defined.
 
 Print NatMonoid2.NatMonoid2.
+Print NatMonoid2__refinement.
+Print NatMonoid2__instance.
 
 Section NatMonoid2_Thms.
 Import NatMonoid2.
@@ -178,7 +179,7 @@ Lemma nm2_left_id_uniq x : (forall y, m_plus__field x y = y) -> x = m_zero__fiel
 Qed.
 
 End NatMonoid2_Thms.
-*)
+
 
 Spec Group2.
 
@@ -200,6 +201,8 @@ Spec End Group2.
 
 Spec Interpretation Monoid_Group2 : Monoid -> Group2 := { m_% +-> g_% }.
 Next Obligation.
+destruct Group2__proofs; constructor; assumption.
+Defined.
 
 Print Monoid_Group2__instance.
 
@@ -212,6 +215,9 @@ Lemma g2_left_id_uniq (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
 Qed.
 
 End Group2_Thms.
+
+
+
 
 
 Spec Group3 := Monoid[Monoid_Group2 { T +-> T } ].
