@@ -152,6 +152,24 @@ Qed.
 End NatMonoid_Thms.
 
 
+Spec NatMonoid2 := transform NatMonoid.
+  start_refinement.
+  Unshelve. shelve.
+  Focus 2.
+  replace 0 with (1 - 1).
+  Focus 2. reflexivity.
+  Unfocus.
+  instantiate (Goal0:=?[m_zero__proof__field]).
+  Show Existentials.
+  Unshelve.
+  instantiate_spec ?__Spec.
+  Show Existentials.
+  instantiate (m_zero__proof__field:=model_proj_fun _ 2 __R __model __r).
+  instantiate (m_plus__proof__field:=model_proj_fun _ 3 __R __model __r).
+Defined.
+
+Print NatMonoid2__refinement.
+
 (*
 Spec Interpretation monoid_natmonoid2 : Monoid -> NatMonoid := { T +-> (T:Type) }.
 Obligation 4.

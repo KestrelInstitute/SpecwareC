@@ -128,6 +128,9 @@ let spec_import_instance_id i j =
 let interp_instance_id id =
   add_suffix id "instance"
 
+(* The name of the GMRefinement object created for spec s_id *)
+let spec_refinement_id s_id = add_suffix s_id "refinement"
+
 
 (***
  *** Specware-Specific Symbols
@@ -183,6 +186,13 @@ let spec_rectp_qualid locref =
 
 let spec_rectp_ref loc locref =
   Qualid (loc, spec_rectp_qualid locref)
+
+(* Return a qualid for the record type of a spec *)
+let spec_gspec_qualid locref =
+  qualid_cons locref (spec_gspec_id (spec_locref_basename locref))
+
+let spec_gspec_ref loc locref =
+  Qualid (loc, spec_gspec_qualid locref)
 
 (* Return a qualid for the spec__proofs record field of a spec's record type *)
 let spec_proofs_recfield_qualid locref =
@@ -294,6 +304,11 @@ type 'a spec_field =
 type expr_spec_field = constr_expr spec_field
 type constr_spec_field = Constr.t spec_field
 
+let spec_field_is_op specf =
+  match specf.field_sort with
+  | SFS_Op -> true
+  | _ -> false
+
 (* Build a parameter / assumption for a spec_field *)
 let param_of_spec_field ?(implicit=false) loc specf =
   (if implicit then mk_implicit_assum else mk_explicit_assum)
@@ -316,7 +331,7 @@ let recfield_of_spec_field loc specf =
     | SFS_Import -> true
     | _ -> false
   in
- ((loc, recfield_id_of_spec_field specf), specf.field_type, coercion_p)
+  ((loc, recfield_id_of_spec_field specf), specf.field_type, coercion_p)
 
 (* Build the record projection for a spec_field *)
 let recproj_of_spec_field loc specf =
@@ -558,8 +573,7 @@ let spec_descr : (constr_spec_field list * constr_spec_field list,
            Descr_ConstrMap
              ((fun rest_constr ->
                let rest_body_constr =
-                 Reduction.beta_appvect
-                   rest_constr [| Term.mkVar (field_param_id f) |] in
+                 Reduction.beta_appvect rest_constr [| Term.mkVar f |] in
                hnf_constr rest_body_constr),
               (fun rest_expr ->
                (mkCLambdaN
@@ -675,107 +689,23 @@ let build_spec_repr loc spec : Constr.t Evd.in_evar_universe_context =
  *)
 
 
-(***
- *** Inductive Descriptions of Models
- ***)
-
-(*
-(* A description of the spec_model S type for arbitrary spec S. *)
-let spec_model_descr ?(env_opt=None) ?(evdref_opt=None) ()
-    : ((Constr.t * Constr.t) list * Constr.t,
-       (constr_expr op * constr_expr * constr_expr) list
-       * constr_expr) constr_descr =
-  Descr_Rec
-    (fun spec_model_descr ->
-     Descr_Iso
-       ("spec_model",
-        (function
-          | Left (_, (_, (_, (x1, (x2, (x3, ())))))) ->
-             ((x1,x2)::(fst x3), snd x3)
-          | Right x -> ([], x)),
-        (function
-          | ([], x) -> Right x
-          | (((op_id,op_tp,oppred), op_expr, op_pf)::rest, x) ->
-             Left ((), (build_constr_expr (oppred_descr op_id) (op_tp,oppred),
-                        ((), (op_expr, (op_pf, ((rest, x), ()))))))),
-        senary_ctor
-          specware_mod "opCons"
-          (hole_descr Descr_Constr)
-          (fun _ -> Descr_Constr)
-          (fun _ _ -> hole_descr Descr_Constr)
-          (fun _ _ _ -> Descr_Constr)
-          (fun _ _ _ _ -> Descr_Constr)
-          (fun _ _ _ _ _ -> hnf_descr ~env_opt ~evdref_opt spec_model_descr)
-          Descr_Constr))
-
-(* Take a list of ops and axiom names for some unspecified spec S and build a
-constr_expr of type spec_model S using f__param and f__proof__param free
-variables. NOTE: expects ops and axioms to be in non-reversed order. *)
-let make_model_constr_expr loc ops ax_ids =
-  let rec ax_helper ax_ids =
-    match ax_ids with
-    | [] -> mk_reference ["Coq"; "Init"; "Logic"] "I"
-    | [ax_id] -> mk_var (loc, field_param_id ax_id)
-    | ax_id::ax_ids' ->
-       mkAppC (mk_reference ["Coq"; "Init"; "Logic"] "conj",
-               [mk_var (loc, field_param_id ax_id); ax_helper ax_ids'])
-  in
-  build_constr_expr
-    (spec_model_descr ())
-    (List.map (fun op ->
-               let (op_id,_,oppred) = op in
-               (op, mk_var (loc, field_param_id op_id),
-                match oppred with
-                | Pred_Trivial -> mk_reference ["Coq"; "Init"; "Logic"] "I"
-                | _ -> mk_var (loc, field_proof_param_id op_id)))
-              ops,
-     ax_helper ax_ids)
-
-
-(* This describes a spec_model, which is a right-nested series of conj's, or the
-single term I (proof of True) for the empty model, or a single proof for the
-singleton list. *)
-let spec_model_descr : (Constr.t list, constr_expr list) constr_descr =
-  Descr_Rec
-    (fun spec_model_descr ->
-     Descr_Iso
-       ("spec_model",
-        (function
-          | Left (_, (_, (x1, (x2, ())))) -> x1::x2
-          | Right (Left ()) -> []
-          | Right (Right x1) -> [x1]),
-        (function
-          | [] -> Right (Left ())
-          | [pf] -> Right (Right pf)
-          | pf::rest -> Left ((), ((), (pf, (rest, ()))))),
-        quaternary_ctor
-          ["Coq"; "Init"; "Logic"] "conj"
-          (hole_descr Descr_Constr)
-          (fun _ -> hole_descr Descr_Constr)
-          (fun _ _ -> Descr_Constr)
-          (fun _ _ _ -> spec_model_descr)
-          (nullary_ctor
-             ["Coq"; "Init"; "Logic"] "I"
-             Descr_Constr)))
-
-
-(* Take axioms for a spec S and build a constr_expr of type spec_model S ops
-(where ops is implicit), assuming that a variable ax__param is in scope for each
-axiom ax. NOTE: expects axioms to be in non-reversed order. *)
-let rec make_model_constr_expr loc axioms =
-  build_constr_expr spec_model_descr
-                    (List.map (fun (ax_id, _) ->
-                               mk_var (loc, field_param_id ax_id)) axioms)
-(*
-  match axioms with
-  | [] -> mk_reference ["Coq"; "Init"; "Logic"] "I"
-  | [(ax_id,_)] -> 
-  | (ax_id,_)::axioms' ->
-     mkAppC (mk_reference ["Coq"; "Init"; "Logic"] "conj",
-             [mk_var (loc, field_param_id ax_id);
-              make_model_constr_expr loc axioms'])
- *)
- *)
+(* Description of the GMRefinement type *)
+let gmrefinement_descr :
+      ((constr_spec_field list * constr_spec_field list) * Constr.t,
+       (expr_spec_field list * expr_spec_field list) * constr_expr) constr_descr =
+  Descr_Iso
+    ("GMRefinement",
+     (function
+       | Left (_, (spec, (interp, ()))) ->
+          (spec, interp)
+       | Right emp -> emp.elim_empty),
+     (fun (spec, interp) -> Left ((), (spec, (interp, ())))),
+     ternary_ctor
+       specware_mod "Build_GMRefinement"
+       (hole_descr Descr_Constr)
+       (fun _ -> spec_descr)
+       (fun _ _ -> Descr_Constr)
+       Descr_Fail)
 
 
 (***
@@ -1212,8 +1142,6 @@ let complete_spec loc spec =
   (* Combine the imports with the axioms, in reverse order *)
   let all_axioms = spec_import_fields spec @ spec.spec_axioms in
 
-  let _ = debug_printf 1 "Blah 1\n" in
-
   (* Create the spec typeclass *)
   let _ = add_typeclass
             (loc, spec.spec_name) false true
@@ -1237,7 +1165,6 @@ let complete_spec loc spec =
   let (ops', _) = build_rec_fields spec.spec_ops in
   let op_rec_fields = List.rev_map (recfield_of_spec_field loc) ops' in
    *)
-  let _ = debug_printf 1 "Blah 2\n" in
   let env = Global.env () in
   let op_constr_vars =
     List.rev_map
@@ -1359,6 +1286,48 @@ let end_new_spec spec_lid =
   let _ = complete_spec loc spec in
   let _ = end_module spec_lid in
   spec
+
+
+(***
+ *** Spec Transformations
+ ***)
+
+let start_transformation loc spec_id dom_locref =
+  let gmref_lid = (loc, spec_refinement_id spec_id) in
+  let hook _ _ =
+    (* When the transformation is finished... *)
+    let env = Global.env () in
+    (* Interpret and HNF the resulting GMRefinement object *)
+    let (gmref_constr, _) =
+      Constrintern.interp_constr env Evd.empty (mk_var gmref_lid) in
+    (* Destruct that object into ops, axioms, and an interpretation function *)
+    let ((ops, axioms), _) =
+      destruct_constr gmrefinement_descr (hnf_constr gmref_constr) in
+    (* Start a new spec *)
+    let _ = begin_new_spec (loc, spec_id) in
+    (* Add all the ops and axioms *)
+    let _ =
+      List.iter
+        (fun specf ->
+         add_spec_field
+           (not (spec_field_is_op specf))
+           (loc, specf.field_id)
+           (Constrextern.extern_constr false env Evd.empty specf.field_type))
+        (ops @ axioms)
+    in
+    (* End the spec *)
+    let _ = end_new_spec (loc, spec_id) in
+    (* FIXME: Add a definition for the interpretation...? *)
+    (* Add an instance for the interpretation *)
+    add_instance_for_interp
+      loc
+      (interp_instance_id spec_id)
+      dom_locref
+      (mk_qualid [] (Id.to_string spec_id))
+  in
+  start_definition ~hook gmref_lid []
+                   (mkAppC (mk_specware_ref "GMRefinement",
+                            [mkRefC (spec_gspec_ref loc dom_locref)]))
 
 
 (***
@@ -1574,6 +1543,17 @@ VERNAC COMMAND EXTEND Spec
             let dom_locref = located_elem (qualid_of_reference dom_ref) in
             let codom_locref = located_elem (qualid_of_reference codom_ref) in
             start_interpretation loc id dom_locref codom_locref imap) ]
+
+  (* Start transforming a spec *)
+  | [ "Spec" var(lid) ":=" "transform" global(dom_ref) ]
+    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity,
+                                   [located_elem lid]),
+          Vernacexpr.VtLater) ]
+    -> [ reporting_exceptions
+           (fun () ->
+            let (loc, id) = lid in
+            let dom_locref = located_elem (qualid_of_reference dom_ref) in
+            start_transformation loc id dom_locref) ]
 
 END
 
@@ -1938,14 +1918,40 @@ TACTIC EXTEND instantiate_spec_tac
             in
             let spec_constr = build_spec [] field_evars_type in
 
-            (* Instantiate spec_evar *)
-            (* FIXME: instantiate the remaining evars *)
-            Proofview.tclTHEN
-              (Evar_tactics.instantiate_tac_by_name
-                 spec_id
-                 (Tacinterp.default_ist (),
-                  Detyping.detype true [] env evd spec_constr))
-              (Proofview.V82.nf_evar_goals)
+            (* Instantiate spec_evar and all field evars *)
+            let evar_inst_list =
+              List.mapi
+                (fun i fev ->
+                 (fev.field_evar_id,
+                  Constrintern.intern_constr
+                    env
+                    (mkAppC (mk_specware_ref "model_proj_fun",
+                             [mk_hole dummy_loc;
+                              CPrim (dummy_loc, Numeral (Bigint.of_int i));
+                              mk_var (dummy_loc, Id.of_string "__R");
+                              mk_var (dummy_loc, Id.of_string "__model");
+                              mk_var (dummy_loc, Id.of_string "__r")]))))
+                field_evars_sorted
+            in
+            let _ = List.iter
+                      (fun (evar_id, evar_glob) ->
+                       Pp.msg_info
+                         (str ("Instantiating evar " ^ Id.to_string evar_id
+                               ^ " to: ")
+                          ++ Printer.pr_glob_constr evar_glob))
+                      evar_inst_list in
+            List.fold_left
+              (fun tacm (evar_id, evar_glob) ->
+               Proofview.tclTHEN
+                 tacm
+                 (Proofview.tclTHEN
+                    (Evar_tactics.instantiate_tac_by_name
+                       evar_id
+                       (Tacinterp.default_ist (), evar_glob))
+                    (Proofview.V82.nf_evar_goals)))
+              (Proofview.tclUNIT ())
+              ((spec_id, Detyping.detype true [] env evd spec_constr)::
+                 evar_inst_list)
 
             (* let _ = Pp.msg_info (str "Constr: " ++ Printer.pr_constr spec_constr) in
             Proofview.tclUNIT () *)
@@ -1955,6 +1961,7 @@ END
 
 (* Define a record type for an evar *)
 (* FIXME: document this! *)
+(*
 let add_record_type_for_evar env evd rectp_evar =
   (* Get the necessary info for rectp_evar *)
   let rectp_info = Evd.find evd rectp_evar in
@@ -2195,7 +2202,7 @@ TACTIC EXTEND instantiate_record_type_tac
                           field_evars_sorted))) *)
        ))]
 END
-
+ *)
 
 (* Set a debug terminator *)
 VERNAC COMMAND EXTEND Debug_terminator

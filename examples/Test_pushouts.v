@@ -217,13 +217,6 @@ End rpushout12.
 
 Require Import Coq.Arith.Plus.
 
-Ltac start_refinement :=
-  (raw_evar
-     "__Spec"%string Spec
-     (fun evar =>
-        refine (Build_GMRefinement _ ?__Spec _)));
-  intros R model r;
-  econstructor; constructor.
 
 
 Definition monoid_nat_ref0 : GMRefinement MonoidEx_gspec.

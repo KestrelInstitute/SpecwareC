@@ -12,3 +12,14 @@ PARTICULAR PURPOSE. See the LICENSE.txt for more details. *)
 Require Export Spec.
 
 Declare ML Module "specware_c_plugin".
+
+
+(*** We use this spec to define tactics that depend on the OCaml code ***)
+
+Ltac start_refinement :=
+  (raw_evar
+     "__Spec"%string Spec
+     (fun evar =>
+        refine (Build_GMRefinement _ ?__Spec _)));
+  intros __R __model __r;
+  econstructor; constructor.
