@@ -929,44 +929,46 @@ let make_interp_expr_with_axioms loc dom_locref codom_locref interp_map =
                    mk_hole loc]))
     ))))
 
+(* Add an instance for an interpretation given by id *)
+let add_instance_for_interp loc interp_id dom_locref codom_locref =
+  let dom_spec = lookup_spec dom_locref in
+  let codom_record_expr =
+    CRecord
+      (loc, None,
+       [spec_proofs_recfield_ref loc codom_locref,
+        mk_var (loc, Id.of_string "H")])
+  in
+  let params = [mk_implicit_gen_assum
+                  (Id.of_string "H")
+                  (mkRefC (spec_typeclass_ref loc codom_locref))] in
+  add_term_instance
+    (loc, Name (interp_instance_id interp_id))
+    params
+    (mkAppC
+       (mkRefC (spec_typeclass_ref loc dom_locref),
+        List.rev_map
+          (fun opf ->
+           let recproj_ref =
+             field_in_spec_ref loc dom_locref
+                               (recfield_id_of_spec_field opf) in
+           let op_expr =
+             mkAppC (mkRefC recproj_ref,
+                     [mkAppC (mk_var (loc, interp_id),
+                              [codom_record_expr])])
+           in
+           unfold_term params [recproj_ref; Ident (loc, interp_id)] op_expr)
+          dom_spec.spec_ops))
+    (mkAppC
+       (mkRefC (spec_proofs_recfield_ref loc dom_locref),
+        [mkAppC
+           (mk_var (loc, interp_id),
+            [codom_record_expr])]))
+
 (* Start an interactive proof of an interpretation *)
 let start_interpretation loc interp_id dom_locref codom_locref interp_map =
-  let dom_spec = lookup_spec dom_locref in
-  let codom_spec = lookup_spec codom_locref in
   let interp_expr = make_interp_expr loc dom_locref codom_locref interp_map in
   let hook _ _ =
-    let codom_record_expr =
-      CRecord
-        (loc, None,
-         [spec_proofs_recfield_ref loc codom_locref,
-          mk_var (loc, Id.of_string "H")])
-    in
-    let params = [mk_implicit_gen_assum
-                    (Id.of_string "H")
-                    (mkRefC (spec_typeclass_ref loc codom_locref))] in
-    add_term_instance
-      (loc, Name (interp_instance_id interp_id))
-      params
-      (mkAppC
-         (mkRefC (spec_typeclass_ref loc dom_locref),
-          List.rev_map
-            (fun opf ->
-             let recproj_ref =
-               field_in_spec_ref loc dom_locref
-                                 (recfield_id_of_spec_field opf) in
-             let op_expr =
-               mkAppC (mkRefC recproj_ref,
-                       [mkAppC (mk_var (loc, interp_id),
-                                [codom_record_expr])])
-             in
-             unfold_term params [recproj_ref; Ident (loc, interp_id)] op_expr)
-            dom_spec.spec_ops))
-      (mkAppC
-         (mkRefC (spec_proofs_recfield_ref loc dom_locref),
-          [mkAppC
-             (mk_var (loc, interp_id),
-              [codom_record_expr])]))
-  in
+    add_instance_for_interp loc interp_id dom_locref codom_locref in
   add_program_definition
     ~hook (loc, interp_id) []
     (Some (mkCProdN
