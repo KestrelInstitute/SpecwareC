@@ -1012,15 +1012,12 @@ let add_spec_import_map r interp_map =
   let (loc, locref) = qualid_of_reference r in
   let (spec, globref) = lookup_spec_and_globref locref in
 
-  (* Add the ops of the imported spec, applying interp_map to each one and only
-  adding it if this yields an identifier that is not already in the current
-  spec. Return all the op instantiations in order *)
-  let rec build_op_exprs ops =
-    match ops with
-    | [] -> ([], [], [], Global.env (), Evd.empty_evar_universe_context)
-    | opf::ops' ->
-       let (op_exprs, op_constrs, op_params, env, uctx) = build_op_exprs ops' in
-
+  (* Apply interp_map to all the ops in spec, keeping a list of those ops that
+  are mapped to new free variables so we can add them to the current spec *)
+  let top_env = Global.env () in
+  let interp_map_ops ops =
+    List.fold_right
+      (fun opf (ops, op_exprs, op_constrs, op_params, env, uctx) ->
        (* Look up the expression to use to instantiate the current op *)
        let op_expr =
          match apply_interp_map interp_map opf.field_id with
@@ -1028,31 +1025,57 @@ let add_spec_import_map r interp_map =
          | None -> mk_var (loc, opf.field_id)
        in
 
-       (* If the expression for op is a variable, add it as an op *)
-       let uctx =
+       (* Check if op_expr is a variable *)
+       let (ops, op_constrs, env, uctx) =
          match op_expr with
          | CRef (Ident (_, op_id), None) ->
-            let (tp, uctx) =
-              term_subst_constrs loc () uctx
-                                 opf.field_type op_params op_constrs in
-            let _ = add_spec_field ~err_on_exists:false false (loc, op_id) tp in
-            uctx
-         | _ -> uctx
+            (* If so, first interpret its type by lambda-abstracting it (in
+            top_env, because it cannot use our newly-added ops) ... *)
+            let tp_lambda = mkCLambdaN loc op_params opf.field_type in
+            let (tp_lambda_constr, uctx) =
+              Constrintern.interp_constr
+                top_env (Evd.from_env ~ctx:uctx env) tp_lambda in
+
+            (* ...and then applying it to op_constrs *)
+            let tp_constr =
+              Reduction.beta_appvect tp_lambda_constr (Array.of_list op_constrs)
+            in
+            let tp = Constrextern.extern_type
+                       false env (Evd.from_env ~ctx:uctx env) tp_constr in
+
+            (* Now add our new op to ops and to env, lifting op_constrs because
+               they are all now in the context of a new variable *)
+            ({field_id = op_id; field_type = tp; field_sort = SFS_Op}::ops,
+             List.map (Vars.lift 1) op_constrs,
+             Environ.push_rel (Name op_id, None, tp_constr) env,
+             uctx)
+         | _ ->
+            (* If op_expr is not a variable, nothing changes *)
+            (ops, op_constrs, env, uctx)
        in
 
-       (* Interpret op_expr *)
-       let (op_constr, _) =
-         Constrintern.interp_constr (Global.env ())
-                                    (Evd.from_env ~ctx:uctx env) op_expr in
+       (* Interpret op_expr in the current env *)
+       let (op_constr, uctx) =
+         Constrintern.interp_constr env (Evd.from_env ~ctx:uctx env) op_expr in
 
-       (op_exprs @ [op_expr], op_constrs @ [op_constr],
-        op_params @ [param_of_spec_field loc opf], uctx)
+       (* Finally, return all of our values *)
+       (ops, op_expr::op_exprs, op_constrs@[op_constr],
+        op_params@[param_of_spec_field loc opf], env, uctx))
+
+      ops ([], [], [], [], top_env, Evd.empty_evar_universe_context)
   in
-  let (op_exprs, _, _, _) = build_op_exprs spec.spec_ops in
+  let (ops, op_exprs, _, _, _, _) = interp_map_ops spec.spec_ops in
 
-  (* Build the type of the import, which is the import's typeclass applied to
-  all of its ops *)
-  let import_tp = mkAppC (mkRefC (spec_typeclass_ref loc locref), op_exprs) in
+  (* Now add all the mapped ops to the current spec *)
+  let _ = List.iter
+            (fun opf ->
+             add_spec_field ~err_on_exists:false false
+                            (loc, opf.field_id) opf.field_type)
+            (List.rev ops) in
+
+  (* Build the type of the import, which is its typeclass applied to op_exprs *)
+  let import_tp = mkAppC (mkRefC (spec_typeclass_ref loc locref),
+                          List.rev op_exprs) in
 
   (* Finally, add the import *)
   update_current_spec
