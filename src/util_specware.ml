@@ -547,10 +547,26 @@ let add_definition ?(hook = (fun _ _ -> ())) lid params type_opt body =
     (located_elem lid) (Global, false, Definition) params None body type_opt
     (Lemmas.mk_hook hook)
 
-(* Add a Program definition, with holes that are filled out by user tactics. The
-tac_map variable optionally maps evar names to tactics for them *)
+(* Add a Program definition, with holes that are filled out by user tactics. *)
 let add_program_definition ?(hook = (fun _ _ -> ())) ?tactic
                            lid params tp_opt body =
+  let cmd = VernacDefinition
+              ((None, Definition), lid,
+               DefineBody (params, None, body, tp_opt))
+  in
+  let _ = debug_printf 1 "@[add_program_definition command: @ Program %a@]\n"
+                       pp_vernac cmd in
+  let (loc, id) = lid in
+  let _ = Obligations.set_program_mode true in
+  let _ = Flags.program_mode := true in
+  Command.do_definition id (Global, false, Definition)
+                        params None body tp_opt (Lemmas.mk_hook hook)
+
+
+(* Add a Program definition, with holes that are filled out by user tactics. The
+tac_map variable optionally maps evar names to tactics for them *)
+let add_program_definition_with_old ?(hook = (fun _ _ -> ())) ?tactic
+                                    lid params tp_opt body =
   let open Entries in
   let id = located_elem lid in
   let cmd = VernacDefinition
@@ -561,7 +577,6 @@ let add_program_definition ?(hook = (fun _ _ -> ())) ?tactic
   (* NOTE: this code is mostly copied Command.do_definition *)
   let (ce, evd, imps as def) =
     Command.interp_definition params false None body tp_opt in
-  let _ = debug_printf 1 "debug 0\n" in
   let env = Global.env () in
   let (c,ctx), sideff = Future.force ce.const_entry_body in
   assert(Declareops.side_effects_is_empty sideff);
@@ -570,13 +585,10 @@ let add_program_definition ?(hook = (fun _ _ -> ())) ?tactic
     | Some t -> t
     | None -> Retyping.get_type_of env evd c
   in
-  let _ = debug_printf 1 "debug 1\n" in
   Obligations.check_evars env evd;
-  let _ = debug_printf 1 "debug 2\n" in
   let obls, _, c, cty =
     Obligations.eterm_obligations env id evd 0 c typ
   in
-  let _ = debug_printf 1 "debug 3\n" in
   let (tac_interp_opt, wrapper, hook) =
     match tactic with
     | None -> (None, (fun f -> f ()), hook)

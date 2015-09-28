@@ -589,9 +589,9 @@ let spec_descr : (constr_spec_field list * constr_spec_field list,
            let f = match f_sum with Left f -> f | Right f -> f in
            Descr_ConstrMap
              ((fun rest_constr ->
-               let rest_body_constr =
-                 Reduction.beta_appvect rest_constr [| Term.mkVar f |] in
-               hnf_constr rest_body_constr),
+               match Term.kind_of_term rest_constr with
+               | Term.Lambda (_, _, body) -> hnf_constr body
+               | _ -> raise dummy_loc DescrFailedInternal),
               (fun rest_expr ->
                (mkCLambdaN
                   dummy_loc
@@ -877,7 +877,7 @@ let make_interp_expr_with_axioms loc dom_locref codom_locref interp_map =
     ))))
 
 (* Add an instance for an interpretation given by id *)
-let add_instance_for_interp loc interp_id dom_locref codom_locref =
+let add_instance_for_interp loc inst_id interp_expr dom_locref codom_locref =
   let dom_spec = lookup_spec dom_locref in
   let codom_record_expr =
     CRecord
@@ -889,7 +889,7 @@ let add_instance_for_interp loc interp_id dom_locref codom_locref =
                   (Id.of_string "H")
                   (mkRefC (spec_typeclass_ref loc codom_locref))] in
   add_term_instance
-    (loc, Name (interp_instance_id interp_id))
+    (loc, Name inst_id)
     params
     (mkAppC
        (mkRefC (spec_typeclass_ref loc dom_locref),
@@ -900,22 +900,24 @@ let add_instance_for_interp loc interp_id dom_locref codom_locref =
                                (recfield_id_of_spec_field opf) in
            let op_expr =
              mkAppC (mkRefC recproj_ref,
-                     [mkAppC (mk_var (loc, interp_id),
-                              [codom_record_expr])])
+                     [mkAppC (interp_expr, [codom_record_expr])])
            in
-           unfold_term params [recproj_ref; Ident (loc, interp_id)] op_expr)
+           (* unfold_term params [recproj_ref; Ident (loc, interp_id)] op_expr *)
+           reduce_term params [Hnf] op_expr
+          )
           dom_spec.spec_ops))
     (mkAppC
        (mkRefC (spec_proofs_recfield_ref loc dom_locref),
         [mkAppC
-           (mk_var (loc, interp_id),
-            [codom_record_expr])]))
+           (interp_expr, [codom_record_expr])]))
 
 (* Start an interactive proof of an interpretation *)
 let start_interpretation loc interp_id dom_locref codom_locref interp_map =
   let interp_expr = make_interp_expr loc dom_locref codom_locref interp_map in
   let hook _ _ =
-    add_instance_for_interp loc interp_id dom_locref codom_locref in
+    add_instance_for_interp
+      loc (interp_instance_id interp_id)
+      (mk_var (loc, interp_id)) dom_locref codom_locref in
   add_program_definition
     ~hook (loc, interp_id) []
     (Some (mkCProdN
@@ -1323,24 +1325,41 @@ let start_transformation loc spec_id dom_locref =
     (* Start a new spec *)
     let _ = begin_new_spec (loc, spec_id) in
     (* Add all the ops and axioms *)
-    let _ =
-      List.iter
-        (fun specf ->
-         add_spec_field
-           (not (spec_field_is_op specf))
-           (loc, specf.field_id)
-           (Constrextern.extern_constr false env Evd.empty specf.field_type))
-        (ops @ axioms)
+    let add_specf env specf =
+      add_spec_field
+        (not (spec_field_is_op specf))
+        (loc, specf.field_id)
+        (Constrextern.extern_constr false env Evd.empty specf.field_type)
     in
+    let ops_env =
+      List.fold_left
+        (fun env specf ->
+         let _ = add_specf env specf in
+         Environ.push_rel (Name specf.field_id, None, specf.field_type) env)
+        env
+        ops
+    in
+    let _ = List.iter (add_specf ops_env) axioms in
     (* End the spec *)
     let _ = end_new_spec (loc, spec_id) in
-    (* FIXME: Add a definition for the interpretation...? *)
+    (* Add a definition spec_interp for the interpretation *)
+    let _ = add_definition
+              (loc, add_suffix spec_id "interp") [] None
+              (mkCLambdaN
+                 loc [mk_explicit_assum (Id.of_string "__r") (mk_hole loc)]
+                 (mkAppC (mk_specware_ref "gmref_interp",
+                          [mk_hole loc; mk_var gmref_lid; mk_hole loc;
+                           mkRefC (spec_model_ref
+                                     loc (spec_locref_of_id spec_id));
+                           mk_var (loc, Id.of_string "__r")])))
+    in
     (* Add an instance for the interpretation *)
     add_instance_for_interp
       loc
       (interp_instance_id spec_id)
+      (mk_var (loc, add_suffix spec_id "interp"))
       dom_locref
-      (mk_qualid [] (Id.to_string spec_id))
+      (spec_locref_of_id spec_id)
   in
   start_definition ~hook gmref_lid []
                    (mkAppC (mk_specware_ref "GMRefinement",

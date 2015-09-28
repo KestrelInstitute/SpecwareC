@@ -131,6 +131,7 @@ Spec End NatMonoid.
 Print NatMonoid.NatMonoid.
 Print NatMonoid.NatMonoid__Spec.
 
+(*
 Spec Interpretation monoid_natmonoid : Monoid -> NatMonoid := { T +-> nat }.
 Next Obligation.
   constructor.
@@ -139,7 +140,6 @@ Next Obligation.
   apply plus_assoc.
 Qed.
 Print monoid_natmonoid__instance.
-
 
 Section NatMonoid_Thms.
 Import NatMonoid.
@@ -150,8 +150,10 @@ Lemma nm_left_id_uniq (x:T) : (forall y, m_plus x y = y) -> x = m_zero.
 Qed.
 
 End NatMonoid_Thms.
+*)
 
-Set Printing All.
+
+(*
 Spec NatMonoid2 := transform NatMonoid.
   start_refinement.
   Unshelve. shelve.
@@ -162,106 +164,22 @@ Spec NatMonoid2 := transform NatMonoid.
   instantiate (Goal0:=?[m_zero__proof__field]).
   Show Existentials.
   Unshelve.
+  Focus 3.
   instantiate_spec ?__Spec.
-  Show Existentials.
-  instantiate (m_zero__proof__field:=model_proj_fun _ 2 __R __model __r).
-  instantiate (m_plus__proof__field:=model_proj_fun _ 3 __R __model __r).
 Defined.
 
-Print NatMonoid2__refinement.
+Print NatMonoid2.NatMonoid2.
 
-(*
-Spec Interpretation monoid_natmonoid2 : Monoid -> NatMonoid := { T +-> (T:Type) }.
-Obligation 4.
-repeat interp_tactic.
-destruct ops.
-admit.
-Defined.
-*)
+Section NatMonoid2_Thms.
+Import NatMonoid2.
+Context `{NatMonoid2}.
 
-Spec NatMonoid_Import.
-Spec Import NatMonoid.
-Spec End NatMonoid_Import.
-
-Print NatMonoid_Import.NatMonoid_Import__Spec.
-Print NatMonoid.NatMonoid__Spec.
-
-Spec NatMonoid_Import2 := transform NatMonoid.
-apply id_refinement.
-Defined.
-
-Print NatMonoid_Import2.NatMonoid_Import2.
-
-
-
-(* Building the NatMonoid -> NatMonoid_Import interpretation manually *)
-Section natmonoid_natmonoid_import_section.
-Import NatMonoid_Import.
-
-(* Local Obligation Tactic := idtac. *)
-
-Program Definition natmonoid_natmonoid_import_ops_f
-        (ops:spec_ops NatMonoid.NatMonoid__Spec) :
-  spec_ops NatMonoid_Import.NatMonoid_Import__Spec :=
-  match ops with
-    | opCons
-        T__var T__proof
-        (opCons
-           m_zero__var m_zero__proof
-           (opCons
-              m_plus__var m_plus__proof
-              tt)) =>
-      opCons
-        (oppred:=_) (nat:Type) _
-        (opCons
-           (oppred:=_) m_zero__var _
-           (opCons
-              (oppred:=_) m_plus__var _
-              tt))
-  end.
-
-Definition natmonoid_natmonoid_import_model_f
-        (ops:spec_ops NatMonoid.NatMonoid__Spec)
-        (model:spec_model NatMonoid.NatMonoid__Spec ops) :
-  spec_model NatMonoid_Import.NatMonoid_Import__Spec
-             (natmonoid_natmonoid_import_ops_f ops).
-repeat (let t := fresh t in
-        let pf := fresh pf in
-        destruct ops as [t pf ops]).
-repeat (let ax := fresh ax in destruct model as [ ax model ]).
-unfold conjoin_axioms in model.
-split; [ | split ].
-apply ax.
-apply ax0.
-unfold conjoin_axioms. intros.
-apply model.
+Lemma nm2_left_id_uniq x : (forall y, m_plus__field x y = y) -> x = m_zero__field.
+  apply left_id_uniq.
 Qed.
 
-Definition natmonoid_natmonoid_import :
-  Interpretation NatMonoid.NatMonoid__Spec NatMonoid_Import.NatMonoid_Import__Spec :=
-  mkInterp natmonoid_natmonoid_import_ops_f natmonoid_natmonoid_import_model_f.
-
-End natmonoid_natmonoid_import_section.
-
-(*
-Program Instance natmonoid_natmonoid__instance
-         `{Spec:NatMonoid_Import} :
-  NatMonoid.NatMonoid (T__param:=T__var)
-                      (m_zero__param:=m_zero__var)
-                      (m_plus__param:=m_plus__var).
+End NatMonoid2_Thms.
 *)
-
-(*
-Instance natmonoid_natmonoid__instance
-         `{Spec:NatMonoid_Import} :
-  NatMonoid.NatMonoid (T__param:=T__param)
-                      (T__proof__param:=T__proof__param)
-                      (m_zero__param:=m_zero__param)
-                      (m_zero__proof__param:=m_zero__proof__param)
-                      (m_plus__param:=m_plus__param)
-                      (m_plus__proof__param:=m_plus__proof__param).
-*)
-
 
 Spec Group2.
 
@@ -269,26 +187,22 @@ Spec Variable T : Type.
 Spec Variable g_zero : T.
 Spec Variable g_plus : (T -> T -> T).
 
+Spec Variable g_inv : (T -> T).
+
 Spec Axiom g_zero_left : (forall x, g_plus g_zero x = x).
 Spec Axiom g_zero_right : (forall x, g_plus x g_zero = x).
 Spec Axiom g_plus_assoc : (forall x y z, g_plus x (g_plus y z) = g_plus (g_plus x y) z).
 
-Spec Variable g_inv : (T -> T).
 Spec Axiom g_inv_left : (forall (x:T), g_plus (g_inv x) x = g_zero).
 Spec Axiom g_inv_right : (forall (x:T), g_plus x (g_inv x) = g_zero).
 
 Spec End Group2.
 
 
-Spec Interpretation Monoid_Group2 : Monoid -> Group2.
-unfold Monoid.Monoid__Spec, Group2.Group2__Spec.
-apply (interp_cons_strengthen_xlate { "m_"% +-> "g_"% });
-  [ intros; apply I | ].
-intro_string ("T"%string).
+Spec Interpretation Monoid_Group2 : Monoid -> Group2 := { m_% +-> g_% }.
+Next Obligation.
 
-prove_simple_interp { "m_"% +-> "g_"% }.
-Defined.
-
+Print Monoid_Group2__instance.
 
 Section Group2_Thms.
 Import Group2.
