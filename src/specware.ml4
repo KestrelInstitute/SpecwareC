@@ -1570,9 +1570,7 @@ VERNAC COMMAND EXTEND Spec
   | [ "Spec" "Interpretation" var(lid)
              ":" global(dom_ref) "->" global(codom_ref) ":="
              "{" interp_map(imap) "}"]
-    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity,
-                                   [located_elem lid]),
-          Vernacexpr.VtLater) ]
+    => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
            (fun () ->
             let (loc, id) = lid in
@@ -1582,9 +1580,7 @@ VERNAC COMMAND EXTEND Spec
 
   (* Start transforming a spec *)
   | [ "Spec" var(lid) ":=" "transform" global(dom_ref) ]
-    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity,
-                                   [located_elem lid]),
-          Vernacexpr.VtLater) ]
+    => [ (Vernacexpr.VtSideff [located_elem lid], Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
            (fun () ->
             let (loc, id) = lid in

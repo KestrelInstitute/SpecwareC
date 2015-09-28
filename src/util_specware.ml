@@ -567,8 +567,8 @@ let add_program_definition ?(hook = (fun _ _ -> ())) ?tactic
 
 (* Add a Program definition, with holes that are filled out by user tactics. The
 tac_map variable optionally maps evar names to tactics for them *)
-let add_program_definition_with_old ?(hook = (fun _ _ -> ())) ?tactic
-                                    lid params tp_opt body =
+let add_program_definition_old ?(hook = (fun _ _ -> ())) ?tactic
+                               lid params tp_opt body =
   let open Entries in
   let id = located_elem lid in
   let cmd = VernacDefinition
