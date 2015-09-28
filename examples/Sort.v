@@ -5,6 +5,11 @@ Require Import List.
 Import ListNotations.
 Require Import Coq.Arith.Peano_dec.
 
+
+(***
+ *** Helper definitions to define sorting
+ ***)
+
 Fixpoint sorted (l: list nat) : Prop :=
   match l with
     | [] => True
@@ -19,6 +24,9 @@ Definition permOf (l1 l2: list nat) : Prop :=
   forall x, count_occ eq_nat_dec l1 x = count_occ eq_nat_dec l2 x.
 
 
+(***
+ *** Problem spec for sorting
+ ***)
 
 Spec Sorting.
 
@@ -29,13 +37,26 @@ Spec Axiom sort_correct :
 Spec End Sorting.
 
 
-Spec Sorting2.
+(***
+ *** Interpretation from divide-and-conquer problem spec to sorting
+ ***)
 
-Spec Import Sorting [[ dc_impl ]].
+Spec Interpretation sorting_dnc : DivideAndConquer_problem -> Sorting :=
+  { solve +-> sort; IO +-> (fun li lo => sorted lo /\ permOf li lo) }.
+Next Obligation.
+destruct Sorting__proofs; constructor; assumption.
+Defined.
 
 
+Definition sorting_pushout :
+  @GMPushout DivideAndConquer_problem.DivideAndConquer_problem__gspec
+             Sorting.Sorting__gspec
+             DivideAndConquer_soln.DivideAndConquer_soln__gspec
+             sorting_dnc DnC_interp.
+  pushout_tac.
+Defined.
 
-Definition sort_interp :
-  Interpretation DivideAndConquer.DivideAndConquer__Spec
-                 Sorting.Sorting__Spec.
-  
+
+Spec Sorting1 := raw (gmpo_spec _ _ sorting_pushout).
+
+Print Sorting1.
