@@ -489,6 +489,11 @@ let mk_implicit_var_assum id =
                                Some (Evar_kinds.BinderType (Name id)),
                                IntroAnonymous, None))
 
+(* Make an implicit generalized `{id:tp} assumption *)
+let mk_implicit_gen_assum id tp =
+  LocalRawAssum ([(Loc.dummy_loc, Name id)],
+                 Generalized (Implicit, Implicit, false), tp)
+
 (* Make an explicit (id:tp) assumption *)
 let mk_explicit_assum id tp =
   LocalRawAssum ([(Loc.dummy_loc, Name id)], Default Explicit, tp)
@@ -775,6 +780,13 @@ let reduce_term params reds t =
     let _ = evdref := evd in
     snd (fst (Redexpr.reduction_of_red_expr env r_interp) env !evdref c) in
   uninterp_term (List.fold_left apply_redexpr (interp_term t) reds)
+
+(* Unfold a list of references in constr_expr t *)
+let unfold_term params refs t =
+  reduce_term
+    params
+    [Unfold (List.map (fun r -> (Locus.AllOccurrences, AN r)) refs)]
+    t
 
 (* Fold some set of variables in c into equivalent terms, by taking
    folds_c, a list of pairs of constrs (c_from,c_to) where c_from is

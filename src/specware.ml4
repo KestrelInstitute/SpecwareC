@@ -124,6 +124,10 @@ let spec_import_instance_id i j =
     (add_suffix (Id.of_string "spec") ("import" ^ string_of_int i))
     ("instance" ^ string_of_int j)
 
+(* Get the id of the instance function associated with an interp named id *)
+let interp_instance_id id =
+  add_suffix id "instance"
+
 
 (***
  *** Specware-Specific Symbols
@@ -162,6 +166,9 @@ let spec_locref_basename locref =
 let field_in_spec locref fname =
   qualid_cons locref fname
 
+let field_in_spec_ref loc locref fname =
+  Qualid (loc, field_in_spec locref fname)
+
 (* Return a local reference to the axiom typeclass of a spec given by
    a local reference *)
 let spec_typeclass_qualid locref =
@@ -169,6 +176,20 @@ let spec_typeclass_qualid locref =
 
 let spec_typeclass_ref loc locref =
   Qualid (loc, spec_typeclass_qualid locref)
+
+(* Return a qualid for the record type of a spec *)
+let spec_rectp_qualid locref =
+  qualid_cons locref (spec_rectp_id (spec_locref_basename locref))
+
+let spec_rectp_ref loc locref =
+  Qualid (loc, spec_rectp_qualid locref)
+
+(* Return a qualid for the spec__proofs record field of a spec's record type *)
+let spec_proofs_recfield_qualid locref =
+  qualid_cons locref (spec_proofs_id (spec_locref_basename locref))
+
+let spec_proofs_recfield_ref loc locref =
+  Qualid (loc, spec_proofs_recfield_qualid locref)
 
 (* Return a local reference to the Build_ constructor of the spec typeclass of a
 spec given by local reference *)
@@ -822,11 +843,49 @@ let rec apply_interp_map interp_map f =
 
 (* Build an expression that maps from the record type of codom_globref to that
 of dom_globref, mapping fields in dom_globref using interp_map *)
-let make_interp_expr loc dom_globref codom_globref interp_map =
-  let dom_spec = lookup_global_spec dom_globref in
-  let dom_locref = spec_globref_to_locref dom_globref in
-  let codom_spec = lookup_global_spec codom_globref in
-  let codom_locref = spec_globref_to_locref codom_globref in
+let make_interp_expr loc dom_locref codom_locref interp_map =
+  let (dom_spec, dom_globref) = lookup_spec_and_globref dom_locref in
+  let (codom_spec, codom_globref) = lookup_spec_and_globref codom_locref in
+  let lname_of_specf specf = (loc, Name specf.field_id) in
+  mkCLambdaN
+    loc
+    [LocalRawAssum ([loc, Name (Id.of_string "__r")],
+                    Default Explicit, mk_hole loc)]
+    (CLetTuple
+       (loc,
+        List.rev_map lname_of_specf codom_spec.spec_ops
+        @ [loc, Name (spec_proofs_id codom_spec.spec_name)],
+        (None, None),
+        mk_var (loc, Id.of_string "__r"),
+        (CRecord
+           (loc, None,
+            List.rev_map
+              (fun specf ->
+               let t =
+                 match apply_interp_map interp_map specf.field_id with
+                 | Some t -> t
+                 | None ->
+                    if List.exists (fun specf' ->
+                                    Id.equal specf.field_id specf'.field_id)
+                                   codom_spec.spec_ops
+                    then
+                      mk_var (loc, specf.field_id)
+                    else
+                      mk_hole loc
+               in
+               (Qualid (loc,
+                        field_in_spec
+                          dom_locref (recfield_id_of_spec_field specf)), t))
+              dom_spec.spec_ops
+            @ [spec_proofs_recfield_ref loc dom_locref,
+               (* FIXME HERE: try to fill out the proofs as well *)
+               mk_hole loc]))))
+
+
+(* Like the above, but also destructs the axioms of the codom spec *)
+let make_interp_expr_with_axioms loc dom_locref codom_locref interp_map =
+  let (dom_spec, dom_globref) = lookup_spec_and_globref dom_locref in
+  let (codom_spec, codom_globref) = lookup_spec_and_globref codom_locref in
   let lname_of_specf specf = (loc, Name specf.field_id) in
   mkCLambdaN
     loc
@@ -844,7 +903,7 @@ let make_interp_expr loc dom_globref codom_globref interp_map =
               lname_of_specf
               (spec_import_fields codom_spec @ codom_spec.spec_axioms),
             (None, None),
-            mk_var (loc, spec_proofs_id dom_spec.spec_name),
+            mk_var (loc, spec_proofs_id codom_spec.spec_name),
             (CRecord
                (loc, None,
                 List.rev_map
@@ -861,14 +920,61 @@ let make_interp_expr loc dom_globref codom_globref interp_map =
                         else
                           mk_hole loc
                    in
-                   (Qualid (loc, field_in_spec dom_locref specf.field_id), t))
+                   (Qualid (loc,
+                            field_in_spec
+                              dom_locref (recfield_id_of_spec_field specf)), t))
                   dom_spec.spec_ops
-                @ [Qualid (loc,
-                           field_in_spec dom_locref
-                                         (spec_proofs_id dom_spec.spec_name)),
+                @ [spec_proofs_recfield_ref loc dom_locref,
                    (* FIXME HERE: try to fill out the proofs as well *)
                    mk_hole loc]))
     ))))
+
+(* Start an interactive proof of an interpretation *)
+let start_interpretation loc interp_id dom_locref codom_locref interp_map =
+  let dom_spec = lookup_spec dom_locref in
+  let codom_spec = lookup_spec codom_locref in
+  let interp_expr = make_interp_expr loc dom_locref codom_locref interp_map in
+  let hook _ _ =
+    let codom_record_expr =
+      CRecord
+        (loc, None,
+         [spec_proofs_recfield_ref loc codom_locref,
+          mk_var (loc, Id.of_string "H")])
+    in
+    let params = [mk_implicit_gen_assum
+                    (Id.of_string "H")
+                    (mkRefC (spec_typeclass_ref loc codom_locref))] in
+    add_term_instance
+      (loc, Name (interp_instance_id interp_id))
+      params
+      (mkAppC
+         (mkRefC (spec_typeclass_ref loc dom_locref),
+          List.rev_map
+            (fun opf ->
+             let recproj_ref =
+               field_in_spec_ref loc dom_locref
+                                 (recfield_id_of_spec_field opf) in
+             let op_expr =
+               mkAppC (mkRefC recproj_ref,
+                       [mkAppC (mk_var (loc, interp_id),
+                                [codom_record_expr])])
+             in
+             unfold_term params [recproj_ref; Ident (loc, interp_id)] op_expr)
+            dom_spec.spec_ops))
+      (mkAppC
+         (mkRefC (spec_proofs_recfield_ref loc dom_locref),
+          [mkAppC
+             (mk_var (loc, interp_id),
+              [codom_record_expr])]))
+  in
+  add_program_definition
+    ~hook (loc, interp_id) []
+    (Some (mkCProdN
+             loc
+             [mk_explicit_assum (Id.of_string "__r")
+                                (mkRefC (spec_rectp_ref loc codom_locref))]
+             (mkRefC (spec_rectp_ref loc dom_locref))))
+    interp_expr
 
 
 (***
@@ -1285,6 +1391,7 @@ END
 VERNAC ARGUMENT EXTEND interp_map
   | [ interp_map_elem(elem) ";" interp_map(rest) ] -> [ elem::rest ]
   | [ interp_map_elem(elem) ] -> [ [elem] ]
+  | [ ] -> [ [] ]
 END
 
 (* Syntactic class to parse spec terms *)
@@ -1453,26 +1560,18 @@ VERNAC COMMAND EXTEND Spec
 
 
   (* Define an interpretation *)
-  (*
-  | [ "Spec" "Interpretation" var(lmorph_name)
-             ":" global(dom) "->" global(codom) ":="
+  | [ "Spec" "Interpretation" var(lid)
+             ":" global(dom_ref) "->" global(codom_ref) ":="
              "{" interp_map(imap) "}"]
     => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity,
-                                   [located_elem lmorph_name]),
+                                   [located_elem lid]),
           Vernacexpr.VtLater) ]
     -> [ reporting_exceptions
-           (fun () -> start_interpretation lmorph_name dom codom (Some imap)) ]
-   *)
-
-  (* Define an interpretation using tactics *)
-  (*
-  | [ "Spec" "Interpretation" var(lmorph_name) ":" global(dom) "->" global(codom) ]
-    => [ (Vernacexpr.VtStartProof ("Classic", Doesn'tGuaranteeOpacity,
-                                   [located_elem lmorph_name]),
-          Vernacexpr.VtLater) ]
-    -> [ reporting_exceptions
-           (fun () -> start_interpretation lmorph_name dom codom None) ]
-   *)
+           (fun () ->
+            let (loc, id) = lid in
+            let dom_locref = located_elem (qualid_of_reference dom_ref) in
+            let codom_locref = located_elem (qualid_of_reference codom_ref) in
+            start_interpretation loc id dom_locref codom_locref imap) ]
 
 END
 

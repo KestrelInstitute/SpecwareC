@@ -2,6 +2,8 @@
 Add LoadPath "../theories" as Specware.
 Require Import Specware.SpecwareC.
 
+Require Import Coq.Arith.Arith_base.
+
 
 (***
  *** Syntax for a spec; creates a sequence of type classes a-la Spitters and van
@@ -58,7 +60,6 @@ End Monoid_Thms.
  *** starting with "g_".
  ***)
 
-Set Printing All.
 Spec Group.
 
 Spec Import Monoid {m_% +-> g_%}.
@@ -92,7 +93,6 @@ Lemma g_left_id_uniq (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
   apply left_id_uniq.
 Qed.
 
-Set Printing All.
 Lemma g_left_id_uniq2 (x:T) : (forall y, g_plus x y = y) -> x = g_zero.
   intros left_id.
   rewrite <- (left_id g_zero).
@@ -131,119 +131,26 @@ Spec End NatMonoid.
 Print NatMonoid.NatMonoid.
 Print NatMonoid.NatMonoid__Spec.
 
+Spec Interpretation monoid_natmonoid : Monoid -> NatMonoid := { T +-> nat }.
+Next Obligation.
+  constructor.
+  apply plus_0_l.
+  apply plus_0_r.
+  apply plus_assoc.
+Qed.
+Print monoid_natmonoid__instance.
 
-(* Building the Monoid -> NatMonoid interpretation manually *)
-Section monoid_natmonoid__instance_section.
+
+Section NatMonoid_Thms.
 Import NatMonoid.
+Context `{NatMonoid}.
 
-Program Definition monoid_natmonoid : Interpretation Monoid.Monoid__Spec NatMonoid.NatMonoid__Spec :=
-  let ops_f :=
-      (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) =>
-         match ops with
-           | opCons
-               T__var T__proof
-               (opCons
-                  m_zero__var m_zero__proof
-                  (opCons
-                     m_plus__var m_plus__proof
-                     tt)) =>
-             opCons
-               (oppred:=Pred_Trivial) (nat:Type) _
-               (opCons
-                  (oppred:=Pred_Trivial) m_zero__var _
-                  (opCons
-                     (oppred:=Pred_Trivial) m_plus__var _
-                     tt)) : spec_ops Monoid.Monoid__Spec
-         end) in
-  mkInterp
-    ops_f
-    (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) =>
-       match ops return
-             spec_model NatMonoid.NatMonoid__Spec ops ->
-             spec_model Monoid.Monoid__Spec (ops_f ops)
-       with
-         | opCons
-             T__var T__proof
-             (opCons m_zero__var m_zero__proof
-                     (opCons m_plus__var m_plus__proof tt)) =>
-           let T := nat in
-           let m_zero := 0 in
-           let m_plus := plus in
-           fun model => _
-       end).
+Lemma nm_left_id_uniq (x:T) : (forall y, m_plus x y = y) -> x = m_zero.
+  apply left_id_uniq.
+Qed.
 
-Print monoid_natmonoid.
-Print monoid_natmonoid_obligation_4.
+End NatMonoid_Thms.
 
-(*
-Instance monoid_natmonoid__instance
-         `{Spec:NatMonoid} :
-  Monoid.Monoid (T__param:=T:Type)
-                (m_zero__param:=m_zero__var)
-                (m_plus__param:=m_plus__var).
-constructor.
-unfold Monoid.m_zero_left__class, Monoid.T, Monoid.m_zero, Monoid.m_plus.
-unfold m_zero__var.
-(* FIXME: why do we need m_zero__proof__param instead of m_zero__proof here? *)
-rewrite m_zero__proof__param. rewrite m_plus__proof.
-apply m_zero_left.
-unfold Monoid.m_zero_right__class, Monoid.T, Monoid.m_zero, Monoid.m_plus.
-unfold m_zero__var.
-rewrite m_zero__proof__param. rewrite m_plus__proof.
-apply m_zero_right.
-unfold Monoid.m_plus_assoc__class, Monoid.T, Monoid.m_zero, Monoid.m_plus.
-rewrite m_plus__proof.
-apply m_plus_assoc.
-Defined.
-
-Program Definition monoid_natmonoid : Interpretation Monoid.Monoid__Spec NatMonoid.NatMonoid__Spec :=
-  let ops_f :=
-      (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) =>
-         match ops with
-           | opCons
-               T__var T__proof
-               (opCons
-                  m_zero__var m_zero__proof
-                  (opCons
-                     m_plus__var m_plus__proof
-                     tt)) =>
-             opCons
-               (oppred:=Pred_Trivial) (nat:Type) _
-               (opCons
-                  (oppred:=Pred_Trivial) m_zero__var _
-                  (opCons
-                     (oppred:=Pred_Trivial) m_plus__var _
-                     tt)) : spec_ops Monoid.Monoid__Spec
-         end) in
-  mkInterp
-    ops_f
-    (fun (ops:spec_ops NatMonoid.NatMonoid__Spec) =>
-       match ops return
-             spec_model NatMonoid.NatMonoid__Spec ops ->
-             spec_model Monoid.Monoid__Spec (ops_f ops)
-       with
-         | opCons
-             T__var T__proof
-             (opCons m_zero__var m_zero__proof
-                     (opCons m_plus__var m_plus__proof tt)) =>
-           let T := nat in
-           let m_zero := 0 in
-           let m_plus := plus in
-           fun model =>
-           proj1 (spec_models_iso
-                    (IsoToSpecModels:=
-                       Monoid.Monoid__Iso (T__param:=T) (m_zero__param:=m_zero__var)
-                                          (m_plus__param:=m_plus__var)))
-                 (monoid_natmonoid__instance
-                    (Spec:=
-                       proj2 (spec_models_iso
-                                (IsoToSpecModels:=
-                                   @NatMonoid.NatMonoid__Iso T__var T__proof m_zero__var m_zero__proof m_plus__var m_plus__proof))
-                             _))
-       end).
-*)
-
-End monoid_natmonoid__instance_section.
 
 (*
 Spec Interpretation monoid_natmonoid2 : Monoid -> NatMonoid := { T +-> (T:Type) }.
