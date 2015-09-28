@@ -1154,6 +1154,19 @@ let complete_spec loc spec =
             (List.rev_map (recfield_of_spec_field loc) all_axioms)
   in
 
+  (* Create f__value projections of the ops in the spec typeclass *)
+  let _ = List.iter
+            (fun opf ->
+             add_definition
+               (loc, add_suffix opf.field_id "value")
+               [mk_implicit_gen_assum
+                  (Id.of_string "__H")
+                  (mk_var (loc, spec.spec_name))]
+               None
+               (mk_var (loc, opf.field_id)))
+            spec.spec_ops
+  in
+
   (* Create the record type spec__Record *)
   (*
   let rec build_rec_fields ops =
