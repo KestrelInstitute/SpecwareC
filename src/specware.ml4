@@ -1336,7 +1336,8 @@ let start_transformation loc spec_id dom_locref =
     (* Build a new spec from the gmref_spec field of the refinement *)
     let _ = create_spec_from_repr
               loc spec_id
-              (mkAppC (mk_specware_ref "gmref_spec", [mk_var gmref_lid])) in
+              (mkAppC (mk_specware_ref "gmref_spec",
+                       [mk_hole loc; mk_var gmref_lid])) in
     (* Add a definition spec_interp for the interpretation *)
     let _ = add_definition
               (loc, add_suffix spec_id "interp") [] None
