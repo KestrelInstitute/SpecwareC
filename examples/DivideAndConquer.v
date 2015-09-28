@@ -8,11 +8,33 @@ Require Import Coq.Program.Wf.
 
 
 (***
- *** Binary Divide-and-Conquer Algorithms
+ *** The Problem Spec
  ***)
 
-(* The base spec, containing all the helper ops *)
-Spec DivideAndConquer_base.
+(* The problem spec contains the variable to be solved by divide-and-conquer
+along with its types and correctness specification *)
+Spec DivideAndConquer_problem.
+
+(* Domain and range types *)
+Spec Variable D : Type.
+Spec Variable R : Type.
+
+(* Input / output predicates *)
+Spec Variable IO : (D -> R -> Prop).
+
+(* The function itself *)
+Spec Variable solve : (D -> R).
+Spec Axiom solve_correct : (forall d, IO d (solve d)).
+
+Spec End DivideAndConquer_problem.
+
+
+(***
+ *** The Solution Spec
+ ***)
+
+(* The solution spec, with the sub-components needed to solve the problem *)
+Spec DivideAndConquer_soln.
 
 (* Domain and range types *)
 Spec Variable D : Type.
@@ -33,6 +55,7 @@ Spec Variable decompose : (D -> D * D) | (forall d,
                                             smaller (snd (decompose d)) d).
 Spec Variable compose : (R -> R -> R).
 
+
 (* Soundness axioms *)
 Spec Axiom direct_solve_correct :
   (forall d, primitive d = true -> IO d (direct_solve d)).
@@ -42,25 +65,16 @@ Spec Axiom solve_soundness :
      IO (snd (decompose d)) z2 ->
      IO d (compose z1 z2)).
 
-Spec End DivideAndConquer_base.
+Spec End DivideAndConquer_soln.
 
 
-(* The "specification" spec, with the solve variable and its specification *)
-Spec DivideAndConquer_spec.
+(***
+ *** Definition of the Solver
+ ***)
 
-Spec Import DivideAndConquer_base.
-
- (* The solver *)
-Spec Variable solve : (D -> R).
-Spec Axiom solve_correct : (forall d, IO d (solve d)).
-
-Spec End DivideAndConquer_spec.
-
-
-(* The implementation spec, that defines the solver *)
-Spec DivideAndConquer_impl.
-
-Spec Import DivideAndConquer_base.
+Section Solver.
+Import DivideAndConquer_soln.
+Context `{DivideAndConquer_soln}.
 
 (* The solver *)
 Function solve_def (d:D) {wf smaller d} : R :=
@@ -78,11 +92,8 @@ apply (proj1 (decompose__proof _ teq)).
 assumption.
 Defined.
 
-Spec Definition solve : (D -> R) := solve_def.
-
-
-Spec Theorem solve_correct : (forall d, IO d (solve d)).
-unfold solve; unfold def; intros.
+Theorem solve_correct : (forall d, IO d (solve_def d)).
+intros.
 functional induction (solve_def d).
 apply direct_solve_correct; assumption.
 apply solve_soundness.
@@ -90,14 +101,18 @@ rewrite e0; apply IHr.
 rewrite e0; apply IHr0.
 Qed.
 
-Spec End DivideAndConquer_impl.
+End Solver.
 
-(* FIXME: this does not work when Load-ing this file...? *)
-(*
-Spec Interpretation dc_impl : DivideAndConquer_spec -> DivideAndConquer_impl.
-prove_simple_interp {{ }}.
-intros.
-apply (DivideAndConquer_impl.solve_correct
-         (solve__param:=t7) (solve__proof__param:=pf7) (solve_soundness__param:=axiom0) (direct_solve_correct__param:=axiom)).
+
+(***
+ *** Interpretation from problem spec to solution spec
+ ***)
+
+Spec Interpretation DnC_interp : DivideAndConquer_problem -> DivideAndConquer_soln :=
+  { solve +-> (solve_def (smaller__proof:=smaller__proof) (primitive:=primitive)
+                         (direct_solve:=direct_solve) (decompose__proof:=decompose__proof)
+                         (compose:=compose)) }.
+Next Obligation.
+constructor.
+apply solve_correct.
 Defined.
-*)
