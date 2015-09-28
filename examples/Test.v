@@ -152,36 +152,7 @@ Qed.
 End NatMonoid_Thms.
 
 
-Spec NatMonoid2 := transform NatMonoid.
-  start_refinement.
-  Unshelve. shelve.
-  Focus 2.
-  replace 0 with (1 - 1).
-  Focus 2. reflexivity.
-  Unfocus.
-  instantiate (Goal0:=?[m_zero__proof__field]).
-  Show Existentials.
-  Unshelve.
-  Focus 3.
-  instantiate_spec ?__Spec.
-Defined.
-
-Print NatMonoid2.NatMonoid2.
-Print NatMonoid2__refinement.
-Print NatMonoid2__instance.
-
-Section NatMonoid2_Thms.
-Import NatMonoid2.
-Context `{NatMonoid2}.
-
-Lemma nm2_left_id_uniq x : (forall y, m_plus__field x y = y) -> x = m_zero__field.
-  apply left_id_uniq.
-Qed.
-
-End NatMonoid2_Thms.
-
-
-Spec NatMonoid3 := transform Monoid.
+Spec NatMonoid2 := transform Monoid.
   start_refinement.
   Focus 3.
   apply plus_assoc.
@@ -196,14 +167,14 @@ Spec NatMonoid3 := transform Monoid.
 Defined.
 
 
-Print NatMonoid3.NatMonoid3.
-Print NatMonoid3.NatMonoid3__Spec.
+Print NatMonoid2.NatMonoid2.
+Print NatMonoid2.NatMonoid2__Spec.
 
-Section NatMonoid3_Thms.
-Import NatMonoid3.
-Context `{NatMonoid3}.
+Section NatMonoid2_Thms.
+Import NatMonoid2.
+Context `{NatMonoid2}.
 
-Lemma nm3_left_id_uniq x : (forall y, x + y = y) -> x = m_zero.
+Lemma nm2_left_id_uniq x : (forall y, x + y = y) -> x = m_zero.
   apply left_id_uniq.
 Qed.
 
@@ -211,8 +182,37 @@ Eval hnf in Monoid.T__value.
 Eval hnf in Monoid.m_plus__value.
 Eval hnf in Monoid.m_zero__value.
 
-End NatMonoid3_Thms.
+End NatMonoid2_Thms.
 
+
+
+Spec NatMonoid3 := transform NatMonoid.
+  start_refinement.
+  Unshelve. shelve.
+  Focus 2.
+  replace 0 with (1 - 1).
+  Focus 2. reflexivity.
+  Unfocus.
+  instantiate (Goal0:=?[m_zero__proof__field]).
+  Show Existentials.
+  Unshelve.
+  Focus 3.
+  instantiate_spec ?__Spec.
+Defined.
+
+Print NatMonoid3.NatMonoid3.
+Print NatMonoid3__refinement.
+Print NatMonoid3__instance.
+
+Section NatMonoid3_Thms.
+Import NatMonoid3.
+Context `{NatMonoid3}.
+
+Lemma nm3_left_id_uniq x : (forall y, m_plus__field x y = y) -> x = m_zero__field.
+  apply left_id_uniq.
+Qed.
+
+End NatMonoid3_Thms.
 
 
 Spec Group2.
