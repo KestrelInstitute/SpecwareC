@@ -557,10 +557,12 @@ let add_program_definition ?(hook = (fun _ _ -> ())) ?tactic
   let _ = debug_printf 1 "@[add_program_definition command: @ Program %a@]\n"
                        pp_vernac cmd in
   let (loc, id) = lid in
+  let orig_program_mode = !Flags.program_mode in
   let _ = Obligations.set_program_mode true in
   let _ = Flags.program_mode := true in
-  Command.do_definition id (Global, false, Definition)
-                        params None body tp_opt (Lemmas.mk_hook hook)
+  let _ = Command.do_definition id (Global, false, Definition)
+                                params None body tp_opt (Lemmas.mk_hook hook) in
+  Flags.program_mode := orig_program_mode
 
 
 (* Add a Program definition, with holes that are filled out by user tactics. The

@@ -131,7 +131,7 @@ Spec End NatMonoid.
 Print NatMonoid.NatMonoid.
 Print NatMonoid.NatMonoid__Spec.
 
-(*
+
 Spec Interpretation monoid_natmonoid : Monoid -> NatMonoid := { T +-> nat }.
 Next Obligation.
   constructor.
@@ -150,7 +150,6 @@ Lemma nm_left_id_uniq (x:T) : (forall y, m_plus x y = y) -> x = m_zero.
 Qed.
 
 End NatMonoid_Thms.
-*)
 
 
 (*
