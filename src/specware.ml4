@@ -1937,40 +1937,75 @@ TACTIC EXTEND instantiate_spec_tac
             in
             let spec_constr = build_spec [] field_evars_type in
 
-            (* Instantiate spec_evar and all field evars *)
+            (* Helper function to instantiate an evar: prevm is a previous
+            computation that must be sequenced first *)
+            let instantiate_evar_tac prevm evar_id evar_glob =
+              Proofview.tclTHEN
+                prevm
+                (Proofview.tclOR
+                   (Proofview.tclTHEN
+                      (Evar_tactics.instantiate_tac_by_name
+                         evar_id
+                         (Tacinterp.default_ist (), evar_glob))
+                      (Proofview.V82.nf_evar_goals))
+                   (fun _ -> Proofview.tclUNIT ()))
+            in
+
+            (* Build a list mapping each field_evar to an expr for it *)
             let evar_inst_list =
               List.mapi
                 (fun i fev ->
                  (fev.field_evar_id,
-                  Constrintern.intern_constr
-                    env
-                    (mkAppC (mk_specware_ref "model_proj_fun",
-                             [mk_hole dummy_loc;
-                              CPrim (dummy_loc, Numeral (Bigint.of_int i));
-                              mk_var (dummy_loc, Id.of_string "__R");
-                              mk_var (dummy_loc, Id.of_string "__model");
-                              mk_var (dummy_loc, Id.of_string "__r")]))))
+                  mkAppC (mk_specware_ref "model_proj_fun",
+                          [mk_hole dummy_loc;
+                           CPrim (dummy_loc, Numeral (Bigint.of_int i));
+                           mk_var (dummy_loc, Id.of_string "__R");
+                           mk_var (dummy_loc, Id.of_string "__model");
+                           mk_var (dummy_loc, Id.of_string "__r")])))
                 field_evars_sorted
             in
+
             let _ = List.iter
-                      (fun (evar_id, evar_glob) ->
+                      (fun (evar_id, evar_expr) ->
                        Pp.msg_info
                          (str ("Instantiating evar " ^ Id.to_string evar_id
                                ^ " to: ")
-                          ++ Printer.pr_glob_constr evar_glob))
+                          ++ Richpp.pr_constr_expr evar_expr))
                       evar_inst_list in
+
+            (* Finally, instantiate the evars, normalizing the exprs as we go *)
             List.fold_left
-              (fun tacm (evar_id, evar_glob) ->
+              (fun prevm (evar_id, evar_expr) ->
                Proofview.tclTHEN
-                 tacm
-                 (Proofview.tclTHEN
-                    (Evar_tactics.instantiate_tac_by_name
-                       evar_id
-                       (Tacinterp.default_ist (), evar_glob))
-                    (Proofview.V82.nf_evar_goals)))
-              (Proofview.tclUNIT ())
-              ((spec_id, Detyping.detype true [] env evd spec_constr)::
-                 evar_inst_list)
+                 prevm
+                 (Proofview.tclBIND
+                    Proofview.tclEVARMAP
+                    (fun evd ->
+                     (*
+                     let (constr, uctx) =
+                       Constrintern.interp_constr env evd evar_expr in
+                     let constr_unfolded =
+                       Tacred.unfoldn
+                         (List.map (fun c -> Locus.AllOccurrences, EvalConstRef c)
+                                   [mk_constant specware_mod "model_proj_fun";
+                                    mk_constant specware_mod "model_proj";
+                                    mk_constant specware_mod "axioms_model_proj";
+                                    mk_constant ["Coq"; "Init"; "Specif"] "projT1";
+                                    mk_constant ["Coq"; "Init"; "Specif"] "projT2"])
+                         env evd constr in
+                     let glob =
+                       Detyping.detype true [] env evd constr_unfolded in *)
+                     let glob = Constrintern.intern_constr env evar_expr in
+                     let _ =
+                       Pp.msg_info
+                         (str ("Instantiating evar " ^ Id.to_string evar_id
+                               ^ " to: ")
+                          ++ Printer.pr_glob_constr glob) in
+                     instantiate_evar_tac prevm evar_id glob)))
+              (instantiate_evar_tac
+                 (Proofview.tclUNIT ()) spec_id
+                 (Detyping.detype true [] env evd spec_constr))
+              evar_inst_list
 
             (* let _ = Pp.msg_info (str "Constr: " ++ Printer.pr_constr spec_constr) in
             Proofview.tclUNIT () *)
