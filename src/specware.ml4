@@ -331,23 +331,6 @@ let recfield_of_spec_field loc specf =
     | SFS_Import -> true
     | _ -> false
   in
-  (* FIXME HERE NOW: remove this printing *)
-  let _ =
-    match specf.field_type with
-    | CApp (_, _, [_; (CRef (Qualid (_, _) , _) as arg1, _); (_, _)]) ->
-       debug_printf 1 "Applied qualid in field %s: %a\n"
-                    (Id.to_string specf.field_id)
-                    pp_constr_expr arg1
-    | CApp (_, _, [_; (CRef (Ident (_, _) , _) as arg1, _); (_, _)]) ->
-       debug_printf 1 "Applied id in field %s: %a\n"
-                    (Id.to_string specf.field_id)
-                    pp_constr_expr arg1
-    | CAppExpl (_, _, [_; (CRef (Qualid (_, _), _) as arg1); _]) ->
-       debug_printf 1 "Applied qualid in field %s: %a\n"
-                    (Id.to_string specf.field_id)
-                    pp_constr_expr arg1
-    | _ -> debug_printf 1 "recfield_of_spec_field: nothing to report\n"
-  in
   ((loc, recfield_id_of_spec_field specf), specf.field_type, coercion_p)
 
 (* Build the record projection for a spec_field *)
