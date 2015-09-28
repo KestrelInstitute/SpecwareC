@@ -181,6 +181,22 @@ Qed.
 End NatMonoid2_Thms.
 
 
+Spec NatMonoid3 := transform Monoid.
+  start_refinement.
+  Focus 3.
+  apply plus_assoc.
+  instantiate (Goal0:=?[m_zero_left]).
+  instantiate (Goal1:=?[m_zero_right]).
+  Show Existentials.
+  Unshelve.
+  instantiate (m_zero__field:=?[m_zero]).
+  Show Existentials.
+  Focus 2.
+  instantiate_spec ?__Spec.
+Defined.
+
+
+
 Spec Group2.
 
 Spec Variable T : Type.
