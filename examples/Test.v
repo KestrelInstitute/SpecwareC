@@ -122,13 +122,9 @@ End Group_Thms.
 
 Spec NatMonoid.
 
-Spec Definition T : Type := nat.
+Definition T : Type := nat.
 Spec Definition m_zero : T := 0.
 Spec Definition m_plus : (T -> T -> T) := plus.
-
-Spec Axiom m_zero_left : (forall x, m_plus m_zero x = x).
-Spec Axiom m_zero_right : (forall x, m_plus x m_zero = x).
-Spec Axiom m_plus_assoc : (forall x y z, m_plus x (m_plus y z) = m_plus (m_plus x y) z).
 
 Spec End NatMonoid.
 

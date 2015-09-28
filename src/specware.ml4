@@ -1386,12 +1386,10 @@ VERNAC COMMAND EXTEND Spec
     -> [ reporting_exceptions
            (fun () ->
             let (loc, id) = lid in
-            add_spec_field false (loc, field_var_id id) tp;
+            add_spec_field false lid tp;
             add_spec_field false (loc, field_proof_id id)
-                           (mk_equality
-                              loc
-                              (mk_var (loc, field_var_id id))
-                              body)) ]
+                           (mk_equality loc (mk_var lid) body)
+       ) ]
 
   (* Add a defined op without a type *)
   (* FIXME: figure out how to handle defs with no type... *)
