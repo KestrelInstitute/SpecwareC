@@ -110,7 +110,8 @@ End Solver.
 
 Spec Interpretation DnC_interp : DivideAndConquer_problem -> DivideAndConquer_soln :=
   { solve +-> (solve_def (smaller__proof:=smaller__proof) (primitive:=primitive)
-                         (direct_solve:=direct_solve) (decompose__proof:=decompose__proof)
+                         (direct_solve:=direct_solve)
+                         (decompose__proof:=decompose__proof)
                          (compose:=compose)) }.
 Next Obligation.
 constructor.

@@ -56,7 +56,9 @@ Definition sorting_pushout :
   pushout_tac.
 Defined.
 
+(* Spec Sorting1 := pushout (sorting_dnc) (DnC_interp). *)
 
-Spec Sorting1 := raw (gmpo_spec _ _ sorting_pushout).
+Spec Sorting1 := raw (gmpo_spec _ _ _ _ _ sorting_pushout).
 
-Print Sorting1.
+Print Sorting1.Sorting1.
+Print Sorting1.Sorting1__Spec.

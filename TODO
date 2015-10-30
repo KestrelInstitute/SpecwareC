@@ -1,3 +1,6 @@
+* Printer for specs
+
+
 * Change Spec Interpretation notation so it builds an instance and not an
   interpretation
 * pick a better wildcard character in translations than "%"
