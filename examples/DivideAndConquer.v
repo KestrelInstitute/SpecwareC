@@ -56,6 +56,10 @@ Spec Variable decompose : (D -> D * D) | (forall d,
 Spec Variable compose : (R -> R -> R).
 
 
+(* FIXME: solve_def should really go here; need to hook into Coq's
+generalization mechanism so that when the spec ends, solve_def automatically
+quantifies over a DivideAndConquer_soln model *)
+
 (* Soundness axioms *)
 Spec Axiom direct_solve_correct :
   (forall d, primitive d = true -> IO d (direct_solve d)).
