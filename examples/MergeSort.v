@@ -12,7 +12,18 @@ Spec MergeSort1 := transform Sorting_dnc.
                  (fun l => skipn (Nat.div2 (length l)) l)).
   instantiate (smaller__field:=
                  (fun l1 l2 => length l1 <= length l2)).
+
+  intros d rL rR H1 H2.
+  rewrite <- (firstn_skipn (Nat.div2 (Datatypes.length d)) d).
+  revert H1 H2.
+  simpl.
+  generalize (firstn (Nat.div2 (Datatypes.length d)) d).
+  generalize (skipn (Nat.div2 (Datatypes.length d)) d).
+  clear d.
+  revert rL rR.
+
   instantiate (compose__field:=?[merge]).
+  instantiate (a:=?[merge_correct]).
   end_refinement.
 Defined.
 
