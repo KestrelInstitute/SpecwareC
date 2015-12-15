@@ -153,7 +153,7 @@ End NatMonoid_Thms.
 
 
 Spec NatMonoid2 := transform Monoid.
-  start_refinement.
+  begin_refinement.
   Focus 3.
   apply plus_assoc.
   Show Existentials.
@@ -163,7 +163,7 @@ Spec NatMonoid2 := transform Monoid.
   Unshelve.
   Focus 3.
   Show Existentials.
-  instantiate_spec ?__Spec.
+  end_refinement.
 Defined.
 
 Print NatMonoid2.NatMonoid2.
@@ -185,7 +185,7 @@ End NatMonoid2_Thms.
 
 
 Spec NatMonoid3 := transform NatMonoid.
-  start_refinement.
+  begin_refinement.
   Unshelve. shelve.
   Focus 2.
   replace 0 with (1 - 1).
@@ -195,7 +195,7 @@ Spec NatMonoid3 := transform NatMonoid.
   Show Existentials.
   Unshelve.
   Focus 3.
-  instantiate_spec ?__Spec.
+  end_refinement.
 Defined.
 
 Print NatMonoid3.NatMonoid3.
