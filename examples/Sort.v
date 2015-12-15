@@ -41,7 +41,7 @@ Spec End Sorting.
  *** Interpretation from divide-and-conquer problem spec to sorting
  ***)
 
-Spec Interpretation sorting_dnc : DivideAndConquer_problem -> Sorting :=
+Spec Interpretation sorting_dnc_interp : DivideAndConquer_problem -> Sorting :=
   { solve +-> sort; IO +-> (fun li lo => sorted lo /\ permOf li lo) }.
 Next Obligation.
 destruct Sorting__proofs; constructor; assumption.
@@ -52,13 +52,13 @@ Definition sorting_pushout :
   @GMPushout DivideAndConquer_problem.DivideAndConquer_problem__gspec
              Sorting.Sorting__gspec
              DivideAndConquer_soln.DivideAndConquer_soln__gspec
-             sorting_dnc DnC_interp.
+             sorting_dnc_interp DnC_interp.
   pushout_tac.
 Defined.
 
-(* Spec Sorting1 := pushout (sorting_dnc) (DnC_interp). *)
+(* Spec Sorting_dnc := pushout sorting_dnc DnC_interp. *)
 
-Spec Sorting1 := raw (gmpo_spec _ _ _ _ _ sorting_pushout).
+Spec Sorting_dnc := raw (gmpo_spec _ _ _ _ _ sorting_pushout).
 
-Print Sorting1.Sorting1.
-Print Sorting1.Sorting1__Spec.
+Print Sorting_dnc.Sorting_dnc.
+Print Sorting_dnc.Sorting_dnc__Spec.
