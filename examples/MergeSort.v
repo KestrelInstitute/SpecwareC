@@ -24,6 +24,22 @@ Spec MergeSort1 := transform Sorting_dnc.
 
   instantiate (compose__field:=?[merge]).
   instantiate (a:=?[merge_correct]).
+
+  (* shelve. *)
+
+  (*
+  intro d; induction d; intros.
+  rewrite Compare_dec.leb_iff_conv in H.
+  inversion H.
+  destruct d.
+  rewrite Compare_dec.leb_iff_conv in H.
+  elimtype False; apply (Lt.lt_irrefl _ H).
+  unfold length; repeat (fold (@length nat)).
+  unfold Nat.div2; fold (Nat.div2).
+  unfold skipn; fold (@skipn nat).
+  apply le_n_S.
+  *)
+
   end_refinement.
 Defined.
 
